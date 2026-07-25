@@ -15,11 +15,47 @@
 #include "tcg/debug-assert.h"
 #include "accel/tcg/cpu-ops.h"
 
+static const char * const mmix_sreg_names[MMIX_SREGS] = {
+    [MMIX_SREG_RB] = "rB",
+    [MMIX_SREG_RD] = "rD",
+    [MMIX_SREG_RE] = "rE",
+    [MMIX_SREG_RH] = "rH",
+    [MMIX_SREG_RJ] = "rJ",
+    [MMIX_SREG_RM] = "rM",
+    [MMIX_SREG_RR] = "rR",
+    [MMIX_SREG_RBB] = "rBB",
+    [MMIX_SREG_RC] = "rC",
+    [MMIX_SREG_RN] = "rN",
+    [MMIX_SREG_RO] = "rO",
+    [MMIX_SREG_RS] = "rS",
+    [MMIX_SREG_RI] = "rI",
+    [MMIX_SREG_RT] = "rT",
+    [MMIX_SREG_RTT] = "rTT",
+    [MMIX_SREG_RK] = "rK",
+    [MMIX_SREG_RQ] = "rQ",
+    [MMIX_SREG_RU] = "rU",
+    [MMIX_SREG_RV] = "rV",
+    [MMIX_SREG_RG] = "rG",
+    [MMIX_SREG_RL] = "rL",
+    [MMIX_SREG_RA] = "rA",
+    [MMIX_SREG_RF] = "rF",
+    [MMIX_SREG_RP] = "rP",
+    [MMIX_SREG_RW] = "rW",
+    [MMIX_SREG_RX] = "rX",
+    [MMIX_SREG_RY] = "rY",
+    [MMIX_SREG_RZ] = "rZ",
+    [MMIX_SREG_RWW] = "rWW",
+    [MMIX_SREG_RXX] = "rXX",
+    [MMIX_SREG_RYY] = "rYY",
+    [MMIX_SREG_RZZ] = "rZZ",
+};
+
 static void mmix_cpu_set_pc(CPUState *cs, vaddr value)
 {
     MMIXCPU *cpu = MMIX_CPU(cs);
 
     cpu->env.pc = value;
+    cpu->env.npc = value + 4;
 }
 
 static vaddr mmix_cpu_get_pc(CPUState *cs)
@@ -33,7 +69,7 @@ static TCGTBCPUState mmix_get_tb_cpu_state(CPUState *cs)
 {
     CPUMMIXState *env = cpu_env(cs);
 
-    return (TCGTBCPUState){ .pc = env->pc };
+    return (TCGTBCPUState){ .pc = env->pc, .flags = 0 };
 }
 
 static void mmix_cpu_synchronize_from_tb(CPUState *cs,
@@ -43,6 +79,7 @@ static void mmix_cpu_synchronize_from_tb(CPUState *cs,
 
     tcg_debug_assert(!tcg_cflags_has(cs, CF_PCREL));
     cpu->env.pc = tb->pc;
+    cpu->env.npc = tb->pc + 4;
 }
 
 static void mmix_restore_state_to_opc(CPUState *cs,
@@ -52,6 +89,7 @@ static void mmix_restore_state_to_opc(CPUState *cs,
     MMIXCPU *cpu = MMIX_CPU(cs);
 
     cpu->env.pc = data[0];
+    cpu->env.npc = data[0] + 4;
 }
 
 static bool mmix_cpu_has_work(CPUState *cs)
@@ -75,6 +113,16 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     }
 
     memset(&cpu->env, 0, offsetof(CPUMMIXState, end_reset_fields));
+    cpu->env.pc = 0;
+    cpu->env.npc = 4;
+    cpu->env.sregs[MMIX_SREG_RK] = MMIX_INITIAL_RK;
+    cpu->env.sregs[MMIX_SREG_RT] = MMIX_INITIAL_RT;
+    cpu->env.sregs[MMIX_SREG_RTT] = MMIX_INITIAL_RTT;
+    cpu->env.sregs[MMIX_SREG_RV] = MMIX_INITIAL_RV;
+    cpu->env.sregs[MMIX_SREG_RG] = MMIX_INITIAL_RG;
+    cpu->env.sregs[MMIX_SREG_RL] = MMIX_INITIAL_RL;
+    cpu->env.lring_size = MMIX_LOCAL_REGS;
+    cpu->env.lring_mask = MMIX_LOCAL_REGS - 1;
     cs->exception_index = -1;
 }
 
@@ -118,7 +166,21 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
     CPUMMIXState *env = cpu_env(cs);
     int i;
 
-    qemu_fprintf(f, "pc=0x%016" PRIx64 "\n", env->pc);
+    qemu_fprintf(f,
+                 "pc=0x%016" PRIx64 " npc=0x%016" PRIx64
+                 " lring_size=%u lring_mask=0x%08x\n",
+                 env->pc, env->npc, env->lring_size, env->lring_mask);
+    qemu_fprintf(f, "special registers:\n");
+    for (i = 0; i < MMIX_SREGS; i += 4) {
+        qemu_fprintf(f,
+                     "%-3s=0x%016" PRIx64 " %-3s=0x%016" PRIx64
+                     " %-3s=0x%016" PRIx64 " %-3s=0x%016" PRIx64 "\n",
+                     mmix_sreg_names[i], env->sregs[i],
+                     mmix_sreg_names[i + 1], env->sregs[i + 1],
+                     mmix_sreg_names[i + 2], env->sregs[i + 2],
+                     mmix_sreg_names[i + 3], env->sregs[i + 3]);
+    }
+    qemu_fprintf(f, "general registers:\n");
     for (i = 0; i < MMIX_REGS; i += 4) {
         qemu_fprintf(f,
                      "r%-3d=0x%016" PRIx64 " r%-3d=0x%016" PRIx64
@@ -157,9 +219,11 @@ static const TCGCPUOps mmix_tcg_ops = {
     .get_tb_cpu_state = mmix_get_tb_cpu_state,
     .synchronize_from_tb = mmix_cpu_synchronize_from_tb,
     .restore_state_to_opc = mmix_restore_state_to_opc,
+    .pointer_wrap = cpu_pointer_wrap_notreached,
     .mmu_index = mmix_cpu_mmu_index,
     .tlb_fill = mmix_cpu_tlb_fill,
     .cpu_exec_halt = mmix_cpu_has_work,
+    .cpu_exec_interrupt = mmix_cpu_exec_interrupt,
     .cpu_exec_reset = cpu_reset,
     .do_interrupt = mmix_cpu_do_interrupt,
 };

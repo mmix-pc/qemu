@@ -34,5 +34,37 @@
   <reg name="r29" bitsize="64" type="uint64"/>
   <reg name="r30" bitsize="64" type="uint64"/>
   <reg name="r31" bitsize="64" type="uint64"/>
+  <reg name="rB" bitsize="64" type="uint64"/>
+  <reg name="rD" bitsize="64" type="uint64"/>
+  <reg name="rE" bitsize="64" type="uint64"/>
+  <reg name="rH" bitsize="64" type="uint64"/>
+  <reg name="rJ" bitsize="64" type="uint64"/>
+  <reg name="rM" bitsize="64" type="uint64"/>
+  <reg name="rR" bitsize="64" type="uint64"/>
+  <reg name="rBB" bitsize="64" type="uint64"/>
+  <reg name="rC" bitsize="64" type="uint64"/>
+  <reg name="rN" bitsize="64" type="uint64"/>
+  <reg name="rO" bitsize="64" type="uint64"/>
+  <reg name="rS" bitsize="64" type="uint64"/>
+  <reg name="rI" bitsize="64" type="uint64"/>
+  <reg name="rT" bitsize="64" type="uint64"/>
+  <reg name="rTT" bitsize="64" type="uint64"/>
+  <reg name="rK" bitsize="64" type="uint64"/>
+  <reg name="rQ" bitsize="64" type="uint64"/>
+  <reg name="rU" bitsize="64" type="uint64"/>
+  <reg name="rV" bitsize="64" type="uint64"/>
+  <reg name="rG" bitsize="64" type="uint64"/>
+  <reg name="rL" bitsize="64" type="uint64"/>
+  <reg name="rA" bitsize="64" type="uint64"/>
+  <reg name="rF" bitsize="64" type="uint64"/>
+  <reg name="rP" bitsize="64" type="uint64"/>
+  <reg name="rW" bitsize="64" type="uint64"/>
+  <reg name="rX" bitsize="64" type="uint64"/>
+  <reg name="rY" bitsize="64" type="uint64"/>
+  <reg name="rZ" bitsize="64" type="uint64"/>
+  <reg name="rWW" bitsize="64" type="uint64"/>
+  <reg name="rXX" bitsize="64" type="uint64"/>
+  <reg name="rYY" bitsize="64" type="uint64"/>
+  <reg name="rZZ" bitsize="64" type="uint64"/>
   <reg name="pc" bitsize="64" type="code_ptr"/>
 </feature>

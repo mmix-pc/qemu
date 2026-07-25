@@ -16,14 +16,71 @@
 #endif
 
 #define MMIX_REGS 256
+#define MMIX_SREGS 32
+#define MMIX_LOCAL_REGS 256
+
+#define MMIX_INITIAL_RK UINT64_MAX
+#define MMIX_INITIAL_RT 0x8000000500000000ULL
+#define MMIX_INITIAL_RTT 0x8000000600000000ULL
+#define MMIX_INITIAL_RV 0x369c200400000000ULL
+#define MMIX_INITIAL_RG 32
+#define MMIX_INITIAL_RL 0
+
+typedef enum MMIXSpecialReg {
+    MMIX_SREG_RB = 0,
+    MMIX_SREG_RD = 1,
+    MMIX_SREG_RE = 2,
+    MMIX_SREG_RH = 3,
+    MMIX_SREG_RJ = 4,
+    MMIX_SREG_RM = 5,
+    MMIX_SREG_RR = 6,
+    MMIX_SREG_RBB = 7,
+    MMIX_SREG_RC = 8,
+    MMIX_SREG_RN = 9,
+    MMIX_SREG_RO = 10,
+    MMIX_SREG_RS = 11,
+    MMIX_SREG_RI = 12,
+    MMIX_SREG_RT = 13,
+    MMIX_SREG_RTT = 14,
+    MMIX_SREG_RK = 15,
+    MMIX_SREG_RQ = 16,
+    MMIX_SREG_RU = 17,
+    MMIX_SREG_RV = 18,
+    MMIX_SREG_RG = 19,
+    MMIX_SREG_RL = 20,
+    MMIX_SREG_RA = 21,
+    MMIX_SREG_RF = 22,
+    MMIX_SREG_RP = 23,
+    MMIX_SREG_RW = 24,
+    MMIX_SREG_RX = 25,
+    MMIX_SREG_RY = 26,
+    MMIX_SREG_RZ = 27,
+    MMIX_SREG_RWW = 28,
+    MMIX_SREG_RXX = 29,
+    MMIX_SREG_RYY = 30,
+    MMIX_SREG_RZZ = 31,
+} MMIXSpecialReg;
 
 enum {
-    EXCP_ILLEGAL = 1,
+    EXCP_MMIX_ILLEGAL = 1,
+    EXCP_MMIX_INTERRUPT = 2,
 };
 
 typedef struct CPUArchState {
+    /*
+     * M2 keeps a direct architectural register view. The full local/global
+     * register-stack mapping will be implemented when instruction semantics
+     * need it.
+     */
     uint64_t regs[MMIX_REGS];
+    uint64_t sregs[MMIX_SREGS];
+
     uint64_t pc;
+    uint64_t npc;
+
+    uint64_t local_regs[MMIX_LOCAL_REGS];
+    uint32_t lring_size;
+    uint32_t lring_mask;
 
     struct {} end_reset_fields;
 } CPUMMIXState;
@@ -44,6 +101,7 @@ struct MMIXCPUClass {
 #define CPU_RESOLVING_TYPE TYPE_MMIX_CPU
 
 void mmix_cpu_do_interrupt(CPUState *cs);
+bool mmix_cpu_exec_interrupt(CPUState *cs, int interrupt_request);
 hwaddr mmix_cpu_get_phys_addr_debug(CPUState *cs, vaddr addr);
 void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags);
 int mmix_cpu_gdb_read_register(CPUState *cs, GByteArray *buf, int reg);
