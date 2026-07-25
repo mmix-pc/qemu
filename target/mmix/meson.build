@@ -1,4 +1,7 @@
+gen = decodetree.process('insns.decode')
+
 mmix_ss = ss.source_set()
+mmix_ss.add(gen)
 mmix_ss.add(files(
   'cpu.c',
   'helper.c',
