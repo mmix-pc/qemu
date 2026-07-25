@@ -1,0 +1,4 @@
+config MMIX_VIRT
+    bool
+    default y
+    depends on MMIX
