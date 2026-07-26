@@ -532,23 +532,23 @@ TESTS = [
         "special-register-get-reset",
         b"".join(
             [
-                insn(0xfe, 1, 0, 15),     # GET r1,rK
-                insn(0xfe, 2, 0, 13),     # GET r2,rT
-                insn(0xfe, 3, 0, 14),     # GET r3,rTT
-                insn(0xfe, 4, 0, 18),     # GET r4,rV
-                insn(0xfe, 5, 0, 19),     # GET r5,rG
-                insn(0xfe, 6, 0, 20),     # GET r6,rL
+                insn(0xfe, 33, 0, 15),    # GET r33,rK
+                insn(0xfe, 34, 0, 13),    # GET r34,rT
+                insn(0xfe, 35, 0, 14),    # GET r35,rTT
+                insn(0xfe, 36, 0, 18),    # GET r36,rV
+                insn(0xfe, 37, 0, 19),    # GET r37,rG
+                insn(0xfe, 38, 0, 20),    # GET r38,rL
                 halt(),
             ]
         ),
         pc=0x18,
         regs={
-            1: MASK64,
-            2: 0x8000000500000000,
-            3: 0x8000000600000000,
-            4: 0x369c200400000000,
-            5: 32,
-            6: 0,
+            33: MASK64,
+            34: 0x8000000500000000,
+            35: 0x8000000600000000,
+            36: 0x369c200400000000,
+            37: 32,
+            38: 0,
         },
     ),
     MMIXTest(
@@ -574,6 +574,55 @@ TESTS = [
             2: 0xfeedcafe12345678,
             3: 0x7b,
             4: 0xfeedcafe12345678,
+        },
+    ),
+    MMIXTest(
+        "local-global-registers",
+        b"".join(
+            [
+                insn(0x21, 2, 1, 5),      # ADDI r2,r1,5
+                insn(0xfe, 33, 0, 20),    # GET r33,rL
+                wyde(0xe3, 10, 0x00aa),   # SETL r10,0xaa
+                insn(0xfe, 34, 0, 20),    # GET r34,rL
+                wyde(0xe3, 32, 0x0044),   # SETL r32,0x44
+                insn(0xfe, 35, 0, 20),    # GET r35,rL
+                halt(),
+            ]
+        ),
+        pc=0x18,
+        regs={
+            1: 0,
+            2: 5,
+            9: 0,
+            10: 0xaa,
+            32: 0x44,
+            33: 3,
+            34: 11,
+            35: 11,
+        },
+    ),
+    MMIXTest(
+        "put-rl-narrowing",
+        b"".join(
+            [
+                wyde(0xe3, 10, 0x00aa),   # SETL r10,0xaa
+                insn(0xfe, 33, 0, 20),    # GET r33,rL
+                wyde(0xe3, 2, 5),         # SETL r2,5
+                insn(0xf6, 20, 0, 2),     # PUT rL,r2
+                insn(0xfe, 34, 0, 20),    # GET r34,rL
+                insn(0x21, 11, 10, 0),    # ADDI r11,r10,0
+                insn(0xfe, 35, 0, 20),    # GET r35,rL
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={
+            2: 5,
+            10: 0,
+            11: 0,
+            33: 11,
+            34: 5,
+            35: 12,
         },
     ),
     MMIXTest(

@@ -11,6 +11,113 @@
 #include "exec/helper-proto.h"
 #include "system/runstate.h"
 
+static unsigned mmix_cpu_get_rg(CPUMMIXState *env)
+{
+    uint64_t rg = env->sregs[MMIX_SREG_RG];
+
+    if (rg < 32) {
+        return 32;
+    }
+    if (rg > 255) {
+        return 255;
+    }
+    return (unsigned)rg;
+}
+
+static unsigned mmix_cpu_get_rl(CPUMMIXState *env)
+{
+    uint64_t rl = env->sregs[MMIX_SREG_RL];
+    unsigned rg = mmix_cpu_get_rg(env);
+
+    if (rl > rg) {
+        return rg;
+    }
+    return (unsigned)rl;
+}
+
+static unsigned mmix_cpu_local_index(CPUMMIXState *env, unsigned reg)
+{
+    unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
+
+    return (base + reg) & env->lring_mask;
+}
+
+static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
+{
+    unsigned old_rl = mmix_cpu_get_rl(env);
+    unsigned rg = mmix_cpu_get_rg(env);
+    unsigned i;
+
+    new_rl = MIN(new_rl, rg);
+    if (new_rl <= old_rl) {
+        return;
+    }
+    for (i = old_rl; i < new_rl; i++) {
+        env->local_regs[mmix_cpu_local_index(env, i)] = 0;
+    }
+    env->sregs[MMIX_SREG_RL] = new_rl;
+}
+
+uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg)
+{
+    unsigned rg = mmix_cpu_get_rg(env);
+    unsigned rl = mmix_cpu_get_rl(env);
+
+    if (reg >= MMIX_REGS) {
+        return 0;
+    }
+    if (reg >= rg) {
+        return env->regs[reg];
+    }
+    if (reg < rl) {
+        return env->local_regs[mmix_cpu_local_index(env, reg)];
+    }
+    return 0;
+}
+
+void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val)
+{
+    unsigned rg = mmix_cpu_get_rg(env);
+
+    if (reg >= MMIX_REGS) {
+        return;
+    }
+    if (reg >= rg) {
+        env->regs[reg] = val;
+        return;
+    }
+
+    mmix_cpu_grow_rl(env, reg + 1);
+    env->local_regs[mmix_cpu_local_index(env, reg)] = val;
+}
+
+void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val)
+{
+    unsigned rl = mmix_cpu_get_rl(env);
+    unsigned new_rl = rl;
+
+    if (val < rl) {
+        new_rl = val;
+    }
+
+    env->sregs[MMIX_SREG_RL] = new_rl;
+}
+
+uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
+{
+    return mmix_cpu_read_reg(env, reg);
+}
+
+void helper_mmix_write_reg(CPUMMIXState *env, uint32_t reg, uint64_t val)
+{
+    mmix_cpu_write_reg(env, reg, val);
+}
+
+void helper_mmix_put_rl(CPUMMIXState *env, uint64_t val)
+{
+    mmix_cpu_put_rl(env, val);
+}
+
 void helper_raise_illegal_instruction(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);

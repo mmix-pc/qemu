@@ -108,6 +108,10 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags);
 int mmix_cpu_gdb_read_register(CPUState *cs, GByteArray *buf, int reg);
 int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *buf, int reg);
 
+uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
+void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
+void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
+
 void mmix_translate_init(void);
 void mmix_translate_code(CPUState *cs, TranslationBlock *tb,
                          int *max_insns, vaddr pc, void *host_pc);

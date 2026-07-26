@@ -1,2 +1,5 @@
 DEF_HELPER_1(raise_illegal_instruction, noreturn, env)
 DEF_HELPER_1(mmix_test_exit, noreturn, env)
+DEF_HELPER_2(mmix_read_reg, i64, env, i32)
+DEF_HELPER_3(mmix_write_reg, void, env, i32, i64)
+DEF_HELPER_2(mmix_put_rl, void, env, i64)

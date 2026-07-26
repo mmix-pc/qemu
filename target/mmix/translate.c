@@ -54,7 +54,6 @@ typedef enum MMIXPredicate {
 
 static TCGv_i64 cpu_pc;
 static TCGv_i64 cpu_npc;
-static TCGv_i64 cpu_regs[MMIX_REGS];
 static TCGv_i64 cpu_sregs[MMIX_SREGS];
 
 /* Include the auto-generated decoder. */
@@ -82,7 +81,10 @@ static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
 
 static TCGv_i64 gen_load_reg(unsigned reg)
 {
-    return cpu_regs[reg];
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_read_reg(val, tcg_env, tcg_constant_i32(reg));
+    return val;
 }
 
 static TCGv_i64 gen_load_z(const arg_xyz *a, bool immediate)
@@ -95,7 +97,7 @@ static TCGv_i64 gen_load_z(const arg_xyz *a, bool immediate)
 
 static void gen_store_reg(unsigned reg, TCGv_i64 val)
 {
-    tcg_gen_mov_i64(cpu_regs[reg], val);
+    gen_helper_mmix_write_reg(tcg_env, tcg_constant_i32(reg), val);
 }
 
 static TCGv_i64 gen_load_sreg(unsigned reg)
@@ -738,7 +740,14 @@ static bool trans_GET(DisasContext *ctx, arg_xyz *a)
 
 static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
-    if (a->y != 0 || a->x >= MMIX_SREGS || !mmix_put_writable(a->x)) {
+    if (a->y != 0 || a->x >= MMIX_SREGS) {
+        return gen_mmix_unsupported(ctx, immediate ? "PUTI" : "PUT", a);
+    }
+    if (a->x == MMIX_SREG_RL) {
+        gen_helper_mmix_put_rl(tcg_env, gen_load_z(a, immediate));
+        return true;
+    }
+    if (!mmix_put_writable(a->x)) {
         return gen_mmix_unsupported(ctx, immediate ? "PUTI" : "PUT", a);
     }
 
@@ -1073,19 +1082,12 @@ void mmix_translate_code(CPUState *cs, TranslationBlock *tb,
 
 void mmix_translate_init(void)
 {
-    static char regnames[MMIX_REGS][8];
     static char sregnames[MMIX_SREGS][8];
     int i;
 
     cpu_pc = tcg_global_mem_new_i64(tcg_env, offsetof(CPUMMIXState, pc), "pc");
     cpu_npc = tcg_global_mem_new_i64(tcg_env, offsetof(CPUMMIXState, npc),
                                      "npc");
-    for (i = 0; i < MMIX_REGS; i++) {
-        snprintf(regnames[i], sizeof(regnames[i]), "r%d", i);
-        cpu_regs[i] = tcg_global_mem_new_i64(tcg_env,
-                                             offsetof(CPUMMIXState, regs[i]),
-                                             regnames[i]);
-    }
     for (i = 0; i < MMIX_SREGS; i++) {
         snprintf(sregnames[i], sizeof(sregnames[i]), "s%d", i);
         cpu_sregs[i] = tcg_global_mem_new_i64(tcg_env,

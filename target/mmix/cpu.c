@@ -168,8 +168,13 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 
     qemu_fprintf(f,
                  "pc=0x%016" PRIx64 " npc=0x%016" PRIx64
+                 " rG=%" PRIu64 " rL=%" PRIu64
+                 " rO=0x%016" PRIx64 " rS=0x%016" PRIx64
                  " lring_size=%u lring_mask=0x%08x\n",
-                 env->pc, env->npc, env->lring_size, env->lring_mask);
+                 env->pc, env->npc, env->sregs[MMIX_SREG_RG],
+                 env->sregs[MMIX_SREG_RL], env->sregs[MMIX_SREG_RO],
+                 env->sregs[MMIX_SREG_RS], env->lring_size,
+                 env->lring_mask);
     qemu_fprintf(f, "special registers:\n");
     for (i = 0; i < MMIX_SREGS; i += 4) {
         qemu_fprintf(f,
@@ -185,10 +190,10 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
         qemu_fprintf(f,
                      "r%-3d=0x%016" PRIx64 " r%-3d=0x%016" PRIx64
                      " r%-3d=0x%016" PRIx64 " r%-3d=0x%016" PRIx64 "\n",
-                     i, env->regs[i],
-                     i + 1, env->regs[i + 1],
-                     i + 2, env->regs[i + 2],
-                     i + 3, env->regs[i + 3]);
+                     i, mmix_cpu_read_reg(env, i),
+                     i + 1, mmix_cpu_read_reg(env, i + 1),
+                     i + 2, mmix_cpu_read_reg(env, i + 2),
+                     i + 3, mmix_cpu_read_reg(env, i + 3));
     }
 }
 
