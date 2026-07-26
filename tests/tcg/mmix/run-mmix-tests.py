@@ -74,6 +74,45 @@ TESTS = [
         regs={3: MASK64, 4: 0, 5: 1, 6: MASK64, 7: 1},
     ),
     MMIXTest(
+        "compare-immediate-boundaries",
+        b"".join(
+            [
+                wyde(0xe0, 1, 0xffff),    # SETH r1,0xffff
+                wyde(0xe5, 1, 0xffff),    # INCMH r1,0xffff
+                wyde(0xe6, 1, 0xffff),    # INCML r1,0xffff
+                wyde(0xe7, 1, 0xffff),    # INCL r1,0xffff
+                wyde(0xe0, 2, 0x8000),    # SETH r2,0x8000
+                wyde(0xe0, 3, 0x7fff),    # SETH r3,0x7fff
+                wyde(0xe5, 3, 0xffff),    # INCMH r3,0xffff
+                wyde(0xe6, 3, 0xffff),    # INCML r3,0xffff
+                wyde(0xe7, 3, 0xffff),    # INCL r3,0xffff
+                insn(0x31, 4, 0, 0),      # CMPI r4,r0,0
+                insn(0x31, 5, 1, 0),      # CMPI r5,r1,0
+                insn(0x31, 6, 3, 0),      # CMPI r6,r3,0
+                insn(0x30, 7, 2, 3),      # CMP r7,r2,r3
+                insn(0x32, 8, 2, 3),      # CMPU r8,r2,r3
+                insn(0x33, 9, 0, 1),      # CMPUI r9,r0,1
+                insn(0x33, 10, 1, 0xff),  # CMPUI r10,r1,0xff
+                insn(0x33, 11, 0, 0),     # CMPUI r11,r0,0
+                halt(),
+            ]
+        ),
+        pc=0x44,
+        regs={
+            1: MASK64,
+            2: 0x8000000000000000,
+            3: 0x7fffffffffffffff,
+            4: 0,
+            5: MASK64,
+            6: 1,
+            7: MASK64,
+            8: 1,
+            9: MASK64,
+            10: 1,
+            11: 0,
+        },
+    ),
+    MMIXTest(
         "branch-taken",
         b"".join(
             [
@@ -254,6 +293,125 @@ TESTS = [
             11: 0xffffffffffffff00,
             12: MASK64,
             13: 0xffffffffffffff00,
+        },
+    ),
+    MMIXTest(
+        "conditional-set",
+        b"".join(
+            [
+                wyde(0xe0, 1, 0xffff),    # SETH r1,0xffff
+                wyde(0xe5, 1, 0xffff),    # INCMH r1,0xffff
+                wyde(0xe6, 1, 0xffff),    # INCML r1,0xffff
+                wyde(0xe7, 1, 0xffff),    # INCL r1,0xffff
+                wyde(0xe3, 3, 5),         # SETL r3,5
+                wyde(0xe3, 4, 4),         # SETL r4,4
+                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
+                wyde(0xe3, 30, 0xaaaa),   # SETL r30,0xaaaa
+                insn(0x60, 10, 1, 5),     # CSN r10,r1,r5
+                insn(0x62, 11, 0, 5),     # CSZ r11,r0,r5
+                insn(0x64, 12, 3, 5),     # CSP r12,r3,r5
+                insn(0x66, 13, 3, 5),     # CSOD r13,r3,r5
+                insn(0x68, 14, 0, 5),     # CSNN r14,r0,r5
+                insn(0x6a, 15, 3, 5),     # CSNZ r15,r3,r5
+                insn(0x6c, 16, 1, 5),     # CSNP r16,r1,r5
+                insn(0x6e, 17, 4, 5),     # CSEV r17,r4,r5
+                wyde(0xe3, 18, 0xaaaa),   # SETL r18,0xaaaa
+                insn(0x60, 18, 3, 5),     # CSN false preserves r18
+                wyde(0xe3, 19, 0xaaaa),   # SETL r19,0xaaaa
+                insn(0x62, 19, 3, 5),     # CSZ false preserves r19
+                wyde(0xe3, 20, 0xaaaa),   # SETL r20,0xaaaa
+                insn(0x64, 20, 1, 5),     # CSP false preserves r20
+                wyde(0xe3, 21, 0xaaaa),   # SETL r21,0xaaaa
+                insn(0x66, 21, 4, 5),     # CSOD false preserves r21
+                wyde(0xe3, 22, 0xaaaa),   # SETL r22,0xaaaa
+                insn(0x68, 22, 1, 5),     # CSNN false preserves r22
+                wyde(0xe3, 23, 0xaaaa),   # SETL r23,0xaaaa
+                insn(0x6a, 23, 0, 5),     # CSNZ false preserves r23
+                wyde(0xe3, 24, 0xaaaa),   # SETL r24,0xaaaa
+                insn(0x6c, 24, 3, 5),     # CSNP false preserves r24
+                wyde(0xe3, 25, 0xaaaa),   # SETL r25,0xaaaa
+                insn(0x6e, 25, 3, 5),     # CSEV false preserves r25
+                wyde(0xe3, 26, 0xaaaa),   # SETL r26,0xaaaa
+                insn(0x63, 26, 0, 0x77),  # CSZI r26,r0,0x77
+                wyde(0xe3, 27, 0xaaaa),   # SETL r27,0xaaaa
+                insn(0x6b, 27, 0, 0x77),  # CSNZI false preserves r27
+                halt(),
+            ]
+        ),
+        pc=0x90,
+        regs={
+            10: 0x55,
+            11: 0x55,
+            12: 0x55,
+            13: 0x55,
+            14: 0x55,
+            15: 0x55,
+            16: 0x55,
+            17: 0x55,
+            18: 0xaaaa,
+            19: 0xaaaa,
+            20: 0xaaaa,
+            21: 0xaaaa,
+            22: 0xaaaa,
+            23: 0xaaaa,
+            24: 0xaaaa,
+            25: 0xaaaa,
+            26: 0x77,
+            27: 0xaaaa,
+        },
+    ),
+    MMIXTest(
+        "zero-or-set",
+        b"".join(
+            [
+                wyde(0xe0, 1, 0xffff),    # SETH r1,0xffff
+                wyde(0xe5, 1, 0xffff),    # INCMH r1,0xffff
+                wyde(0xe6, 1, 0xffff),    # INCML r1,0xffff
+                wyde(0xe7, 1, 0xffff),    # INCL r1,0xffff
+                wyde(0xe3, 3, 5),         # SETL r3,5
+                wyde(0xe3, 4, 4),         # SETL r4,4
+                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
+                insn(0x70, 10, 1, 5),     # ZSN r10,r1,r5
+                insn(0x72, 11, 0, 5),     # ZSZ r11,r0,r5
+                insn(0x74, 12, 3, 5),     # ZSP r12,r3,r5
+                insn(0x76, 13, 3, 5),     # ZSOD r13,r3,r5
+                insn(0x78, 14, 0, 5),     # ZSNN r14,r0,r5
+                insn(0x7a, 15, 3, 5),     # ZSNZ r15,r3,r5
+                insn(0x7c, 16, 1, 5),     # ZSNP r16,r1,r5
+                insn(0x7e, 17, 4, 5),     # ZSEV r17,r4,r5
+                insn(0x70, 18, 3, 5),     # ZSN false writes zero
+                insn(0x72, 19, 3, 5),     # ZSZ false writes zero
+                insn(0x74, 20, 1, 5),     # ZSP false writes zero
+                insn(0x76, 21, 4, 5),     # ZSOD false writes zero
+                insn(0x78, 22, 1, 5),     # ZSNN false writes zero
+                insn(0x7a, 23, 0, 5),     # ZSNZ false writes zero
+                insn(0x7c, 24, 3, 5),     # ZSNP false writes zero
+                insn(0x7e, 25, 3, 5),     # ZSEV false writes zero
+                insn(0x73, 26, 0, 0x77),  # ZSZI r26,r0,0x77
+                insn(0x7b, 27, 0, 0x77),  # ZSNZI false writes zero
+                halt(),
+            ]
+        ),
+        pc=0x64,
+        regs={
+            10: 0x55,
+            11: 0x55,
+            12: 0x55,
+            13: 0x55,
+            14: 0x55,
+            15: 0x55,
+            16: 0x55,
+            17: 0x55,
+            18: 0,
+            19: 0,
+            20: 0,
+            21: 0,
+            22: 0,
+            23: 0,
+            24: 0,
+            25: 0,
+            26: 0x77,
+            27: 0,
         },
     ),
 ]

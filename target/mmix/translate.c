@@ -46,6 +46,17 @@ typedef enum MMIXCompareOp {
     MMIX_CMP_UNSIGNED,
 } MMIXCompareOp;
 
+typedef enum MMIXPredicate {
+    MMIX_PRED_NEGATIVE,
+    MMIX_PRED_ZERO,
+    MMIX_PRED_POSITIVE,
+    MMIX_PRED_ODD,
+    MMIX_PRED_NONNEGATIVE,
+    MMIX_PRED_NONZERO,
+    MMIX_PRED_NONPOSITIVE,
+    MMIX_PRED_EVEN,
+} MMIXPredicate;
+
 static TCGv_i64 cpu_pc;
 static TCGv_i64 cpu_npc;
 static TCGv_i64 cpu_regs[MMIX_REGS];
@@ -467,6 +478,119 @@ static bool trans_CMPUI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_cmp(ctx, a, MMIX_CMP_UNSIGNED, true);
 }
+
+static void gen_predicate(TCGv_i64 pred, TCGv_i64 val, MMIXPredicate predicate)
+{
+    TCGv_i64 tmp;
+
+    switch (predicate) {
+    case MMIX_PRED_NEGATIVE:
+        tcg_gen_setcondi_i64(TCG_COND_LT, pred, val, 0);
+        break;
+    case MMIX_PRED_ZERO:
+        tcg_gen_setcondi_i64(TCG_COND_EQ, pred, val, 0);
+        break;
+    case MMIX_PRED_POSITIVE:
+        tcg_gen_setcondi_i64(TCG_COND_GT, pred, val, 0);
+        break;
+    case MMIX_PRED_ODD:
+        tmp = tcg_temp_new_i64();
+        tcg_gen_andi_i64(tmp, val, 1);
+        tcg_gen_setcondi_i64(TCG_COND_NE, pred, tmp, 0);
+        break;
+    case MMIX_PRED_NONNEGATIVE:
+        tcg_gen_setcondi_i64(TCG_COND_GE, pred, val, 0);
+        break;
+    case MMIX_PRED_NONZERO:
+        tcg_gen_setcondi_i64(TCG_COND_NE, pred, val, 0);
+        break;
+    case MMIX_PRED_NONPOSITIVE:
+        tcg_gen_setcondi_i64(TCG_COND_LE, pred, val, 0);
+        break;
+    case MMIX_PRED_EVEN:
+        tmp = tcg_temp_new_i64();
+        tcg_gen_andi_i64(tmp, val, 1);
+        tcg_gen_setcondi_i64(TCG_COND_EQ, pred, tmp, 0);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static bool gen_cond_result(arg_xyz *a, MMIXPredicate predicate, bool immediate,
+                            bool zero_false)
+{
+    TCGv_i64 pred = tcg_temp_new_i64();
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_predicate(pred, gen_load_reg(a->y), predicate);
+    tcg_gen_movcond_i64(TCG_COND_NE, val, pred, tcg_constant_i64(0),
+                        gen_load_z(a, immediate),
+                        zero_false ? tcg_constant_i64(0) : gen_load_reg(a->x));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_cs(DisasContext *ctx, arg_xyz *a, MMIXPredicate predicate,
+                   bool immediate)
+{
+    return gen_cond_result(a, predicate, immediate, false);
+}
+
+static bool gen_zs(DisasContext *ctx, arg_xyz *a, MMIXPredicate predicate,
+                   bool immediate)
+{
+    return gen_cond_result(a, predicate, immediate, true);
+}
+
+#define TRANS_CS(NAME, PREDICATE, IMMEDIATE) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_cs(ctx, a, PREDICATE, IMMEDIATE); \
+    }
+
+#define TRANS_ZS(NAME, PREDICATE, IMMEDIATE) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_zs(ctx, a, PREDICATE, IMMEDIATE); \
+    }
+
+TRANS_CS(CSN, MMIX_PRED_NEGATIVE, false)
+TRANS_CS(CSNI, MMIX_PRED_NEGATIVE, true)
+TRANS_CS(CSZ, MMIX_PRED_ZERO, false)
+TRANS_CS(CSZI, MMIX_PRED_ZERO, true)
+TRANS_CS(CSP, MMIX_PRED_POSITIVE, false)
+TRANS_CS(CSPI, MMIX_PRED_POSITIVE, true)
+TRANS_CS(CSOD, MMIX_PRED_ODD, false)
+TRANS_CS(CSODI, MMIX_PRED_ODD, true)
+TRANS_CS(CSNN, MMIX_PRED_NONNEGATIVE, false)
+TRANS_CS(CSNNI, MMIX_PRED_NONNEGATIVE, true)
+TRANS_CS(CSNZ, MMIX_PRED_NONZERO, false)
+TRANS_CS(CSNZI, MMIX_PRED_NONZERO, true)
+TRANS_CS(CSNP, MMIX_PRED_NONPOSITIVE, false)
+TRANS_CS(CSNPI, MMIX_PRED_NONPOSITIVE, true)
+TRANS_CS(CSEV, MMIX_PRED_EVEN, false)
+TRANS_CS(CSEVI, MMIX_PRED_EVEN, true)
+
+TRANS_ZS(ZSN, MMIX_PRED_NEGATIVE, false)
+TRANS_ZS(ZSNI, MMIX_PRED_NEGATIVE, true)
+TRANS_ZS(ZSZ, MMIX_PRED_ZERO, false)
+TRANS_ZS(ZSZI, MMIX_PRED_ZERO, true)
+TRANS_ZS(ZSP, MMIX_PRED_POSITIVE, false)
+TRANS_ZS(ZSPI, MMIX_PRED_POSITIVE, true)
+TRANS_ZS(ZSOD, MMIX_PRED_ODD, false)
+TRANS_ZS(ZSODI, MMIX_PRED_ODD, true)
+TRANS_ZS(ZSNN, MMIX_PRED_NONNEGATIVE, false)
+TRANS_ZS(ZSNNI, MMIX_PRED_NONNEGATIVE, true)
+TRANS_ZS(ZSNZ, MMIX_PRED_NONZERO, false)
+TRANS_ZS(ZSNZI, MMIX_PRED_NONZERO, true)
+TRANS_ZS(ZSNP, MMIX_PRED_NONPOSITIVE, false)
+TRANS_ZS(ZSNPI, MMIX_PRED_NONPOSITIVE, true)
+TRANS_ZS(ZSEV, MMIX_PRED_EVEN, false)
+TRANS_ZS(ZSEVI, MMIX_PRED_EVEN, true)
+
+#undef TRANS_CS
+#undef TRANS_ZS
 
 static bool gen_branch(DisasContext *ctx, arg_xyz *a, MMIXBranchCond cond,
                        bool backward)
