@@ -98,10 +98,12 @@ static void gen_store_reg(unsigned reg, TCGv_i64 val)
 }
 
 static void gen_effective_address(TCGv_i64 addr, const arg_xyz *a,
-                                  bool immediate)
+                                  bool immediate, uint64_t align_mask)
 {
     tcg_gen_add_i64(addr, gen_load_reg(a->y), gen_load_z(a, immediate));
-    tcg_gen_andi_i64(addr, addr, ~7ULL);
+    if (align_mask != 0) {
+        tcg_gen_andi_i64(addr, addr, ~align_mask);
+    }
 }
 
 static vaddr mmix_branch_dest(DisasContext *ctx, const arg_xyz *a,
@@ -706,64 +708,229 @@ static bool trans_GOI(DisasContext *ctx, arg_xyz *a)
     return gen_go(ctx, a, true);
 }
 
-static bool gen_ldo(DisasContext *ctx, arg_xyz *a, bool immediate)
+static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
+                         MemOp memop, uint64_t align_mask)
 {
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_effective_address(addr, a, immediate);
-    tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUQ);
+    gen_effective_address(addr, a, immediate, align_mask);
+    tcg_gen_qemu_ld_i64(val, addr, 0, memop);
     gen_store_reg(a->x, val);
     return true;
 }
 
+static bool gen_ldht(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 addr = tcg_temp_new_i64();
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_effective_address(addr, a, immediate, 3);
+    tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
+    tcg_gen_shli_i64(val, val, 32);
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool trans_LDB(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_SB, 0);
+}
+
+static bool trans_LDBI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_SB, 0);
+}
+
+static bool trans_LDBU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_UB, 0);
+}
+
+static bool trans_LDBUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_UB, 0);
+}
+
+static bool trans_LDW(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_BESW, 1);
+}
+
+static bool trans_LDWI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_BESW, 1);
+}
+
+static bool trans_LDWU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_BEUW, 1);
+}
+
+static bool trans_LDWUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_BEUW, 1);
+}
+
+static bool trans_LDT(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_BESL, 3);
+}
+
+static bool trans_LDTI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_BESL, 3);
+}
+
+static bool trans_LDTU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_BEUL, 3);
+}
+
+static bool trans_LDTUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_BEUL, 3);
+}
+
 static bool trans_LDO(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_ldo(ctx, a, false);
+    return gen_load_mem(ctx, a, false, MO_BEUQ, 7);
 }
 
 static bool trans_LDOI(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_ldo(ctx, a, true);
+    return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
 static bool trans_LDOU(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_ldo(ctx, a, false);
+    return gen_load_mem(ctx, a, false, MO_BEUQ, 7);
 }
 
 static bool trans_LDOUI(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_ldo(ctx, a, true);
+    return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
-static bool gen_sto(DisasContext *ctx, arg_xyz *a, bool immediate)
+static bool trans_LDHT(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_ldht(ctx, a, false);
+}
+
+static bool trans_LDHTI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_ldht(ctx, a, true);
+}
+
+static bool gen_store_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
+                          MemOp memop, uint64_t align_mask)
 {
     TCGv_i64 addr = tcg_temp_new_i64();
 
-    gen_effective_address(addr, a, immediate);
-    tcg_gen_qemu_st_i64(gen_load_reg(a->x), addr, 0, MO_BEUQ);
+    gen_effective_address(addr, a, immediate, align_mask);
+    tcg_gen_qemu_st_i64(gen_load_reg(a->x), addr, 0, memop);
     return true;
+}
+
+static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 addr = tcg_temp_new_i64();
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_effective_address(addr, a, immediate, 3);
+    tcg_gen_shri_i64(val, gen_load_reg(a->x), 32);
+    tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
+    return true;
+}
+
+static bool trans_STB(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_UB, 0);
+}
+
+static bool trans_STBI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_UB, 0);
+}
+
+static bool trans_STBU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_UB, 0);
+}
+
+static bool trans_STBUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_UB, 0);
+}
+
+static bool trans_STW(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_BEUW, 1);
+}
+
+static bool trans_STWI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_BEUW, 1);
+}
+
+static bool trans_STWU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_BEUW, 1);
+}
+
+static bool trans_STWUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_BEUW, 1);
+}
+
+static bool trans_STT(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_BEUL, 3);
+}
+
+static bool trans_STTI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_BEUL, 3);
+}
+
+static bool trans_STTU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_BEUL, 3);
+}
+
+static bool trans_STTUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_BEUL, 3);
 }
 
 static bool trans_STO(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_sto(ctx, a, false);
+    return gen_store_mem(ctx, a, false, MO_BEUQ, 7);
 }
 
 static bool trans_STOI(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_sto(ctx, a, true);
+    return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
 static bool trans_STOU(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_sto(ctx, a, false);
+    return gen_store_mem(ctx, a, false, MO_BEUQ, 7);
 }
 
 static bool trans_STOUI(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_sto(ctx, a, true);
+    return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
+}
+
+static bool trans_STHT(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_stht(ctx, a, false);
+}
+
+static bool trans_STHTI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_stht(ctx, a, true);
 }
 
 static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)

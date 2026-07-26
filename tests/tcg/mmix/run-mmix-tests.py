@@ -365,6 +365,170 @@ TESTS = [
         regs={1: 0x40, 2: 0x5a, 3: 0x5a},
     ),
     MMIXTest(
+        "memory-octa-variants",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0200),    # SETL r1,0x200
+                wyde(0xe3, 2, 8),         # SETL r2,8
+                wyde(0xe0, 3, 0x1122),    # SETH r3,0x1122
+                wyde(0xe5, 3, 0x3344),    # INCMH r3,0x3344
+                wyde(0xe6, 3, 0x5566),    # INCML r3,0x5566
+                wyde(0xe7, 3, 0x7788),    # INCL r3,0x7788
+                insn(0xac, 3, 1, 2),      # STO r3,r1,r2
+                insn(0x8c, 4, 1, 2),      # LDO r4,r1,r2
+                insn(0xad, 3, 1, 16),     # STOI r3,r1,16
+                insn(0x8d, 5, 1, 16),     # LDOI r5,r1,16
+                insn(0xae, 3, 1, 2),      # STOU r3,r1,r2
+                insn(0x8e, 6, 1, 2),      # LDOU r6,r1,r2
+                insn(0xaf, 3, 1, 24),     # STOUI r3,r1,24
+                insn(0x8f, 7, 1, 24),     # LDOUI r7,r1,24
+                halt(),
+            ]
+        ),
+        pc=0x38,
+        regs={
+            3: 0x1122334455667788,
+            4: 0x1122334455667788,
+            5: 0x1122334455667788,
+            6: 0x1122334455667788,
+            7: 0x1122334455667788,
+        },
+    ),
+    MMIXTest(
+        "memory-load-extension",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0220),    # SETL r1,0x220
+                wyde(0xe3, 2, 1),         # SETL r2,1
+                wyde(0xe3, 3, 2),         # SETL r3,2
+                wyde(0xe3, 4, 4),         # SETL r4,4
+                wyde(0xe3, 10, 0x80),     # SETL r10,0x80
+                insn(0xa3, 10, 1, 1),     # STBUI r10,r1,1
+                insn(0x80, 11, 1, 2),     # LDB r11,r1,r2
+                insn(0x81, 12, 1, 1),     # LDBI r12,r1,1
+                insn(0x82, 13, 1, 2),     # LDBU r13,r1,r2
+                insn(0x83, 14, 1, 1),     # LDBUI r14,r1,1
+                wyde(0xe3, 15, 0x8001),   # SETL r15,0x8001
+                insn(0xa4, 15, 1, 3),     # STW r15,r1,r3
+                insn(0x84, 16, 1, 3),     # LDW r16,r1,r3
+                insn(0x85, 17, 1, 2),     # LDWI r17,r1,2
+                insn(0x86, 18, 1, 3),     # LDWU r18,r1,r3
+                insn(0x87, 19, 1, 2),     # LDWUI r19,r1,2
+                wyde(0xe2, 20, 0x8000),   # SETML r20,0x8000
+                wyde(0xe7, 20, 1),        # INCL r20,1
+                insn(0xa9, 20, 1, 4),     # STTI r20,r1,4
+                insn(0x88, 21, 1, 4),     # LDT r21,r1,r4
+                insn(0x89, 22, 1, 4),     # LDTI r22,r1,4
+                insn(0x8a, 23, 1, 4),     # LDTU r23,r1,r4
+                insn(0x8b, 24, 1, 4),     # LDTUI r24,r1,4
+                halt(),
+            ]
+        ),
+        pc=0x5c,
+        regs={
+            11: 0xffffffffffffff80,
+            12: 0xffffffffffffff80,
+            13: 0x80,
+            14: 0x80,
+            16: 0xffffffffffff8001,
+            17: 0xffffffffffff8001,
+            18: 0x8001,
+            19: 0x8001,
+            20: 0x80000001,
+            21: 0xffffffff80000001,
+            22: 0xffffffff80000001,
+            23: 0x80000001,
+            24: 0x80000001,
+        },
+    ),
+    MMIXTest(
+        "memory-store-widths",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0240),    # SETL r1,0x240
+                wyde(0xe3, 2, 0x2a),      # SETL r2,0x2a
+                insn(0xa0, 2, 1, 0),      # STB r2,r1,r0
+                insn(0x82, 20, 1, 0),     # LDBU r20,r1,r0
+                wyde(0xe3, 3, 0x3b),      # SETL r3,0x3b
+                insn(0xa1, 3, 1, 1),      # STBI r3,r1,1
+                insn(0x83, 21, 1, 1),     # LDBUI r21,r1,1
+                wyde(0xe3, 4, 0xcc),      # SETL r4,0xcc
+                insn(0xa2, 4, 1, 2),      # STBU r4,r1,r2
+                insn(0x82, 22, 1, 2),     # LDBU r22,r1,r2
+                wyde(0xe3, 5, 0xdd),      # SETL r5,0xdd
+                insn(0xa3, 5, 1, 3),      # STBUI r5,r1,3
+                insn(0x83, 23, 1, 3),     # LDBUI r23,r1,3
+                wyde(0xe3, 6, 0x1234),    # SETL r6,0x1234
+                insn(0xa4, 6, 1, 0),      # STW r6,r1,r0
+                insn(0x86, 24, 1, 0),     # LDWU r24,r1,r0
+                wyde(0xe3, 7, 0x5678),    # SETL r7,0x5678
+                insn(0xa5, 7, 1, 6),      # STWI r7,r1,6
+                insn(0x87, 25, 1, 6),     # LDWUI r25,r1,6
+                wyde(0xe3, 8, 0x9abc),    # SETL r8,0x9abc
+                insn(0xa6, 8, 1, 0),      # STWU r8,r1,r0
+                insn(0x86, 26, 1, 0),     # LDWU r26,r1,r0
+                wyde(0xe3, 9, 0xdef0),    # SETL r9,0xdef0
+                insn(0xa7, 9, 1, 10),     # STWUI r9,r1,10
+                insn(0x87, 27, 1, 10),    # LDWUI r27,r1,10
+                wyde(0xe2, 10, 0x1122),   # SETML r10,0x1122
+                wyde(0xe7, 10, 0x3344),   # INCL r10,0x3344
+                insn(0xa8, 10, 1, 0),     # STT r10,r1,r0
+                insn(0x8a, 28, 1, 0),     # LDTU r28,r1,r0
+                wyde(0xe2, 11, 0x5566),   # SETML r11,0x5566
+                wyde(0xe7, 11, 0x7788),   # INCL r11,0x7788
+                insn(0xa9, 11, 1, 16),    # STTI r11,r1,16
+                insn(0x8b, 29, 1, 16),    # LDTUI r29,r1,16
+                wyde(0xe2, 12, 0x99aa),   # SETML r12,0x99aa
+                wyde(0xe7, 12, 0xbbcc),   # INCL r12,0xbbcc
+                insn(0xaa, 12, 1, 0),     # STTU r12,r1,r0
+                insn(0x8a, 30, 1, 0),     # LDTU r30,r1,r0
+                wyde(0xe2, 13, 0xddee),   # SETML r13,0xddee
+                wyde(0xe7, 13, 0xff00),   # INCL r13,0xff00
+                insn(0xab, 13, 1, 24),    # STTUI r13,r1,24
+                insn(0x8b, 31, 1, 24),    # LDTUI r31,r1,24
+                halt(),
+            ]
+        ),
+        pc=0xa4,
+        regs={
+            20: 0x2a,
+            21: 0x3b,
+            22: 0xcc,
+            23: 0xdd,
+            24: 0x1234,
+            25: 0x5678,
+            26: 0x9abc,
+            27: 0xdef0,
+            28: 0x11223344,
+            29: 0x55667788,
+            30: 0x99aabbcc,
+            31: 0xddeeff00,
+        },
+    ),
+    MMIXTest(
+        "memory-high-tetra",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0280),    # SETL r1,0x280
+                wyde(0xe0, 2, 0x1234),    # SETH r2,0x1234
+                wyde(0xe5, 2, 0x5678),    # INCMH r2,0x5678
+                wyde(0xe6, 2, 0x9abc),    # INCML r2,0x9abc
+                wyde(0xe7, 2, 0xdef0),    # INCL r2,0xdef0
+                insn(0xb2, 2, 1, 0),      # STHT r2,r1,r0
+                insn(0x92, 3, 1, 0),      # LDHT r3,r1,r0
+                insn(0xb3, 2, 1, 4),      # STHTI r2,r1,4
+                insn(0x93, 4, 1, 4),      # LDHTI r4,r1,4
+                halt(),
+            ]
+        ),
+        pc=0x24,
+        regs={
+            2: 0x123456789abcdef0,
+            3: 0x1234567800000000,
+            4: 0x1234567800000000,
+        },
+    ),
+    MMIXTest(
         "existing-integer-logical-variants",
         b"".join(
             [
