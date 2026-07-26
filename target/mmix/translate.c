@@ -181,12 +181,14 @@ static bool gen_mmix_unsupported(DisasContext *ctx, const char *mnemonic,
     }
 
 TRANS_UNSUPPORTED(TRIP)
+TRANS_UNSUPPORTED(RESUME)
 
 #undef TRANS_UNSUPPORTED
 
 static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
 {
     if (a->x == 0 && a->y == 0 && a->z == 0) {
+        /* QEMU porting test exit, not final MMIX TRAP semantics. */
         gen_helper_mmix_test_exit(tcg_env);
         ctx->base.is_jmp = DISAS_NORETURN;
         return true;

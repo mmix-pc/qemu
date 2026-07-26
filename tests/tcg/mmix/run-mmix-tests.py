@@ -42,6 +42,14 @@ class MMIXTest:
     regs: dict[int, int]
 
 
+@dataclasses.dataclass(frozen=True)
+class MMIXExpectedFailure:
+    name: str
+    program: bytes
+    patterns: tuple[str, ...]
+    absent: tuple[str, ...] = ("MMIX test exit",)
+
+
 TESTS = [
     MMIXTest(
         "alu-logical",
@@ -874,6 +882,30 @@ TESTS = [
 ]
 
 
+EXPECTED_FAILURES = [
+    MMIXExpectedFailure(
+        "unsupported-trap",
+        insn(0x00, 1, 0, 0),             # TRAP 1,0,0
+        ("MMIX decoded unimplemented TRAP", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "unsupported-trip",
+        insn(0xff, 0, 0, 0),             # TRIP 0,0,0
+        ("MMIX decoded unimplemented TRIP", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "unsupported-resume",
+        insn(0xf9, 0, 0, 0),             # RESUME 0
+        ("MMIX decoded unimplemented RESUME", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "unknown-opcode",
+        insn(0xf8, 0, 0, 0),             # POP is still unknown
+        ("MMIX unknown opcode 0xf8", "MMIX illegal instruction"),
+    ),
+]
+
+
 def parse_log(log_text):
     if "MMIX test exit" not in log_text:
         raise AssertionError("missing MMIX test exit line")
@@ -936,6 +968,48 @@ def run_one(qemu, workdir, test):
             )
 
 
+def run_expected_failure(qemu, workdir, test):
+    image = workdir / f"{test.name}.bin"
+    log = workdir / f"{test.name}.log"
+
+    image.write_bytes(test.program)
+    if log.exists():
+        log.unlink()
+
+    cmd = [
+        str(qemu),
+        "-machine",
+        "virt",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-serial",
+        "none",
+        "-kernel",
+        str(image),
+        "-d",
+        "unimp,int",
+        "-D",
+        str(log),
+    ]
+    try:
+        subprocess.run(cmd, check=False, timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+    if not log.exists():
+        raise AssertionError(f"{test.name}: missing log")
+
+    log_text = log.read_text(encoding="utf-8")
+    for pattern in test.patterns:
+        if pattern not in log_text:
+            raise AssertionError(f"{test.name}: missing expected log pattern {pattern!r}")
+    for pattern in test.absent:
+        if pattern in log_text:
+            raise AssertionError(f"{test.name}: unexpected log pattern {pattern!r}")
+
+
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True, type=pathlib.Path)
@@ -945,6 +1019,9 @@ def main(argv):
     args.workdir.mkdir(parents=True, exist_ok=True)
     for test in TESTS:
         run_one(args.qemu, args.workdir, test)
+        print(f"PASS {test.name}")
+    for test in EXPECTED_FAILURES:
+        run_expected_failure(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
 
 
