@@ -34,6 +34,54 @@ def halt():
     return insn(0x00, 0, 0, 0)
 
 
+def set_octa(reg, value):
+    return [
+        wyde(0xe0, reg, (value >> 48) & 0xffff),
+        wyde(0xe5, reg, (value >> 32) & 0xffff),
+        wyde(0xe6, reg, (value >> 16) & 0xffff),
+        wyde(0xe7, reg, value & 0xffff),
+    ]
+
+
+def lane_difference(y, z, lane_bits):
+    result = 0
+    mask = (1 << lane_bits) - 1
+    for shift in range(0, 64, lane_bits):
+        y_lane = (y >> shift) & mask
+        z_lane = (z >> shift) & mask
+        if y_lane > z_lane:
+            result |= (y_lane - z_lane) << shift
+    return result
+
+
+def sadd(y, z):
+    return (y & (~z & MASK64)).bit_count()
+
+
+def matrix_byte(value, row):
+    return (value >> ((7 - row) * 8)) & 0xff
+
+
+def matrix_multiply(y, z, exclusive):
+    result = 0
+    for i in range(8):
+        z_row = matrix_byte(z, i)
+        x_row = 0
+        for j in range(8):
+            bit = 0
+            for k in range(8):
+                y_bit = matrix_byte(y, k) & (0x80 >> j)
+                z_bit = z_row & (0x80 >> k)
+                if exclusive:
+                    bit ^= bool(y_bit and z_bit)
+                else:
+                    bit |= bool(y_bit and z_bit)
+            if bit:
+                x_row |= 0x80 >> j
+        result |= x_row << ((7 - i) * 8)
+    return result
+
+
 @dataclasses.dataclass(frozen=True)
 class MMIXTest:
     name: str
@@ -758,6 +806,144 @@ TESTS = [
             11: 0xffffffffffffff00,
             12: MASK64,
             13: 0xffffffffffffff00,
+        },
+    ),
+    MMIXTest(
+        "wyde-logical-immediates",
+        b"".join(
+            [
+                *set_octa(1, 0x1111222233334444),
+                wyde(0xe8, 1, 0x8000),    # ORH r1,0x8000
+                wyde(0xe9, 1, 0x0800),    # ORMH r1,0x0800
+                wyde(0xea, 1, 0x0080),    # ORML r1,0x0080
+                wyde(0xeb, 1, 0x0008),    # ORL r1,0x0008
+                *set_octa(2, MASK64),
+                wyde(0xec, 2, 0xf0f0),    # ANDNH r2,0xf0f0
+                wyde(0xed, 2, 0x0f0f),    # ANDNMH r2,0x0f0f
+                wyde(0xee, 2, 0xaaaa),    # ANDNML r2,0xaaaa
+                wyde(0xef, 2, 0x5555),    # ANDNL r2,0x5555
+                halt(),
+            ]
+        ),
+        pc=0x40,
+        regs={1: 0x91112a2233b3444c, 2: 0x0f0ff0f05555aaaa},
+    ),
+    MMIXTest(
+        "unsigned-negate",
+        b"".join(
+            [
+                wyde(0xe3, 1, 5),         # SETL r1,5
+                insn(0x36, 2, 10, 1),     # NEGU r2,10,r1
+                insn(0x37, 3, 1, 2),      # NEGUI r3,1,2
+                insn(0x36, 4, 0, 1),      # NEGU r4,0,r1
+                insn(0x37, 5, 0, 0),      # NEGUI r5,0,0
+                halt(),
+            ]
+        ),
+        pc=0x14,
+        regs={1: 5, 2: 5, 3: MASK64, 4: MASK64 - 4, 5: 0},
+    ),
+    MMIXTest(
+        "low-risk-shifts",
+        b"".join(
+            [
+                wyde(0xe3, 1, 1),         # SETL r1,1
+                wyde(0xe3, 2, 64),        # SETL r2,64
+                insn(0x37, 3, 0, 8),      # NEGUI r3,0,8
+                insn(0x3b, 4, 1, 63),     # SLUI r4,r1,63
+                insn(0x3a, 5, 1, 2),      # SLU r5,r1,r2
+                insn(0x3d, 6, 3, 1),      # SRI r6,r3,1
+                insn(0x3c, 7, 3, 2),      # SR r7,r3,r2
+                insn(0x3f, 8, 3, 1),      # SRUI r8,r3,1
+                insn(0x3e, 9, 3, 2),      # SRU r9,r3,r2
+                insn(0x3f, 10, 1, 0),     # SRUI r10,r1,0
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={
+            1: 1,
+            2: 64,
+            3: MASK64 - 7,
+            4: 0x8000000000000000,
+            5: 0,
+            6: MASK64 - 3,
+            7: MASK64,
+            8: 0x7ffffffffffffffc,
+            9: 0,
+            10: 1,
+        },
+    ),
+    MMIXTest(
+        "bit-difference",
+        b"".join(
+            [
+                *set_octa(1, 0x1020304050607080),
+                *set_octa(2, 0x0111223344556677),
+                insn(0xd0, 3, 1, 2),      # BDIF r3,r1,r2
+                insn(0xd1, 4, 1, 0x10),   # BDIFI r4,r1,0x10
+                insn(0xd2, 5, 1, 2),      # WDIF r5,r1,r2
+                insn(0xd4, 6, 1, 2),      # TDIF r6,r1,r2
+                insn(0xd6, 7, 1, 2),      # ODIF r7,r1,r2
+                insn(0xd7, 8, 1, 0x80),   # ODIFI r8,r1,0x80
+                halt(),
+            ]
+        ),
+        pc=0x38,
+        regs={
+            3: lane_difference(0x1020304050607080, 0x0111223344556677, 8),
+            4: lane_difference(0x1020304050607080, 0x10, 8),
+            5: lane_difference(0x1020304050607080, 0x0111223344556677, 16),
+            6: lane_difference(0x1020304050607080, 0x0111223344556677, 32),
+            7: 0x0f0f0e0d0c0b0a09,
+            8: 0x1020304050607000,
+        },
+    ),
+    MMIXTest(
+        "sideways-add",
+        b"".join(
+            [
+                *set_octa(1, MASK64),
+                *set_octa(2, 0xf0f0f0f0f0f0f0f0),
+                insn(0xda, 3, 1, 0),      # SADD r3,r1,r0
+                insn(0xda, 4, 1, 2),      # SADD r4,r1,r2
+                insn(0xdb, 5, 2, 0xf0),   # SADDI r5,r2,0xf0
+                insn(0xdb, 6, 0, 0xff),   # SADDI r6,r0,0xff
+                halt(),
+            ]
+        ),
+        pc=0x30,
+        regs={
+            3: sadd(MASK64, 0),
+            4: sadd(MASK64, 0xf0f0f0f0f0f0f0f0),
+            5: sadd(0xf0f0f0f0f0f0f0f0, 0xf0),
+            6: 0,
+        },
+    ),
+    MMIXTest(
+        "bit-matrix",
+        b"".join(
+            [
+                *set_octa(1, 0x1122334455667788),
+                *set_octa(2, 0x8040201008040201),
+                *set_octa(3, 0x0102040810204080),
+                insn(0xdc, 4, 1, 2),      # MOR r4,r1,r2
+                insn(0xde, 5, 1, 2),      # MXOR r5,r1,r2
+                insn(0xdc, 6, 1, 3),      # MOR r6,r1,r3
+                insn(0xde, 7, 1, 3),      # MXOR r7,r1,r3
+                insn(0xdd, 8, 1, 0xff),   # MORI r8,r1,0xff
+                insn(0xdf, 9, 1, 0xff),   # MXORI r9,r1,0xff
+                halt(),
+            ]
+        ),
+        pc=0x48,
+        regs={
+            4: matrix_multiply(0x1122334455667788, 0x8040201008040201, False),
+            5: matrix_multiply(0x1122334455667788, 0x8040201008040201, True),
+            6: matrix_multiply(0x1122334455667788, 0x0102040810204080, False),
+            7: matrix_multiply(0x1122334455667788, 0x0102040810204080, True),
+            8: matrix_multiply(0x1122334455667788, 0xff, False),
+            9: matrix_multiply(0x1122334455667788, 0xff, True),
         },
     ),
     MMIXTest(

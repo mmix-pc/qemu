@@ -41,6 +41,12 @@ typedef enum MMIXCompareOp {
     MMIX_CMP_UNSIGNED,
 } MMIXCompareOp;
 
+typedef enum MMIXShiftOp {
+    MMIX_SHIFT_SLU,
+    MMIX_SHIFT_SR,
+    MMIX_SHIFT_SRU,
+} MMIXShiftOp;
+
 typedef enum MMIXPredicate {
     MMIX_PRED_NEGATIVE,
     MMIX_PRED_ZERO,
@@ -380,6 +386,54 @@ static bool gen_scaled_addu(DisasContext *ctx, arg_xyz *a, unsigned shift,
     return true;
 }
 
+static bool gen_negu(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    tcg_gen_sub_i64(val, tcg_constant_i64(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftOp op,
+                      bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+    TCGv_i64 count = gen_load_z(a, immediate);
+    TCGv_i64 safe_count = tcg_temp_new_i64();
+    TCGv_i64 lhs = gen_load_reg(a->y);
+
+    tcg_gen_andi_i64(safe_count, count, 63);
+
+    switch (op) {
+    case MMIX_SHIFT_SLU:
+        tcg_gen_shl_i64(val, lhs, safe_count);
+        tcg_gen_movcond_i64(TCG_COND_LTU, val, count, tcg_constant_i64(64),
+                            val, tcg_constant_i64(0));
+        break;
+    case MMIX_SHIFT_SR:
+    {
+        TCGv_i64 extreme = tcg_temp_new_i64();
+
+        tcg_gen_sar_i64(val, lhs, safe_count);
+        tcg_gen_sari_i64(extreme, lhs, 63);
+        tcg_gen_movcond_i64(TCG_COND_LTU, val, count, tcg_constant_i64(64),
+                            val, extreme);
+        break;
+    }
+    case MMIX_SHIFT_SRU:
+        tcg_gen_shr_i64(val, lhs, safe_count);
+        tcg_gen_movcond_i64(TCG_COND_LTU, val, count, tcg_constant_i64(64),
+                            val, tcg_constant_i64(0));
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    gen_store_reg(a->x, val);
+    return true;
+}
+
 static bool trans_TWO_ADDU(DisasContext *ctx, arg_xyz *a)
 {
     return gen_scaled_addu(ctx, a, 1, false);
@@ -420,6 +474,46 @@ static bool trans_SIXTEEN_ADDUI(DisasContext *ctx, arg_xyz *a)
     return gen_scaled_addu(ctx, a, 4, true);
 }
 
+static bool trans_NEGU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_negu(ctx, a, false);
+}
+
+static bool trans_NEGUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_negu(ctx, a, true);
+}
+
+static bool trans_SLU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SLU, false);
+}
+
+static bool trans_SLUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SLU, true);
+}
+
+static bool trans_SR(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SR, false);
+}
+
+static bool trans_SRI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SR, true);
+}
+
+static bool trans_SRU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SRU, false);
+}
+
+static bool trans_SRUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SRU, true);
+}
+
 static uint64_t mmix_wyde_value(const arg_xyz *a, unsigned shift)
 {
     return (uint64_t)a->yz << shift;
@@ -437,6 +531,24 @@ static bool gen_inc_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
 
     tcg_gen_add_i64(val, gen_load_reg(a->x),
                     tcg_constant_i64(mmix_wyde_value(a, shift)));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_or_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    tcg_gen_ori_i64(val, gen_load_reg(a->x), mmix_wyde_value(a, shift));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_andn_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    tcg_gen_andi_i64(val, gen_load_reg(a->x), ~mmix_wyde_value(a, shift));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -480,6 +592,133 @@ static bool trans_INCL(DisasContext *ctx, arg_xyz *a)
 {
     return gen_inc_wyde(ctx, a, 0);
 }
+
+static bool trans_ORH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_or_wyde(ctx, a, 48);
+}
+
+static bool trans_ORMH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_or_wyde(ctx, a, 32);
+}
+
+static bool trans_ORML(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_or_wyde(ctx, a, 16);
+}
+
+static bool trans_ORL(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_or_wyde(ctx, a, 0);
+}
+
+static bool trans_ANDNH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_andn_wyde(ctx, a, 48);
+}
+
+static bool trans_ANDNMH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_andn_wyde(ctx, a, 32);
+}
+
+static bool trans_ANDNML(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_andn_wyde(ctx, a, 16);
+}
+
+static bool trans_ANDNL(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_andn_wyde(ctx, a, 0);
+}
+
+static bool gen_bdif(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_bdif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_wdif(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_wdif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_tdif(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_tdif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_odif(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_odif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_sadd(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    tcg_gen_andc_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    tcg_gen_ctpop_i64(val, val);
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_mor(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_mor(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_mxor(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_mxor(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+#define TRANS_BIT_DIFF(NAME, HELPER, IMMEDIATE) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_##HELPER(ctx, a, IMMEDIATE); \
+    }
+
+TRANS_BIT_DIFF(BDIF, bdif, false)
+TRANS_BIT_DIFF(BDIFI, bdif, true)
+TRANS_BIT_DIFF(WDIF, wdif, false)
+TRANS_BIT_DIFF(WDIFI, wdif, true)
+TRANS_BIT_DIFF(TDIF, tdif, false)
+TRANS_BIT_DIFF(TDIFI, tdif, true)
+TRANS_BIT_DIFF(ODIF, odif, false)
+TRANS_BIT_DIFF(ODIFI, odif, true)
+TRANS_BIT_DIFF(SADD, sadd, false)
+TRANS_BIT_DIFF(SADDI, sadd, true)
+TRANS_BIT_DIFF(MOR, mor, false)
+TRANS_BIT_DIFF(MORI, mor, true)
+TRANS_BIT_DIFF(MXOR, mxor, false)
+TRANS_BIT_DIFF(MXORI, mxor, true)
+
+#undef TRANS_BIT_DIFF
 
 static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareOp op,
                     bool immediate)

@@ -118,6 +118,96 @@ void helper_mmix_put_rl(CPUMMIXState *env, uint64_t val)
     mmix_cpu_put_rl(env, val);
 }
 
+static uint64_t mmix_lane_difference(uint64_t y, uint64_t z,
+                                     unsigned lane_bits)
+{
+    uint64_t mask = lane_bits == 64 ? UINT64_MAX : (1ULL << lane_bits) - 1;
+    uint64_t result = 0;
+    unsigned shift;
+
+    for (shift = 0; shift < 64; shift += lane_bits) {
+        uint64_t y_lane = (y >> shift) & mask;
+        uint64_t z_lane = (z >> shift) & mask;
+
+        if (y_lane > z_lane) {
+            result |= (y_lane - z_lane) << shift;
+        }
+    }
+
+    return result;
+}
+
+uint64_t helper_mmix_bdif(uint64_t y, uint64_t z)
+{
+    return mmix_lane_difference(y, z, 8);
+}
+
+uint64_t helper_mmix_wdif(uint64_t y, uint64_t z)
+{
+    return mmix_lane_difference(y, z, 16);
+}
+
+uint64_t helper_mmix_tdif(uint64_t y, uint64_t z)
+{
+    return mmix_lane_difference(y, z, 32);
+}
+
+uint64_t helper_mmix_odif(uint64_t y, uint64_t z)
+{
+    return y > z ? y - z : 0;
+}
+
+static uint8_t mmix_matrix_byte(uint64_t val, unsigned row)
+{
+    return val >> ((7 - row) * 8);
+}
+
+static uint64_t mmix_matrix_multiply(uint64_t y, uint64_t z, bool exclusive)
+{
+    uint64_t result = 0;
+    unsigned i;
+
+    for (i = 0; i < 8; i++) {
+        uint8_t z_row = mmix_matrix_byte(z, i);
+        uint8_t x_row = 0;
+        unsigned j;
+
+        for (j = 0; j < 8; j++) {
+            uint8_t bit = 0;
+            unsigned k;
+
+            for (k = 0; k < 8; k++) {
+                uint8_t y_bit = mmix_matrix_byte(y, k) & (0x80 >> j);
+                uint8_t z_bit = z_row & (0x80 >> k);
+
+                if (exclusive) {
+                    bit ^= (y_bit && z_bit);
+                } else {
+                    bit |= (y_bit && z_bit);
+                }
+            }
+
+            if (bit) {
+                x_row |= 0x80 >> j;
+            }
+        }
+
+        result |= (uint64_t)x_row << ((7 - i) * 8);
+    }
+
+    return result;
+}
+
+uint64_t helper_mmix_mor(uint64_t y, uint64_t z)
+{
+    return mmix_matrix_multiply(y, z, false);
+}
+
+uint64_t helper_mmix_mxor(uint64_t y, uint64_t z)
+{
+    return mmix_matrix_multiply(y, z, true);
+}
+
 void helper_raise_illegal_instruction(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);
