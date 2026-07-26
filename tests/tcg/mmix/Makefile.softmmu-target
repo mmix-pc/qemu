@@ -1,0 +1,19 @@
+#
+# MMIX system tests
+#
+
+MMIX_TEST_SRC = $(SRC_PATH)/tests/tcg/mmix
+MMIX_TEST_WORKDIR = $(CURDIR)/mmix-tests
+
+EXTRA_RUNS += run-mmix-baseline
+
+run-mmix-baseline:
+	$(call run-test, $@, \
+		$(PYTHON) $(MMIX_TEST_SRC)/run-mmix-tests.py \
+			--qemu $(QEMU) --workdir $(MMIX_TEST_WORKDIR))
+
+CLEANFILES += mmix-tests/*.bin mmix-tests/*.log
+
+# These tests generate raw instruction images directly and do not use the
+# multiarch system tests or a guest cross compiler.
+undefine MULTIARCH_TESTS
