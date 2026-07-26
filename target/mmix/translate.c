@@ -36,11 +36,6 @@ typedef enum MMIXALUOp {
     MMIX_ALU_NXOR,
 } MMIXALUOp;
 
-typedef enum MMIXBranchCond {
-    MMIX_BRANCH_ZERO,
-    MMIX_BRANCH_NONZERO,
-} MMIXBranchCond;
-
 typedef enum MMIXCompareOp {
     MMIX_CMP_SIGNED,
     MMIX_CMP_UNSIGNED,
@@ -117,6 +112,14 @@ static vaddr mmix_branch_dest(DisasContext *ctx, const arg_xyz *a,
     return ctx->insn_pc + ((int64_t)disp << 2);
 }
 
+static vaddr mmix_jump_dest(DisasContext *ctx, const arg_xyz *a,
+                            bool backward)
+{
+    int32_t disp = backward ? (int32_t)a->xyz - 0x1000000 : a->xyz;
+
+    return ctx->insn_pc + ((int64_t)disp << 2);
+}
+
 static bool gen_mmix_unsupported(DisasContext *ctx, const char *mnemonic,
                                  const arg_xyz *a)
 {
@@ -136,10 +139,6 @@ static bool gen_mmix_unsupported(DisasContext *ctx, const char *mnemonic,
     }
 
 TRANS_UNSUPPORTED(TRIP)
-TRANS_UNSUPPORTED(PBZ)
-TRANS_UNSUPPORTED(PBZB)
-TRANS_UNSUPPORTED(PBNZ)
-TRANS_UNSUPPORTED(PBNZB)
 
 #undef TRANS_UNSUPPORTED
 
@@ -592,19 +591,16 @@ TRANS_ZS(ZSEVI, MMIX_PRED_EVEN, true)
 #undef TRANS_CS
 #undef TRANS_ZS
 
-static bool gen_branch(DisasContext *ctx, arg_xyz *a, MMIXBranchCond cond,
+static bool gen_branch(DisasContext *ctx, arg_xyz *a, MMIXPredicate predicate,
                        bool backward)
 {
     TCGLabel *not_taken = gen_new_label();
-    TCGv_i64 val = gen_load_reg(a->x);
+    TCGv_i64 pred = tcg_temp_new_i64();
     vaddr dest = mmix_branch_dest(ctx, a, backward);
     vaddr next = ctx->base.pc_next;
 
-    if (cond == MMIX_BRANCH_ZERO) {
-        tcg_gen_brcondi_i64(TCG_COND_NE, val, 0, not_taken);
-    } else {
-        tcg_gen_brcondi_i64(TCG_COND_EQ, val, 0, not_taken);
-    }
+    gen_predicate(pred, gen_load_reg(a->x), predicate);
+    tcg_gen_brcondi_i64(TCG_COND_EQ, pred, 0, not_taken);
     gen_goto_tb(ctx, 0, dest);
     gen_set_label(not_taken);
     gen_goto_tb(ctx, 1, next);
@@ -612,24 +608,102 @@ static bool gen_branch(DisasContext *ctx, arg_xyz *a, MMIXBranchCond cond,
     return true;
 }
 
-static bool trans_BZ(DisasContext *ctx, arg_xyz *a)
+static bool gen_geta(DisasContext *ctx, arg_xyz *a, bool backward)
 {
-    return gen_branch(ctx, a, MMIX_BRANCH_ZERO, false);
+    gen_store_reg(a->x, tcg_constant_i64(mmix_branch_dest(ctx, a, backward)));
+    return true;
 }
 
-static bool trans_BZB(DisasContext *ctx, arg_xyz *a)
+static bool gen_jmp(DisasContext *ctx, arg_xyz *a, bool backward)
 {
-    return gen_branch(ctx, a, MMIX_BRANCH_ZERO, true);
+    gen_goto_tb(ctx, 0, mmix_jump_dest(ctx, a, backward));
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
 }
 
-static bool trans_BNZ(DisasContext *ctx, arg_xyz *a)
+static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
-    return gen_branch(ctx, a, MMIX_BRANCH_NONZERO, false);
+    TCGv_i64 dest = tcg_temp_new_i64();
+
+    tcg_gen_add_i64(dest, gen_load_reg(a->y), gen_load_z(a, immediate));
+    tcg_gen_andi_i64(dest, dest, ~3ULL);
+    gen_store_reg(a->x, tcg_constant_i64(ctx->base.pc_next));
+    tcg_gen_mov_i64(cpu_pc, dest);
+    tcg_gen_addi_i64(cpu_npc, dest, 4);
+    tcg_gen_lookup_and_goto_ptr();
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
 }
 
-static bool trans_BNZB(DisasContext *ctx, arg_xyz *a)
+#define TRANS_BRANCH(NAME, PREDICATE, BACKWARD) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_branch(ctx, a, PREDICATE, BACKWARD); \
+    }
+
+TRANS_BRANCH(BN, MMIX_PRED_NEGATIVE, false)
+TRANS_BRANCH(BNB, MMIX_PRED_NEGATIVE, true)
+TRANS_BRANCH(BZ, MMIX_PRED_ZERO, false)
+TRANS_BRANCH(BZB, MMIX_PRED_ZERO, true)
+TRANS_BRANCH(BP, MMIX_PRED_POSITIVE, false)
+TRANS_BRANCH(BPB, MMIX_PRED_POSITIVE, true)
+TRANS_BRANCH(BOD, MMIX_PRED_ODD, false)
+TRANS_BRANCH(BODB, MMIX_PRED_ODD, true)
+TRANS_BRANCH(BNN, MMIX_PRED_NONNEGATIVE, false)
+TRANS_BRANCH(BNNB, MMIX_PRED_NONNEGATIVE, true)
+TRANS_BRANCH(BNZ, MMIX_PRED_NONZERO, false)
+TRANS_BRANCH(BNZB, MMIX_PRED_NONZERO, true)
+TRANS_BRANCH(BNP, MMIX_PRED_NONPOSITIVE, false)
+TRANS_BRANCH(BNPB, MMIX_PRED_NONPOSITIVE, true)
+TRANS_BRANCH(BEV, MMIX_PRED_EVEN, false)
+TRANS_BRANCH(BEVB, MMIX_PRED_EVEN, true)
+TRANS_BRANCH(PBN, MMIX_PRED_NEGATIVE, false)
+TRANS_BRANCH(PBNB, MMIX_PRED_NEGATIVE, true)
+TRANS_BRANCH(PBZ, MMIX_PRED_ZERO, false)
+TRANS_BRANCH(PBZB, MMIX_PRED_ZERO, true)
+TRANS_BRANCH(PBP, MMIX_PRED_POSITIVE, false)
+TRANS_BRANCH(PBPB, MMIX_PRED_POSITIVE, true)
+TRANS_BRANCH(PBOD, MMIX_PRED_ODD, false)
+TRANS_BRANCH(PBODB, MMIX_PRED_ODD, true)
+TRANS_BRANCH(PBNN, MMIX_PRED_NONNEGATIVE, false)
+TRANS_BRANCH(PBNNB, MMIX_PRED_NONNEGATIVE, true)
+TRANS_BRANCH(PBNZ, MMIX_PRED_NONZERO, false)
+TRANS_BRANCH(PBNZB, MMIX_PRED_NONZERO, true)
+TRANS_BRANCH(PBNP, MMIX_PRED_NONPOSITIVE, false)
+TRANS_BRANCH(PBNPB, MMIX_PRED_NONPOSITIVE, true)
+TRANS_BRANCH(PBEV, MMIX_PRED_EVEN, false)
+TRANS_BRANCH(PBEVB, MMIX_PRED_EVEN, true)
+
+#undef TRANS_BRANCH
+
+static bool trans_GETA(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_branch(ctx, a, MMIX_BRANCH_NONZERO, true);
+    return gen_geta(ctx, a, false);
+}
+
+static bool trans_GETAB(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_geta(ctx, a, true);
+}
+
+static bool trans_JMP(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_jmp(ctx, a, false);
+}
+
+static bool trans_JMPB(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_jmp(ctx, a, true);
+}
+
+static bool trans_GO(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_go(ctx, a, false);
+}
+
+static bool trans_GOI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_go(ctx, a, true);
 }
 
 static bool gen_ldo(DisasContext *ctx, arg_xyz *a, bool immediate)

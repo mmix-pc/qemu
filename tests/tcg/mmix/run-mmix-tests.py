@@ -22,6 +22,10 @@ def branch(op, x, yz):
     return insn(op, x, (yz >> 8) & 0xff, yz & 0xff)
 
 
+def jump(op, xyz):
+    return insn(op, (xyz >> 16) & 0xff, (xyz >> 8) & 0xff, xyz & 0xff)
+
+
 def wyde(op, x, yz):
     return insn(op, x, (yz >> 8) & 0xff, yz & 0xff)
 
@@ -153,6 +157,198 @@ TESTS = [
         ),
         pc=0x14,
         regs={1: 3, 2: 0},
+    ),
+    MMIXTest(
+        "branch-existing-variants",
+        b"".join(
+            [
+                branch(0x42, 0, 3),       # BZ r0,+3
+                wyde(0xe3, 2, 1),         # target for BZB
+                halt(),
+                branch(0x43, 0, 0xfffe),  # BZB r0,-2
+            ]
+        ),
+        pc=0x08,
+        regs={2: 1},
+    ),
+    MMIXTest(
+        "branch-bnz-forward",
+        b"".join(
+            [
+                wyde(0xe3, 1, 1),         # SETL r1,1
+                branch(0x4a, 1, 2),       # BNZ r1,+2
+                wyde(0xe3, 2, 9),         # skipped
+                wyde(0xe3, 2, 5),         # SETL r2,5
+                halt(),
+            ]
+        ),
+        pc=0x10,
+        regs={2: 5},
+    ),
+    MMIXTest(
+        "ordinary-branches-true",
+        b"".join(
+            [
+                insn(0x25, 1, 0, 1),      # SUBI r1,r0,1
+                wyde(0xe3, 3, 5),         # SETL r3,5
+                wyde(0xe3, 4, 4),         # SETL r4,4
+                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
+                branch(0x40, 1, 2),       # BN r1,+2
+                wyde(0xe3, 10, 0xaa),     # skipped
+                wyde(0xe3, 10, 0x55),
+                branch(0x42, 0, 2),       # BZ r0,+2
+                wyde(0xe3, 11, 0xaa),     # skipped
+                wyde(0xe3, 11, 0x55),
+                branch(0x44, 3, 2),       # BP r3,+2
+                wyde(0xe3, 12, 0xaa),     # skipped
+                wyde(0xe3, 12, 0x55),
+                branch(0x46, 3, 2),       # BOD r3,+2
+                wyde(0xe3, 13, 0xaa),     # skipped
+                wyde(0xe3, 13, 0x55),
+                branch(0x48, 0, 2),       # BNN r0,+2
+                wyde(0xe3, 14, 0xaa),     # skipped
+                wyde(0xe3, 14, 0x55),
+                branch(0x4a, 3, 2),       # BNZ r3,+2
+                wyde(0xe3, 15, 0xaa),     # skipped
+                wyde(0xe3, 15, 0x55),
+                branch(0x4c, 1, 2),       # BNP r1,+2
+                wyde(0xe3, 16, 0xaa),     # skipped
+                wyde(0xe3, 16, 0x55),
+                branch(0x4e, 4, 2),       # BEV r4,+2
+                wyde(0xe3, 17, 0xaa),     # skipped
+                wyde(0xe3, 17, 0x55),
+                halt(),
+            ]
+        ),
+        pc=0x70,
+        regs={reg: 0x55 for reg in range(10, 18)},
+    ),
+    MMIXTest(
+        "ordinary-branches-false",
+        b"".join(
+            [
+                insn(0x25, 1, 0, 1),      # SUBI r1,r0,1
+                wyde(0xe3, 3, 5),         # SETL r3,5
+                wyde(0xe3, 4, 4),         # SETL r4,4
+                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
+                branch(0x40, 3, 2),       # BN false
+                wyde(0xe3, 10, 0x55),
+                branch(0x42, 3, 2),       # BZ false
+                wyde(0xe3, 11, 0x55),
+                branch(0x44, 1, 2),       # BP false
+                wyde(0xe3, 12, 0x55),
+                branch(0x46, 4, 2),       # BOD false
+                wyde(0xe3, 13, 0x55),
+                branch(0x48, 1, 2),       # BNN false
+                wyde(0xe3, 14, 0x55),
+                branch(0x4a, 0, 2),       # BNZ false
+                wyde(0xe3, 15, 0x55),
+                branch(0x4c, 3, 2),       # BNP false
+                wyde(0xe3, 16, 0x55),
+                branch(0x4e, 3, 2),       # BEV false
+                wyde(0xe3, 17, 0x55),
+                halt(),
+            ]
+        ),
+        pc=0x50,
+        regs={reg: 0x55 for reg in range(10, 18)},
+    ),
+    MMIXTest(
+        "probable-branches-true",
+        b"".join(
+            [
+                insn(0x25, 1, 0, 1),      # SUBI r1,r0,1
+                wyde(0xe3, 3, 5),         # SETL r3,5
+                wyde(0xe3, 4, 4),         # SETL r4,4
+                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
+                branch(0x50, 1, 2),       # PBN r1,+2
+                wyde(0xe3, 10, 0xaa),     # skipped
+                wyde(0xe3, 10, 0x55),
+                branch(0x52, 0, 2),       # PBZ r0,+2
+                wyde(0xe3, 11, 0xaa),     # skipped
+                wyde(0xe3, 11, 0x55),
+                branch(0x54, 3, 2),       # PBP r3,+2
+                wyde(0xe3, 12, 0xaa),     # skipped
+                wyde(0xe3, 12, 0x55),
+                branch(0x56, 3, 2),       # PBOD r3,+2
+                wyde(0xe3, 13, 0xaa),     # skipped
+                wyde(0xe3, 13, 0x55),
+                branch(0x58, 0, 2),       # PBNN r0,+2
+                wyde(0xe3, 14, 0xaa),     # skipped
+                wyde(0xe3, 14, 0x55),
+                branch(0x5a, 3, 2),       # PBNZ r3,+2
+                wyde(0xe3, 15, 0xaa),     # skipped
+                wyde(0xe3, 15, 0x55),
+                branch(0x5c, 1, 2),       # PBNP r1,+2
+                wyde(0xe3, 16, 0xaa),     # skipped
+                wyde(0xe3, 16, 0x55),
+                branch(0x5e, 4, 2),       # PBEV r4,+2
+                wyde(0xe3, 17, 0xaa),     # skipped
+                wyde(0xe3, 17, 0x55),
+                halt(),
+            ]
+        ),
+        pc=0x70,
+        regs={reg: 0x55 for reg in range(10, 18)},
+    ),
+    MMIXTest(
+        "probable-branches-false-backward",
+        b"".join(
+            [
+                wyde(0xe3, 1, 1),         # SETL r1,1
+                branch(0x5a, 0, 2),       # PBNZ false
+                wyde(0xe3, 2, 7),         # SETL r2,7
+                branch(0x52, 0, 3),       # PBZ r0,+3
+                wyde(0xe3, 3, 9),         # skipped
+                halt(),
+                branch(0x5b, 1, 0xffff),  # PBNZB r1,-1
+            ]
+        ),
+        pc=0x14,
+        regs={2: 7, 3: 0},
+    ),
+    MMIXTest(
+        "address-geta",
+        b"".join(
+            [
+                branch(0xf4, 1, 2),       # GETA r1,+2
+                branch(0xf5, 2, 0xffff),  # GETAB r2,-1
+                halt(),
+            ]
+        ),
+        pc=0x08,
+        regs={1: 0x08, 2: 0},
+    ),
+    MMIXTest(
+        "jump-forward-backward",
+        b"".join(
+            [
+                jump(0xf0, 3),            # JMP +3
+                wyde(0xe3, 1, 9),         # skipped
+                halt(),
+                wyde(0xe3, 1, 5),         # SETL r1,5
+                jump(0xf1, 0xfffffe),     # JMPB -2
+            ]
+        ),
+        pc=0x08,
+        regs={1: 5},
+    ),
+    MMIXTest(
+        "go-register-immediate",
+        b"".join(
+            [
+                wyde(0xe3, 1, 17),        # SETL r1,17
+                insn(0x9e, 2, 1, 0),      # GO r2,r1,r0
+                wyde(0xe3, 3, 9),         # skipped
+                halt(),                   # skipped
+                wyde(0xe3, 3, 5),         # SETL r3,5
+                insn(0x9f, 4, 1, 13),     # GOI r4,r1,13
+                wyde(0xe3, 5, 9),         # skipped
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={2: 0x08, 3: 5, 4: 0x18, 5: 0},
     ),
     MMIXTest(
         "load-store",
