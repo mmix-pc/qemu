@@ -9,6 +9,7 @@
 #include "accel/tcg/cpu-loop.h"
 #include "exec/log.h"
 #include "exec/helper-proto.h"
+#include "system/runstate.h"
 
 void helper_raise_illegal_instruction(CPUMMIXState *env)
 {
@@ -16,6 +17,22 @@ void helper_raise_illegal_instruction(CPUMMIXState *env)
 
     cs->exception_index = EXCP_MMIX_ILLEGAL;
     cpu_loop_exit(cs);
+}
+
+void helper_mmix_test_exit(CPUMMIXState *env)
+{
+    CPUState *cs = env_cpu(env);
+
+    if (!env->test_exit_seen) {
+        env->test_exit_seen = true;
+        qemu_log_mask(CPU_LOG_INT, "MMIX test exit at 0x%016" PRIx64 "\n",
+                      env->pc);
+        log_cpu_state_mask(CPU_LOG_INT, cs, 0);
+        qemu_system_shutdown_request_with_code(SHUTDOWN_CAUSE_GUEST_SHUTDOWN,
+                                               0);
+    }
+    cs->halted = 1;
+    cpu_loop_exit_noexc(cs);
 }
 
 void mmix_cpu_do_interrupt(CPUState *cs)

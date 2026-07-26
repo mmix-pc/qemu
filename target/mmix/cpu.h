@@ -77,6 +77,7 @@ typedef struct CPUArchState {
 
     uint64_t pc;
     uint64_t npc;
+    bool test_exit_seen;
 
     uint64_t local_regs[MMIX_LOCAL_REGS];
     uint32_t lring_size;

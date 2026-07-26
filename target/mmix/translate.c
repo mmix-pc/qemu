@@ -119,7 +119,6 @@ static bool gen_mmix_unsupported(DisasContext *ctx, const char *mnemonic,
         return gen_mmix_unsupported(ctx, #NAME, a); \
     }
 
-TRANS_UNSUPPORTED(TRAP)
 TRANS_UNSUPPORTED(TRIP)
 TRANS_UNSUPPORTED(PBZ)
 TRANS_UNSUPPORTED(PBZB)
@@ -127,6 +126,17 @@ TRANS_UNSUPPORTED(PBNZ)
 TRANS_UNSUPPORTED(PBNZB)
 
 #undef TRANS_UNSUPPORTED
+
+static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
+{
+    if (a->x == 0 && a->y == 0 && a->z == 0) {
+        gen_helper_mmix_test_exit(tcg_env);
+        ctx->base.is_jmp = DISAS_NORETURN;
+        return true;
+    }
+
+    return gen_mmix_unsupported(ctx, "TRAP", a);
+}
 
 static bool trans_SWYM(DisasContext *ctx, arg_xyz *a)
 {

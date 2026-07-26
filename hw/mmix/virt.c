@@ -23,7 +23,15 @@ static void mmix_virt_init(MachineState *machine)
 
     cpu = cpu_create(machine->cpu_type);
     if (machine->kernel_filename) {
-        load_image_targphys(machine->kernel_filename, 0, machine->ram_size, NULL);
+        Error *err = NULL;
+        ssize_t image_size;
+
+        image_size = load_image_targphys(machine->kernel_filename, 0,
+                                         machine->ram_size, &err);
+        if (image_size < 0) {
+            error_reportf_err(err, "could not load MMIX kernel image: ");
+            exit(1);
+        }
         cpu_set_pc(cpu, 0);
     }
 }
