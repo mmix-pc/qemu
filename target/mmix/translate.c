@@ -27,8 +27,13 @@ typedef enum MMIXALUOp {
     MMIX_ALU_ADD,
     MMIX_ALU_SUB,
     MMIX_ALU_OR,
+    MMIX_ALU_ORN,
+    MMIX_ALU_NOR,
     MMIX_ALU_XOR,
     MMIX_ALU_AND,
+    MMIX_ALU_ANDN,
+    MMIX_ALU_NAND,
+    MMIX_ALU_NXOR,
 } MMIXALUOp;
 
 typedef enum MMIXBranchCond {
@@ -158,11 +163,29 @@ static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUOp op,
     case MMIX_ALU_OR:
         tcg_gen_or_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
         break;
+    case MMIX_ALU_ORN:
+        tcg_gen_orc_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        break;
+    case MMIX_ALU_NOR:
+        tcg_gen_or_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_not_i64(val, val);
+        break;
     case MMIX_ALU_XOR:
         tcg_gen_xor_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
         break;
     case MMIX_ALU_AND:
         tcg_gen_and_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        break;
+    case MMIX_ALU_ANDN:
+        tcg_gen_andc_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        break;
+    case MMIX_ALU_NAND:
+        tcg_gen_and_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_not_i64(val, val);
+        break;
+    case MMIX_ALU_NXOR:
+        tcg_gen_xor_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_not_i64(val, val);
         break;
     default:
         g_assert_not_reached();
@@ -222,6 +245,26 @@ static bool trans_ORI(DisasContext *ctx, arg_xyz *a)
     return gen_alu(ctx, a, MMIX_ALU_OR, true);
 }
 
+static bool trans_ORN(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_ORN, false);
+}
+
+static bool trans_ORNI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_ORN, true);
+}
+
+static bool trans_NOR(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_NOR, false);
+}
+
+static bool trans_NORI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_NOR, true);
+}
+
 static bool trans_XOR(DisasContext *ctx, arg_xyz *a)
 {
     return gen_alu(ctx, a, MMIX_ALU_XOR, false);
@@ -240,6 +283,148 @@ static bool trans_AND(DisasContext *ctx, arg_xyz *a)
 static bool trans_ANDI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_alu(ctx, a, MMIX_ALU_AND, true);
+}
+
+static bool trans_ANDN(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_ANDN, false);
+}
+
+static bool trans_ANDNI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_ANDN, true);
+}
+
+static bool trans_NAND(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_NAND, false);
+}
+
+static bool trans_NANDI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_NAND, true);
+}
+
+static bool trans_NXOR(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_NXOR, false);
+}
+
+static bool trans_NXORI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_alu(ctx, a, MMIX_ALU_NXOR, true);
+}
+
+static bool gen_scaled_addu(DisasContext *ctx, arg_xyz *a, unsigned shift,
+                            bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    tcg_gen_shli_i64(val, gen_load_reg(a->y), shift);
+    tcg_gen_add_i64(val, val, gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool trans_TWO_ADDU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 1, false);
+}
+
+static bool trans_TWO_ADDUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 1, true);
+}
+
+static bool trans_FOUR_ADDU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 2, false);
+}
+
+static bool trans_FOUR_ADDUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 2, true);
+}
+
+static bool trans_EIGHT_ADDU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 3, false);
+}
+
+static bool trans_EIGHT_ADDUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 3, true);
+}
+
+static bool trans_SIXTEEN_ADDU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 4, false);
+}
+
+static bool trans_SIXTEEN_ADDUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_scaled_addu(ctx, a, 4, true);
+}
+
+static uint64_t mmix_wyde_value(const arg_xyz *a, unsigned shift)
+{
+    return (uint64_t)a->yz << shift;
+}
+
+static bool gen_set_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
+{
+    gen_store_reg(a->x, tcg_constant_i64(mmix_wyde_value(a, shift)));
+    return true;
+}
+
+static bool gen_inc_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    tcg_gen_add_i64(val, gen_load_reg(a->x),
+                    tcg_constant_i64(mmix_wyde_value(a, shift)));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool trans_SETH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_set_wyde(ctx, a, 48);
+}
+
+static bool trans_SETMH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_set_wyde(ctx, a, 32);
+}
+
+static bool trans_SETML(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_set_wyde(ctx, a, 16);
+}
+
+static bool trans_SETL(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_set_wyde(ctx, a, 0);
+}
+
+static bool trans_INCH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_inc_wyde(ctx, a, 48);
+}
+
+static bool trans_INCMH(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_inc_wyde(ctx, a, 32);
+}
+
+static bool trans_INCML(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_inc_wyde(ctx, a, 16);
+}
+
+static bool trans_INCL(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_inc_wyde(ctx, a, 0);
 }
 
 static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareOp op,
