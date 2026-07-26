@@ -21,6 +21,7 @@ typedef struct DisasContext {
     DisasContextBase base;
     CPUMMIXState *env;
     vaddr insn_pc;
+    uint32_t insn;
 } DisasContext;
 
 typedef enum MMIXALUOp {
@@ -236,6 +237,7 @@ static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_fp_binary(val, tcg_env, tcg_constant_i32(op),
+                              tcg_constant_i32(ctx->insn),
                               gen_load_reg(a->y), gen_load_reg(a->z));
     gen_store_reg(a->x, val);
     return true;
@@ -246,6 +248,7 @@ static bool gen_fp_unary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_fp_unary(val, tcg_env, tcg_constant_i32(op),
+                             tcg_constant_i32(ctx->insn),
                              tcg_constant_i32(a->y), gen_load_reg(a->z));
     gen_store_reg(a->x, val);
     return true;
@@ -256,6 +259,7 @@ static bool gen_fp_fix(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_fp_fix(val, tcg_env, tcg_constant_i32(op),
+                           tcg_constant_i32(ctx->insn),
                            tcg_constant_i32(a->y), gen_load_reg(a->z));
     gen_store_reg(a->x, val);
     return true;
@@ -267,6 +271,7 @@ static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPOp op,
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_fp_float(val, tcg_env, tcg_constant_i32(op),
+                             tcg_constant_i32(ctx->insn),
                              tcg_constant_i32(a->y),
                              gen_load_z(a, immediate));
     gen_store_reg(a->x, val);
@@ -373,14 +378,30 @@ static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUOp op,
     return true;
 }
 
+static bool gen_addsub_checked(DisasContext *ctx, arg_xyz *a, bool sub,
+                               bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+    TCGv_i64 y = gen_load_reg(a->y);
+    TCGv_i64 z = gen_load_z(a, immediate);
+
+    if (sub) {
+        gen_helper_mmix_sub(val, tcg_env, tcg_constant_i32(ctx->insn), y, z);
+    } else {
+        gen_helper_mmix_add(val, tcg_env, tcg_constant_i32(ctx->insn), y, z);
+    }
+    gen_store_reg(a->x, val);
+    return true;
+}
+
 static bool trans_ADD(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_alu(ctx, a, MMIX_ALU_ADD, false);
+    return gen_addsub_checked(ctx, a, false, false);
 }
 
 static bool trans_ADDI(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_alu(ctx, a, MMIX_ALU_ADD, true);
+    return gen_addsub_checked(ctx, a, false, true);
 }
 
 static bool trans_ADDU(DisasContext *ctx, arg_xyz *a)
@@ -395,12 +416,12 @@ static bool trans_ADDUI(DisasContext *ctx, arg_xyz *a)
 
 static bool trans_SUB(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_alu(ctx, a, MMIX_ALU_SUB, false);
+    return gen_addsub_checked(ctx, a, true, false);
 }
 
 static bool trans_SUBI(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_alu(ctx, a, MMIX_ALU_SUB, true);
+    return gen_addsub_checked(ctx, a, true, true);
 }
 
 static bool trans_SUBU(DisasContext *ctx, arg_xyz *a)
@@ -1401,7 +1422,8 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
-    gen_helper_mmix_stsf(val, tcg_env, gen_load_reg(a->x));
+    gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
+                         gen_load_reg(a->x));
     tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
     return true;
 }
@@ -1440,6 +1462,7 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
 
     insn = translator_ldl_end(ctx->env, &ctx->base, pc, MO_BE);
     ctx->insn_pc = pc;
+    ctx->insn = insn;
     ctx->base.pc_next += 4;
 
     tcg_gen_movi_i64(cpu_pc, pc);

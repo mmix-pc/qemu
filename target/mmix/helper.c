@@ -13,16 +13,6 @@
 #include "system/runstate.h"
 #include <math.h>
 
-#define MMIX_RA_EVENT_X    (1u << 0)
-#define MMIX_RA_EVENT_Z    (1u << 1)
-#define MMIX_RA_EVENT_U    (1u << 2)
-#define MMIX_RA_EVENT_O    (1u << 3)
-#define MMIX_RA_EVENT_I    (1u << 4)
-#define MMIX_RA_EVENT_W    (1u << 5)
-#define MMIX_RA_EVENT_MASK 0xffu
-#define MMIX_RA_ENABLE_SHIFT 8
-#define MMIX_RA_ROUND_SHIFT 16
-#define MMIX_RA_VALID_MASK 0x3ffffu
 #define MMIX_QNAN_BIT      0x0008000000000000ULL
 #define MMIX_DEFAULT_NAN   0x7ff8000000000000ULL
 
@@ -158,6 +148,115 @@ void helper_mmix_put_rl(CPUMMIXState *env, uint64_t val)
 void helper_mmix_put_ra(CPUMMIXState *env, uint64_t val)
 {
     env->sregs[MMIX_SREG_RA] = val & MMIX_RA_VALID_MASK;
+}
+
+static uint32_t mmix_select_arithmetic_event(uint32_t events)
+{
+    static const uint32_t priority[] = {
+        MMIX_RA_EVENT_D,
+        MMIX_RA_EVENT_V,
+        MMIX_RA_EVENT_W,
+        MMIX_RA_EVENT_I,
+        MMIX_RA_EVENT_O,
+        MMIX_RA_EVENT_U,
+        MMIX_RA_EVENT_Z,
+        MMIX_RA_EVENT_X,
+    };
+    unsigned i;
+
+    events &= MMIX_RA_EVENT_MASK;
+    for (i = 0; i < ARRAY_SIZE(priority); i++) {
+        if (events & priority[i]) {
+            return priority[i];
+        }
+    }
+    return 0;
+}
+
+static hwaddr mmix_arithmetic_trip_handler(uint32_t event)
+{
+    switch (event) {
+    case MMIX_RA_EVENT_D:
+        return 16;
+    case MMIX_RA_EVENT_V:
+        return 32;
+    case MMIX_RA_EVENT_W:
+        return 48;
+    case MMIX_RA_EVENT_I:
+        return 64;
+    case MMIX_RA_EVENT_O:
+        return 80;
+    case MMIX_RA_EVENT_U:
+        return 96;
+    case MMIX_RA_EVENT_Z:
+        return 112;
+    case MMIX_RA_EVENT_X:
+        return 128;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
+                                       uint32_t insn, uint64_t y, uint64_t z)
+{
+    CPUState *cs = env_cpu(env);
+
+    env->arithmetic_trip_event = event;
+    env->sregs[MMIX_SREG_RW] = env->npc;
+    env->sregs[MMIX_SREG_RX] = 0x8000000000000000ULL | insn;
+    env->sregs[MMIX_SREG_RY] = y;
+    env->sregs[MMIX_SREG_RZ] = z;
+    cs->exception_index = EXCP_MMIX_ARITHMETIC_TRIP;
+    cpu_loop_exit(cs);
+}
+
+static void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
+                                  uint32_t insn, uint64_t y, uint64_t z)
+{
+    uint32_t enables;
+    uint32_t disabled_events;
+    uint32_t enabled_events;
+    uint32_t selected_event;
+
+    events &= MMIX_RA_EVENT_MASK;
+    if (events == 0) {
+        return;
+    }
+
+    enables = (env->sregs[MMIX_SREG_RA] >> MMIX_RA_ENABLE_SHIFT) &
+              MMIX_RA_EVENT_MASK;
+    disabled_events = events & ~enables;
+    enabled_events = events & enables;
+
+    env->sregs[MMIX_SREG_RA] |= disabled_events;
+
+    selected_event = mmix_select_arithmetic_event(enabled_events);
+    if (selected_event != 0) {
+        mmix_raise_arithmetic_trip(env, selected_event, insn, y, z);
+    }
+}
+
+uint64_t helper_mmix_add(CPUMMIXState *env, uint32_t insn, uint64_t y,
+                         uint64_t z)
+{
+    uint64_t result = y + z;
+
+    if (((~(y ^ z) & (y ^ result)) >> 63) != 0) {
+        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+    }
+    return result;
+}
+
+uint64_t helper_mmix_sub(CPUMMIXState *env, uint32_t insn, uint64_t y,
+                         uint64_t z)
+{
+    uint64_t result = y - z;
+
+    if ((((y ^ z) & (y ^ result)) >> 63) != 0) {
+        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+    }
+    return result;
 }
 
 static uint64_t mmix_lane_difference(uint64_t y, uint64_t z,
@@ -307,37 +406,6 @@ static bool mmix_round_mode_from_y(uint32_t y, CPUMMIXState *env,
     }
 }
 
-static void mmix_raise_deferred_trip(CPUMMIXState *env, uint32_t events)
-{
-    CPUState *cs = env_cpu(env);
-
-    qemu_log_mask(LOG_UNIMP,
-                  "MMIX enabled arithmetic trip deferred events=0x%02x\n",
-                  events);
-    cs->exception_index = EXCP_MMIX_ILLEGAL;
-    cpu_loop_exit(cs);
-}
-
-static void mmix_update_ra_events(CPUMMIXState *env, uint32_t events)
-{
-    uint64_t enables;
-    uint32_t enabled_events;
-
-    events &= MMIX_RA_EVENT_MASK;
-    if (events == 0) {
-        return;
-    }
-
-    enables = (env->sregs[MMIX_SREG_RA] >> MMIX_RA_ENABLE_SHIFT) &
-              MMIX_RA_EVENT_MASK;
-    enabled_events = events & enables;
-    if (enabled_events != 0) {
-        mmix_raise_deferred_trip(env, enabled_events);
-    }
-
-    env->sregs[MMIX_SREG_RA] |= events;
-}
-
 static uint32_t mmix_events_from_float_flags(FloatExceptionFlags flags)
 {
     uint32_t events = 0;
@@ -368,19 +436,21 @@ static void mmix_softfloat_status(float_status *status, FloatRoundMode mode)
     set_float_rounding_mode(mode, status);
 }
 
-static void mmix_update_ra_from_status(CPUMMIXState *env,
+static void mmix_update_ra_from_status(CPUMMIXState *env, uint32_t insn,
+                                       uint64_t y, uint64_t z,
                                        float_status *status)
 {
     mmix_update_ra_events(env,
                           mmix_events_from_float_flags(
-                              get_float_exception_flags(status)));
+                              get_float_exception_flags(status)),
+                          insn, y, z);
 }
 
-static uint64_t mmix_binary_nan_result(CPUMMIXState *env, uint64_t y,
-                                       uint64_t z)
+static uint64_t mmix_binary_nan_result(CPUMMIXState *env, uint32_t insn,
+                                       uint64_t y, uint64_t z)
 {
     if (mmix_fp_is_snan(y) || mmix_fp_is_snan(z)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
         y = mmix_fp_quiet_nan(y);
         z = mmix_fp_quiet_nan(z);
     }
@@ -393,16 +463,17 @@ static uint64_t mmix_binary_nan_result(CPUMMIXState *env, uint64_t y,
     return MMIX_DEFAULT_NAN;
 }
 
-static uint64_t mmix_unary_nan_result(CPUMMIXState *env, uint64_t z)
+static uint64_t mmix_unary_nan_result(CPUMMIXState *env, uint32_t insn,
+                                      uint32_t y, uint64_t z)
 {
     if (mmix_fp_is_snan(z)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
         return mmix_fp_quiet_nan(z);
     }
     return z;
 }
 
-static uint64_t mmix_fp_compare(CPUMMIXState *env, MMIXFPOp op,
+static uint64_t mmix_fp_compare(CPUMMIXState *env, MMIXFPOp op, uint32_t insn,
                                 uint64_t y, uint64_t z)
 {
     float_status status;
@@ -419,7 +490,7 @@ static uint64_t mmix_fp_compare(CPUMMIXState *env, MMIXFPOp op,
         return float64_compare_quiet(y, z, &status) == float_relation_equal;
     case MMIX_FP_FCMP:
         if (mmix_fp_is_nan(y) || mmix_fp_is_nan(z)) {
-            mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+            mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
             return 0;
         }
         mmix_softfloat_status(&status, float_round_nearest_even);
@@ -466,7 +537,8 @@ static bool mmix_fp_epsilon_radius(long double epsilon, uint64_t val,
 }
 
 static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
-                                        uint64_t y, uint64_t z)
+                                        uint32_t insn, uint64_t y,
+                                        uint64_t z)
 {
     uint64_t e = env->sregs[MMIX_SREG_RE];
     long double yd, zd, ed, yradius, zradius, diff;
@@ -477,7 +549,7 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
         if (op == MMIX_FP_FUNE) {
             return 1;
         }
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
         return 0;
     }
 
@@ -510,7 +582,7 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
 
     if (!mmix_fp_epsilon_radius(ed, y, &yradius) ||
         !mmix_fp_epsilon_radius(ed, z, &zradius)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
         return 0;
     }
 
@@ -527,8 +599,8 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
     return 0;
 }
 
-uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint64_t y,
-                               uint64_t z)
+uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint32_t insn,
+                               uint64_t y, uint64_t z)
 {
     float_status status;
     float64 result;
@@ -537,17 +609,17 @@ uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint64_t y,
     case MMIX_FP_FCMP:
     case MMIX_FP_FUN:
     case MMIX_FP_FEQL:
-        return mmix_fp_compare(env, op, y, z);
+        return mmix_fp_compare(env, op, insn, y, z);
     case MMIX_FP_FCMPE:
     case MMIX_FP_FUNE:
     case MMIX_FP_FEQLE:
-        return mmix_fp_epsilon_compare(env, op, y, z);
+        return mmix_fp_epsilon_compare(env, op, insn, y, z);
     default:
         break;
     }
 
     if (mmix_fp_is_nan(y) || mmix_fp_is_nan(z)) {
-        return mmix_binary_nan_result(env, y, z);
+        return mmix_binary_nan_result(env, insn, y, z);
     }
 
     mmix_softfloat_status(&status, mmix_round_mode_from_ra(env));
@@ -571,12 +643,12 @@ uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint64_t y,
         g_assert_not_reached();
     }
 
-    mmix_update_ra_from_status(env, &status);
+    mmix_update_ra_from_status(env, insn, y, z, &status);
     return result;
 }
 
-uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t y,
-                              uint64_t z)
+uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t insn,
+                              uint32_t y, uint64_t z)
 {
     FloatRoundMode mode;
     float_status status;
@@ -586,7 +658,7 @@ uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t y,
         helper_raise_illegal_instruction(env);
     }
     if (mmix_fp_is_nan(z)) {
-        return mmix_unary_nan_result(env, z);
+        return mmix_unary_nan_result(env, insn, y, z);
     }
 
     mmix_softfloat_status(&status, mode);
@@ -601,12 +673,12 @@ uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t y,
         g_assert_not_reached();
     }
 
-    mmix_update_ra_from_status(env, &status);
+    mmix_update_ra_from_status(env, insn, y, z, &status);
     return result;
 }
 
-uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t y,
-                            uint64_t z)
+uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t insn,
+                            uint32_t y, uint64_t z)
 {
     FloatRoundMode mode;
     float_status status;
@@ -617,7 +689,7 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t y,
         helper_raise_illegal_instruction(env);
     }
     if (mmix_fp_is_nan(z) || float64_is_infinity(z)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
         return z;
     }
 
@@ -628,16 +700,16 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t y,
         long double d = mmix_fp_to_ld(z);
 
         if (d < -0x1p63L || d >= 0x1p63L) {
-            mmix_update_ra_events(env, MMIX_RA_EVENT_W);
+            mmix_update_ra_events(env, MMIX_RA_EVENT_W, insn, y, z);
         }
     }
     mmix_update_ra_events(env, mmix_events_from_float_flags(flags) &
-                          ~MMIX_RA_EVENT_I);
+                          ~MMIX_RA_EVENT_I, insn, y, z);
     return result;
 }
 
-uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t op, uint32_t y,
-                              uint64_t z)
+uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t op, uint32_t insn,
+                              uint32_t y, uint64_t z)
 {
     FloatRoundMode mode;
     float_status status;
@@ -665,7 +737,7 @@ uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t op, uint32_t y,
         g_assert_not_reached();
     }
 
-    mmix_update_ra_from_status(env, &status);
+    mmix_update_ra_from_status(env, insn, y, z, &status);
     return result;
 }
 
@@ -677,21 +749,22 @@ uint64_t helper_mmix_ldsf(uint64_t raw)
     return float32_to_float64(raw, &status);
 }
 
-uint64_t helper_mmix_stsf(CPUMMIXState *env, uint64_t val)
+uint64_t helper_mmix_stsf(CPUMMIXState *env, uint32_t insn, uint64_t addr,
+                          uint64_t val)
 {
     float_status status;
     float32 result;
 
     if (mmix_fp_is_nan(val)) {
         if (mmix_fp_is_snan(val)) {
-            mmix_update_ra_events(env, MMIX_RA_EVENT_I);
+            mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, addr, val);
             val = mmix_fp_quiet_nan(val);
         }
     }
 
     mmix_softfloat_status(&status, mmix_round_mode_from_ra(env));
     result = float64_to_float32(val, &status);
-    mmix_update_ra_from_status(env, &status);
+    mmix_update_ra_from_status(env, insn, addr, val, &status);
     return result;
 }
 
@@ -722,11 +795,27 @@ void helper_mmix_test_exit(CPUMMIXState *env)
 void mmix_cpu_do_interrupt(CPUState *cs)
 {
     CPUMMIXState *env = cpu_env(cs);
+    uint32_t event;
+    hwaddr handler;
 
     switch (cs->exception_index) {
     case EXCP_MMIX_ILLEGAL:
         qemu_log_mask(CPU_LOG_INT, "MMIX illegal instruction at 0x%016" PRIx64 "\n",
                       env->pc);
+        break;
+    case EXCP_MMIX_ARITHMETIC_TRIP:
+        event = env->arithmetic_trip_event;
+        handler = mmix_arithmetic_trip_handler(event);
+        qemu_log_mask(CPU_LOG_INT,
+                      "MMIX arithmetic trip event=0x%02x from 0x%016" PRIx64
+                      " to 0x%016" HWADDR_PRIx "\n",
+                      event, env->pc, handler);
+        env->sregs[MMIX_SREG_RB] = mmix_cpu_read_reg(env, 255);
+        mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+        env->pc = handler;
+        env->npc = handler + 4;
+        env->arithmetic_trip_event = 0;
+        cs->exception_index = -1;
         break;
     default:
         qemu_log_mask(CPU_LOG_INT, "MMIX exception %d at 0x%016" PRIx64 "\n",

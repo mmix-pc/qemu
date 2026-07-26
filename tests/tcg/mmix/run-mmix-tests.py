@@ -13,6 +13,11 @@ import subprocess
 import sys
 
 MASK64 = (1 << 64) - 1
+RA_EVENT_X = 0x01
+RA_EVENT_Z = 0x02
+RA_EVENT_O = 0x08
+RA_EVENT_V = 0x40
+RA_ENABLE_SHIFT = 8
 
 
 def insn(op, x=0, y=0, z=0):
@@ -42,6 +47,17 @@ def set_octa(reg, value):
         wyde(0xe6, reg, (value >> 16) & 0xffff),
         wyde(0xe7, reg, value & 0xffff),
     ]
+
+
+def program_with_handler(prefix, handler_addr, handler):
+    prefix = b"".join(prefix)
+    handler = b"".join(handler)
+    if len(prefix) > handler_addr:
+        raise ValueError("handler address overlaps program prefix")
+    if (handler_addr - len(prefix)) % 4 != 0:
+        raise ValueError("handler address is not instruction-aligned")
+    padding = insn(0xfd, 0, 0, 0) * ((handler_addr - len(prefix)) // 4)
+    return prefix + padding + handler
 
 
 def lane_difference(y, z, lane_bits):
@@ -958,6 +974,49 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "integer-overflow-status",
+        b"".join(
+            [
+                *set_octa(1, 0x7fffffffffffffff),
+                wyde(0xe3, 2, 1),         # SETL r2,1
+                insn(0x20, 3, 1, 2),      # ADD r3,r1,r2
+                insn(0xfe, 4, 0, 21),     # GET r4,rA
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={3: 0x8000000000000000, 4: RA_EVENT_V},
+    ),
+    MMIXTest(
+        "enabled-integer-overflow-trip",
+        program_with_handler(
+            [
+                *set_octa(1, 0x7fffffffffffffff),
+                wyde(0xe3, 2, 1),                         # SETL r2,1
+                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
+                insn(0x20, 3, 1, 2),                      # ADD r3,r1,r2
+            ],
+            32,
+            [
+                insn(0xfe, 40, 0, 24),                    # GET r40,rW
+                insn(0xfe, 41, 0, 25),                    # GET r41,rX
+                insn(0xfe, 42, 0, 26),                    # GET r42,rY
+                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
+                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                halt(),
+            ],
+        ),
+        pc=0x34,
+        regs={
+            40: 0x20,
+            41: 0x8000000020030102,
+            42: 0x7fffffffffffffff,
+            43: 1,
+            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+        },
+    ),
+    MMIXTest(
         "floating-point-compare",
         b"".join(
             [
@@ -1067,6 +1126,59 @@ TESTS = [
             11: 0x02,
             12: f64(1.0 / 3.0),
             13: 0x03,
+        },
+    ),
+    MMIXTest(
+        "enabled-floating-divide-trip",
+        program_with_handler(
+            [
+                *set_octa(1, f64(1.0)),
+                wyde(0xe3, 2, RA_EVENT_Z << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 2),     # PUT rA,r2
+                insn(0x14, 3, 1, 0),      # FDIV r3,r1,+0.0
+            ],
+            112,
+            [
+                insn(0xfe, 40, 0, 24),    # GET r40,rW
+                insn(0xfe, 41, 0, 25),    # GET r41,rX
+                insn(0xfe, 42, 0, 26),    # GET r42,rY
+                insn(0xfe, 43, 0, 27),    # GET r43,rZ
+                insn(0xfe, 44, 0, 21),    # GET r44,rA
+                halt(),
+            ],
+        ),
+        pc=0x84,
+        regs={
+            40: 0x1c,
+            41: 0x8000000014030100,
+            42: f64(1.0),
+            43: 0,
+            44: RA_EVENT_Z << RA_ENABLE_SHIFT,
+        },
+    ),
+    MMIXTest(
+        "arithmetic-trip-priority",
+        program_with_handler(
+            [
+                *set_octa(1, 0x7fefffffffffffff),
+                *set_octa(2, f64(2.0)),
+                wyde(0xe3, 3, (RA_EVENT_O | RA_EVENT_X) << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 3),     # PUT rA,r3
+                insn(0x10, 4, 1, 2),      # FMUL r4,r1,r2
+            ],
+            80,
+            [
+                insn(0xfe, 40, 0, 24),    # GET r40,rW
+                insn(0xfe, 41, 0, 25),    # GET r41,rX
+                insn(0xfe, 42, 0, 21),    # GET r42,rA
+                halt(),
+            ],
+        ),
+        pc=0x5c,
+        regs={
+            40: 0x2c,
+            41: 0x8000000010040102,
+            42: (RA_EVENT_O | RA_EVENT_X) << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
@@ -1278,21 +1390,6 @@ EXPECTED_FAILURES = [
         "unsupported-resume",
         insn(0xf9, 0, 0, 0),             # RESUME 0
         ("MMIX decoded unimplemented RESUME", "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "deferred-enabled-floating-trip",
-        b"".join(
-            [
-                *set_octa(1, f64(1.0)),
-                wyde(0xe3, 2, 0x0200),    # SETL r2,enable Z trip
-                insn(0xf6, 21, 0, 2),     # PUT rA,r2
-                insn(0x14, 3, 1, 0),      # FDIV r3,r1,+0.0
-            ]
-        ),
-        (
-            "MMIX enabled arithmetic trip deferred events=0x02",
-            "MMIX illegal instruction",
-        ),
     ),
     MMIXExpectedFailure(
         "unknown-opcode",

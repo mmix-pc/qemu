@@ -64,7 +64,21 @@ typedef enum MMIXSpecialReg {
 enum {
     EXCP_MMIX_ILLEGAL = 1,
     EXCP_MMIX_INTERRUPT = 2,
+    EXCP_MMIX_ARITHMETIC_TRIP = 3,
 };
+
+#define MMIX_RA_EVENT_D    (1u << 7)
+#define MMIX_RA_EVENT_V    (1u << 6)
+#define MMIX_RA_EVENT_W    (1u << 5)
+#define MMIX_RA_EVENT_I    (1u << 4)
+#define MMIX_RA_EVENT_O    (1u << 3)
+#define MMIX_RA_EVENT_U    (1u << 2)
+#define MMIX_RA_EVENT_Z    (1u << 1)
+#define MMIX_RA_EVENT_X    (1u << 0)
+#define MMIX_RA_EVENT_MASK 0xffu
+#define MMIX_RA_ENABLE_SHIFT 8
+#define MMIX_RA_ROUND_SHIFT 16
+#define MMIX_RA_VALID_MASK 0x3ffffu
 
 typedef struct CPUArchState {
     /*
@@ -82,6 +96,7 @@ typedef struct CPUArchState {
     uint64_t local_regs[MMIX_LOCAL_REGS];
     uint32_t lring_size;
     uint32_t lring_mask;
+    uint32_t arithmetic_trip_event;
 
     struct {} end_reset_fields;
 } CPUMMIXState;
