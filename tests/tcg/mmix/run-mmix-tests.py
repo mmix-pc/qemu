@@ -8,6 +8,7 @@ import argparse
 import dataclasses
 import pathlib
 import re
+import struct
 import subprocess
 import sys
 
@@ -80,6 +81,14 @@ def matrix_multiply(y, z, exclusive):
                 x_row |= 0x80 >> j
         result |= x_row << ((7 - i) * 8)
     return result
+
+
+def f64(value):
+    return struct.unpack(">Q", struct.pack(">d", value))[0]
+
+
+def f32(value):
+    return struct.unpack(">I", struct.pack(">f", value))[0]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -594,10 +603,11 @@ TESTS = [
                 insn(0xfe, 36, 0, 18),    # GET r36,rV
                 insn(0xfe, 37, 0, 19),    # GET r37,rG
                 insn(0xfe, 38, 0, 20),    # GET r38,rL
+                insn(0xfe, 39, 0, 21),    # GET r39,rA
                 halt(),
             ]
         ),
-        pc=0x18,
+        pc=0x1c,
         regs={
             33: MASK64,
             34: 0x8000000500000000,
@@ -605,6 +615,7 @@ TESTS = [
             36: 0x369c200400000000,
             37: 32,
             38: 0,
+            39: 0,
         },
     ),
     MMIXTest(
@@ -947,6 +958,190 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "floating-point-compare",
+        b"".join(
+            [
+                *set_octa(1, f64(1.0)),
+                *set_octa(2, f64(2.0)),
+                *set_octa(3, 0x8000000000000000),
+                *set_octa(5, 0x7ff8000000000001),
+                insn(0x01, 10, 1, 2),     # FCMP r10,r1,r2
+                insn(0x01, 11, 2, 1),     # FCMP r11,r2,r1
+                insn(0x01, 12, 1, 1),     # FCMP r12,r1,r1
+                insn(0x03, 13, 3, 0),     # FEQL r13,-0.0,+0.0
+                insn(0x02, 14, 1, 5),     # FUN r14,r1,NaN
+                insn(0x01, 15, 1, 5),     # FCMP r15,r1,NaN
+                insn(0xfe, 16, 0, 21),    # GET r16,rA
+                insn(0x11, 17, 1, 2),     # FCMPE r17,r1,r2
+                insn(0x13, 18, 1, 1),     # FEQLE r18,r1,r1
+                insn(0x12, 19, 1, 5),     # FUNE r19,r1,NaN
+                halt(),
+            ]
+        ),
+        pc=0x68,
+        regs={
+            10: MASK64,
+            11: 1,
+            12: 0,
+            13: 1,
+            14: 1,
+            15: 0,
+            16: 0x10,
+            17: MASK64,
+            18: 1,
+            19: 1,
+        },
+    ),
+    MMIXTest(
+        "floating-point-arithmetic",
+        b"".join(
+            [
+                *set_octa(1, f64(1.0)),
+                *set_octa(2, f64(2.0)),
+                *set_octa(3, f64(3.0)),
+                *set_octa(4, f64(4.0)),
+                *set_octa(5, f64(5.0)),
+                *set_octa(6, f64(1.5)),
+                insn(0x04, 10, 1, 2),     # FADD r10,r1,r2
+                insn(0x06, 11, 2, 1),     # FSUB r11,r2,r1
+                insn(0x10, 12, 2, 3),     # FMUL r12,r2,r3
+                insn(0x14, 13, 4, 2),     # FDIV r13,r4,r2
+                insn(0x16, 14, 5, 2),     # FREM r14,r5,r2
+                insn(0x15, 15, 0, 4),     # FSQRT r15,r4
+                insn(0x17, 16, 0, 6),     # FINT r16,r6
+                halt(),
+            ]
+        ),
+        pc=0x7c,
+        regs={
+            10: f64(3.0),
+            11: f64(1.0),
+            12: f64(6.0),
+            13: f64(2.0),
+            14: f64(1.0),
+            15: f64(2.0),
+            16: f64(2.0),
+        },
+    ),
+    MMIXTest(
+        "floating-point-conversion",
+        b"".join(
+            [
+                wyde(0xe3, 1, 42),        # SETL r1,42
+                insn(0x08, 10, 0, 1),     # FLOT r10,r1
+                insn(0x09, 11, 0, 42),    # FLOTI r11,42
+                insn(0x0a, 12, 0, 1),     # FLOTU r12,r1
+                insn(0x0d, 13, 0, 42),    # SFLOTI r13,42
+                *set_octa(2, f64(42.0)),
+                insn(0x05, 14, 0, 2),     # FIX r14,r2
+                insn(0x07, 15, 0, 2),     # FIXU r15,r2
+                halt(),
+            ]
+        ),
+        pc=0x2c,
+        regs={
+            10: f64(42.0),
+            11: f64(42.0),
+            12: f64(42.0),
+            13: f64(42.0),
+            14: 42,
+            15: 42,
+        },
+    ),
+    MMIXTest(
+        "floating-point-status",
+        b"".join(
+            [
+                *set_octa(1, f64(1.0)),
+                *set_octa(3, f64(3.0)),
+                insn(0x14, 10, 1, 0),     # FDIV r10,r1,+0.0
+                insn(0xfe, 11, 0, 21),    # GET r11,rA
+                insn(0x14, 12, 1, 3),     # FDIV r12,r1,r3
+                insn(0xfe, 13, 0, 21),    # GET r13,rA
+                halt(),
+            ]
+        ),
+        pc=0x30,
+        regs={
+            10: f64(float("inf")),
+            11: 0x02,
+            12: f64(1.0 / 3.0),
+            13: 0x03,
+        },
+    ),
+    MMIXTest(
+        "floating-point-exceptions",
+        b"".join(
+            [
+                *set_octa(1, 0x7ff8000000001234),
+                *set_octa(2, 0x7ff0000000001234),
+                *set_octa(3, f64(1.0)),
+                *set_octa(4, 0x7fefffffffffffff),
+                *set_octa(5, f64(2.0)),
+                *set_octa(6, 0x0010000000000000),
+                *set_octa(7, 0x8000000000000000),
+                insn(0x04, 10, 1, 3),     # FADD r10,qNaN,1.0
+                insn(0x04, 11, 2, 3),     # FADD r11,sNaN,1.0
+                insn(0xfe, 12, 0, 21),    # GET r12,rA
+                insn(0x10, 13, 4, 5),     # FMUL r13,max,2.0
+                insn(0xfe, 14, 0, 21),    # GET r14,rA
+                insn(0x10, 15, 6, 6),     # FMUL r15,min-normal,min-normal
+                insn(0xfe, 16, 0, 21),    # GET r16,rA
+                insn(0x05, 17, 0, 1),     # FIX r17,qNaN
+                insn(0x04, 18, 7, 7),     # FADD r18,-0.0,-0.0
+                halt(),
+            ]
+        ),
+        pc=0x94,
+        regs={
+            10: 0x7ff8000000001234,
+            11: 0x7ff8000000001234,
+            12: 0x10,
+            13: f64(float("inf")),
+            14: 0x19,
+            15: 0,
+            16: 0x1d,
+            17: 0x7ff8000000001234,
+            18: 0x8000000000000000,
+        },
+    ),
+    MMIXTest(
+        "floating-point-rounding",
+        b"".join(
+            [
+                *set_octa(1, 0xffffffff00030000),
+                insn(0xf6, 21, 0, 1),     # PUT rA,r1
+                insn(0xfe, 2, 0, 21),     # GET r2,rA
+                *set_octa(5, f64(1.5)),
+                insn(0x17, 6, 0, 5),      # FINT r6,r5
+                insn(0x17, 7, 4, 5),      # FINT r7,ROUND_NEAR,r5
+                halt(),
+            ]
+        ),
+        pc=0x30,
+        regs={2: 0x30000, 6: f64(1.0), 7: f64(2.0)},
+    ),
+    MMIXTest(
+        "short-float-memory",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0300),    # SETL r1,0x300
+                wyde(0xe2, 2, f32(1.5) >> 16),
+                insn(0xaa, 2, 1, 0),      # STTU r2,r1,r0
+                insn(0x90, 3, 1, 0),      # LDSF r3,r1,r0
+                *set_octa(4, f64(2.0)),
+                insn(0xb1, 4, 1, 4),      # STSFI r4,r1,4
+                insn(0x8b, 5, 1, 4),      # LDTUI r5,r1,4
+                *set_octa(6, f64(1.0 / 3.0)),
+                insn(0xb1, 6, 1, 8),      # STSFI r6,r1,8
+                insn(0xfe, 7, 0, 21),     # GET r7,rA
+                halt(),
+            ]
+        ),
+        pc=0x40,
+        regs={3: f64(1.5), 5: f32(2.0), 7: 0x01},
+    ),
+    MMIXTest(
         "conditional-set",
         b"".join(
             [
@@ -1083,6 +1278,21 @@ EXPECTED_FAILURES = [
         "unsupported-resume",
         insn(0xf9, 0, 0, 0),             # RESUME 0
         ("MMIX decoded unimplemented RESUME", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "deferred-enabled-floating-trip",
+        b"".join(
+            [
+                *set_octa(1, f64(1.0)),
+                wyde(0xe3, 2, 0x0200),    # SETL r2,enable Z trip
+                insn(0xf6, 21, 0, 2),     # PUT rA,r2
+                insn(0x14, 3, 1, 0),      # FDIV r3,r1,+0.0
+            ]
+        ),
+        (
+            "MMIX enabled arithmetic trip deferred events=0x02",
+            "MMIX illegal instruction",
+        ),
     ),
     MMIXExpectedFailure(
         "unknown-opcode",

@@ -47,6 +47,28 @@ typedef enum MMIXShiftOp {
     MMIX_SHIFT_SRU,
 } MMIXShiftOp;
 
+typedef enum MMIXFPOp {
+    MMIX_FP_FCMP,
+    MMIX_FP_FUN,
+    MMIX_FP_FEQL,
+    MMIX_FP_FADD,
+    MMIX_FP_FSUB,
+    MMIX_FP_FMUL,
+    MMIX_FP_FDIV,
+    MMIX_FP_FREM,
+    MMIX_FP_FCMPE,
+    MMIX_FP_FUNE,
+    MMIX_FP_FEQLE,
+    MMIX_FP_FSQRT,
+    MMIX_FP_FINT,
+    MMIX_FP_FIX,
+    MMIX_FP_FIXU,
+    MMIX_FP_FLOT,
+    MMIX_FP_FLOTU,
+    MMIX_FP_SFLOT,
+    MMIX_FP_SFLOTU,
+} MMIXFPOp;
+
 typedef enum MMIXPredicate {
     MMIX_PRED_NEGATIVE,
     MMIX_PRED_ZERO,
@@ -126,6 +148,7 @@ static bool mmix_put_writable(unsigned reg)
     case MMIX_SREG_RJ:
     case MMIX_SREG_RM:
     case MMIX_SREG_RR:
+    case MMIX_SREG_RA:
     case MMIX_SREG_RBB:
     case MMIX_SREG_RF:
     case MMIX_SREG_RP:
@@ -207,6 +230,101 @@ static bool trans_SWYM(DisasContext *ctx, arg_xyz *a)
 {
     return true;
 }
+
+static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_fp_binary(val, tcg_env, tcg_constant_i32(op),
+                              gen_load_reg(a->y), gen_load_reg(a->z));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_fp_unary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_fp_unary(val, tcg_env, tcg_constant_i32(op),
+                             tcg_constant_i32(a->y), gen_load_reg(a->z));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_fp_fix(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_fp_fix(val, tcg_env, tcg_constant_i32(op),
+                           tcg_constant_i32(a->y), gen_load_reg(a->z));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPOp op,
+                         bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_fp_float(val, tcg_env, tcg_constant_i32(op),
+                             tcg_constant_i32(a->y),
+                             gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+#define TRANS_FP_BINARY(NAME, OP) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_fp_binary(ctx, a, OP); \
+    }
+
+#define TRANS_FP_UNARY(NAME, OP) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_fp_unary(ctx, a, OP); \
+    }
+
+#define TRANS_FP_FIX(NAME, OP) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_fp_fix(ctx, a, OP); \
+    }
+
+#define TRANS_FP_FLOAT(NAME, OP, IMMEDIATE) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return gen_fp_float(ctx, a, OP, IMMEDIATE); \
+    }
+
+TRANS_FP_BINARY(FCMP, MMIX_FP_FCMP)
+TRANS_FP_BINARY(FUN, MMIX_FP_FUN)
+TRANS_FP_BINARY(FEQL, MMIX_FP_FEQL)
+TRANS_FP_BINARY(FADD, MMIX_FP_FADD)
+TRANS_FP_BINARY(FSUB, MMIX_FP_FSUB)
+TRANS_FP_BINARY(FMUL, MMIX_FP_FMUL)
+TRANS_FP_BINARY(FDIV, MMIX_FP_FDIV)
+TRANS_FP_BINARY(FREM, MMIX_FP_FREM)
+TRANS_FP_BINARY(FCMPE, MMIX_FP_FCMPE)
+TRANS_FP_BINARY(FUNE, MMIX_FP_FUNE)
+TRANS_FP_BINARY(FEQLE, MMIX_FP_FEQLE)
+TRANS_FP_UNARY(FSQRT, MMIX_FP_FSQRT)
+TRANS_FP_UNARY(FINT, MMIX_FP_FINT)
+TRANS_FP_FIX(FIX, MMIX_FP_FIX)
+TRANS_FP_FIX(FIXU, MMIX_FP_FIXU)
+TRANS_FP_FLOAT(FLOT, MMIX_FP_FLOT, false)
+TRANS_FP_FLOAT(FLOTI, MMIX_FP_FLOT, true)
+TRANS_FP_FLOAT(FLOTU, MMIX_FP_FLOTU, false)
+TRANS_FP_FLOAT(FLOTUI, MMIX_FP_FLOTU, true)
+TRANS_FP_FLOAT(SFLOT, MMIX_FP_SFLOT, false)
+TRANS_FP_FLOAT(SFLOTI, MMIX_FP_SFLOT, true)
+TRANS_FP_FLOAT(SFLOTU, MMIX_FP_SFLOTU, false)
+TRANS_FP_FLOAT(SFLOTUI, MMIX_FP_SFLOTU, true)
+
+#undef TRANS_FP_BINARY
+#undef TRANS_FP_UNARY
+#undef TRANS_FP_FIX
+#undef TRANS_FP_FLOAT
 
 static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUOp op,
                     bool immediate)
@@ -988,6 +1106,10 @@ static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
         gen_helper_mmix_put_rl(tcg_env, gen_load_z(a, immediate));
         return true;
     }
+    if (a->x == MMIX_SREG_RA) {
+        gen_helper_mmix_put_ra(tcg_env, gen_load_z(a, immediate));
+        return true;
+    }
     if (!mmix_put_writable(a->x)) {
         return gen_mmix_unsupported(ctx, immediate ? "PUTI" : "PUT", a);
     }
@@ -1140,6 +1262,28 @@ static bool trans_LDHTI(DisasContext *ctx, arg_xyz *a)
     return gen_ldht(ctx, a, true);
 }
 
+static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 addr = tcg_temp_new_i64();
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_effective_address(addr, a, immediate, 3);
+    tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
+    gen_helper_mmix_ldsf(val, val);
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool trans_LDSF(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_ldsf(ctx, a, false);
+}
+
+static bool trans_LDSFI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_ldsf(ctx, a, true);
+}
+
 static bool gen_store_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
                           MemOp memop, uint64_t align_mask)
 {
@@ -1249,6 +1393,27 @@ static bool trans_STHT(DisasContext *ctx, arg_xyz *a)
 static bool trans_STHTI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_stht(ctx, a, true);
+}
+
+static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 addr = tcg_temp_new_i64();
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_effective_address(addr, a, immediate, 3);
+    gen_helper_mmix_stsf(val, tcg_env, gen_load_reg(a->x));
+    tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
+    return true;
+}
+
+static bool trans_STSF(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_stsf(ctx, a, false);
+}
+
+static bool trans_STSFI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_stsf(ctx, a, true);
 }
 
 static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
