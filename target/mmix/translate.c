@@ -55,6 +55,7 @@ typedef enum MMIXPredicate {
 static TCGv_i64 cpu_pc;
 static TCGv_i64 cpu_npc;
 static TCGv_i64 cpu_regs[MMIX_REGS];
+static TCGv_i64 cpu_sregs[MMIX_SREGS];
 
 /* Include the auto-generated decoder. */
 #include "decode-insns.c.inc"
@@ -95,6 +96,43 @@ static TCGv_i64 gen_load_z(const arg_xyz *a, bool immediate)
 static void gen_store_reg(unsigned reg, TCGv_i64 val)
 {
     tcg_gen_mov_i64(cpu_regs[reg], val);
+}
+
+static TCGv_i64 gen_load_sreg(unsigned reg)
+{
+    return cpu_sregs[reg];
+}
+
+static void gen_store_sreg(unsigned reg, TCGv_i64 val)
+{
+    tcg_gen_mov_i64(cpu_sregs[reg], val);
+}
+
+static bool mmix_put_writable(unsigned reg)
+{
+    switch (reg) {
+    case MMIX_SREG_RB:
+    case MMIX_SREG_RD:
+    case MMIX_SREG_RE:
+    case MMIX_SREG_RH:
+    case MMIX_SREG_RJ:
+    case MMIX_SREG_RM:
+    case MMIX_SREG_RR:
+    case MMIX_SREG_RBB:
+    case MMIX_SREG_RF:
+    case MMIX_SREG_RP:
+    case MMIX_SREG_RW:
+    case MMIX_SREG_RX:
+    case MMIX_SREG_RY:
+    case MMIX_SREG_RZ:
+    case MMIX_SREG_RWW:
+    case MMIX_SREG_RXX:
+    case MMIX_SREG_RYY:
+    case MMIX_SREG_RZZ:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static void gen_effective_address(TCGv_i64 addr, const arg_xyz *a,
@@ -688,6 +726,36 @@ static bool trans_GETAB(DisasContext *ctx, arg_xyz *a)
     return gen_geta(ctx, a, true);
 }
 
+static bool trans_GET(DisasContext *ctx, arg_xyz *a)
+{
+    if (a->y != 0 || a->z >= MMIX_SREGS) {
+        return gen_mmix_unsupported(ctx, "GET", a);
+    }
+
+    gen_store_reg(a->x, gen_load_sreg(a->z));
+    return true;
+}
+
+static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    if (a->y != 0 || a->x >= MMIX_SREGS || !mmix_put_writable(a->x)) {
+        return gen_mmix_unsupported(ctx, immediate ? "PUTI" : "PUT", a);
+    }
+
+    gen_store_sreg(a->x, gen_load_z(a, immediate));
+    return true;
+}
+
+static bool trans_PUT(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_put(ctx, a, false);
+}
+
+static bool trans_PUTI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_put(ctx, a, true);
+}
+
 static bool trans_JMP(DisasContext *ctx, arg_xyz *a)
 {
     return gen_jmp(ctx, a, false);
@@ -1006,6 +1074,7 @@ void mmix_translate_code(CPUState *cs, TranslationBlock *tb,
 void mmix_translate_init(void)
 {
     static char regnames[MMIX_REGS][8];
+    static char sregnames[MMIX_SREGS][8];
     int i;
 
     cpu_pc = tcg_global_mem_new_i64(tcg_env, offsetof(CPUMMIXState, pc), "pc");
@@ -1016,5 +1085,11 @@ void mmix_translate_init(void)
         cpu_regs[i] = tcg_global_mem_new_i64(tcg_env,
                                              offsetof(CPUMMIXState, regs[i]),
                                              regnames[i]);
+    }
+    for (i = 0; i < MMIX_SREGS; i++) {
+        snprintf(sregnames[i], sizeof(sregnames[i]), "s%d", i);
+        cpu_sregs[i] = tcg_global_mem_new_i64(tcg_env,
+                                              offsetof(CPUMMIXState, sregs[i]),
+                                              sregnames[i]);
     }
 }

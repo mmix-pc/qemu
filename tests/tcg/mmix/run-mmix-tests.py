@@ -529,6 +529,54 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "special-register-get-reset",
+        b"".join(
+            [
+                insn(0xfe, 1, 0, 15),     # GET r1,rK
+                insn(0xfe, 2, 0, 13),     # GET r2,rT
+                insn(0xfe, 3, 0, 14),     # GET r3,rTT
+                insn(0xfe, 4, 0, 18),     # GET r4,rV
+                insn(0xfe, 5, 0, 19),     # GET r5,rG
+                insn(0xfe, 6, 0, 20),     # GET r6,rL
+                halt(),
+            ]
+        ),
+        pc=0x18,
+        regs={
+            1: MASK64,
+            2: 0x8000000500000000,
+            3: 0x8000000600000000,
+            4: 0x369c200400000000,
+            5: 32,
+            6: 0,
+        },
+    ),
+    MMIXTest(
+        "special-register-put-readback",
+        b"".join(
+            [
+                wyde(0xe0, 1, 0xfeed),    # SETH r1,0xfeed
+                wyde(0xe5, 1, 0xcafe),    # INCMH r1,0xcafe
+                wyde(0xe6, 1, 0x1234),    # INCML r1,0x1234
+                wyde(0xe7, 1, 0x5678),    # INCL r1,0x5678
+                insn(0xf6, 4, 0, 1),      # PUT rJ,r1
+                insn(0xfe, 2, 0, 4),      # GET r2,rJ
+                insn(0xf7, 5, 0, 0x7b),   # PUTI rM,0x7b
+                insn(0xfe, 3, 0, 5),      # GET r3,rM
+                insn(0xf6, 28, 0, 1),     # PUT rWW,r1
+                insn(0xfe, 4, 0, 28),     # GET r4,rWW
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={
+            1: 0xfeedcafe12345678,
+            2: 0xfeedcafe12345678,
+            3: 0x7b,
+            4: 0xfeedcafe12345678,
+        },
+    ),
+    MMIXTest(
         "existing-integer-logical-variants",
         b"".join(
             [
