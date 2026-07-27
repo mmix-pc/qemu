@@ -30,6 +30,8 @@ VM_RV_PAGE0 = 0x11110d0000002000
 VM_PAGE_TABLE_ROOT2 = 0x4000
 VM_RV_ROOT2 = 0x11110d0000004000
 NEGATIVE_HANDLER = 0x8000000000000080
+MMIX_VIRT_UART_BASE = 0x0000000100000000
+MMIX_VIRT_UART_TX = 0x04
 
 
 def insn(op, x=0, y=0, z=0):
@@ -298,6 +300,14 @@ class MMIXExpectedFailure:
     program: bytes
     patterns: tuple[str, ...]
     absent: tuple[str, ...] = ("MMIX test exit",)
+
+
+@dataclasses.dataclass(frozen=True)
+class MMIXSerialTest:
+    name: str
+    program: bytes
+    pc: int
+    output: bytes
 
 
 REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
@@ -2774,6 +2784,31 @@ EXPECTED_FAILURES = [
 ]
 
 
+SERIAL_TESTS = [
+    MMIXSerialTest(
+        "serial-tx-output",
+        b"".join(
+            [
+                *set_octa(1, MMIX_VIRT_UART_BASE),
+                wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
+                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+                wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
+                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+                wyde(0xe3, 2, ord("I")),                  # SETL r2,'I'
+                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+                wyde(0xe3, 2, ord("X")),                  # SETL r2,'X'
+                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+                wyde(0xe3, 2, ord("\n")),                 # SETL r2,'\n'
+                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+                halt(),
+            ]
+        ),
+        pc=0x38,
+        output=b"MMIX\n",
+    ),
+]
+
+
 def parse_log(log_text):
     if "MMIX test exit" not in log_text:
         raise AssertionError("missing MMIX test exit line")
@@ -2878,6 +2913,50 @@ def run_expected_failure(qemu, workdir, test):
             raise AssertionError(f"{test.name}: unexpected log pattern {pattern!r}")
 
 
+def run_serial_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.bin"
+    log = workdir / f"{test.name}.log"
+    serial = workdir / f"{test.name}.serial"
+
+    image.write_bytes(test.program)
+    for path in (log, serial):
+        if path.exists():
+            path.unlink()
+
+    cmd = [
+        str(qemu),
+        "-machine",
+        "virt",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-serial",
+        f"file:{serial}",
+        "-kernel",
+        str(image),
+        "-d",
+        "int",
+        "-D",
+        str(log),
+    ]
+    subprocess.run(cmd, check=True, timeout=10)
+
+    pc, npc, _ = parse_log(log.read_text(encoding="utf-8"))
+    if pc != test.pc:
+        raise AssertionError(f"{test.name}: pc expected 0x{test.pc:x}, got 0x{pc:x}")
+    if npc != test.pc + 4:
+        raise AssertionError(
+            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{npc:x}"
+        )
+
+    actual = serial.read_bytes()
+    if actual != test.output:
+        raise AssertionError(
+            f"{test.name}: serial output expected {test.output!r}, got {actual!r}"
+        )
+
+
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True, type=pathlib.Path)
@@ -2890,6 +2969,9 @@ def main(argv):
         print(f"PASS {test.name}")
     for test in EXPECTED_FAILURES:
         run_expected_failure(args.qemu, args.workdir, test)
+        print(f"PASS {test.name}")
+    for test in SERIAL_TESTS:
+        run_serial_test(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
 
 
