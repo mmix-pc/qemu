@@ -140,14 +140,65 @@ void helper_mmix_write_reg(CPUMMIXState *env, uint32_t reg, uint64_t val)
     mmix_cpu_write_reg(env, reg, val);
 }
 
-void helper_mmix_put_rl(CPUMMIXState *env, uint64_t val)
+uint64_t helper_mmix_read_sreg(CPUMMIXState *env, uint32_t reg)
 {
-    mmix_cpu_put_rl(env, val);
+    if (reg >= MMIX_SREGS) {
+        helper_raise_illegal_instruction(env);
+    }
+    return env->sregs[reg];
 }
 
-void helper_mmix_put_ra(CPUMMIXState *env, uint64_t val)
+static void mmix_cpu_put_rg(CPUMMIXState *env, uint64_t val)
 {
-    env->sregs[MMIX_SREG_RA] = val & MMIX_RA_VALID_MASK;
+    if (val < 32 || val > 255) {
+        helper_raise_illegal_instruction(env);
+    }
+    env->sregs[MMIX_SREG_RG] = val;
+    if (env->sregs[MMIX_SREG_RL] > val) {
+        env->sregs[MMIX_SREG_RL] = val;
+    }
+}
+
+static bool mmix_sreg_read_only(uint32_t reg)
+{
+    switch (reg) {
+    case MMIX_SREG_RN:
+    case MMIX_SREG_RO:
+    case MMIX_SREG_RS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
+{
+    if (reg >= MMIX_SREGS || mmix_sreg_read_only(reg)) {
+        helper_raise_illegal_instruction(env);
+    }
+
+    switch (reg) {
+    case MMIX_SREG_RA:
+        env->sregs[MMIX_SREG_RA] = val & MMIX_RA_VALID_MASK;
+        break;
+    case MMIX_SREG_RG:
+        mmix_cpu_put_rg(env, val);
+        break;
+    case MMIX_SREG_RL:
+        mmix_cpu_put_rl(env, val);
+        break;
+    case MMIX_SREG_RQ:
+        /*
+         * The current machine has no modeled hardware interrupt request bits,
+         * so M12 treats rQ as software-visible storage. M16 will revisit
+         * privilege and hardware sticky-bit behavior.
+         */
+        env->sregs[reg] = val;
+        break;
+    default:
+        env->sregs[reg] = val;
+        break;
+    }
 }
 
 static uint32_t mmix_select_arithmetic_event(uint32_t events)

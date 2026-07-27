@@ -635,6 +635,27 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "special-register-get-all",
+        b"".join(
+            [
+                *[
+                    insn(0xfe, 33 + reg, 0, reg)
+                    for reg in range(32)
+                ],
+                halt(),
+            ]
+        ),
+        pc=0x80,
+        regs={
+            **{33 + reg: 0 for reg in range(32)},
+            33 + 13: 0x8000000500000000,
+            33 + 14: 0x8000000600000000,
+            33 + 15: MASK64,
+            33 + 18: 0x369c200400000000,
+            33 + 19: 32,
+        },
+    ),
+    MMIXTest(
         "special-register-put-readback",
         b"".join(
             [
@@ -648,15 +669,74 @@ TESTS = [
                 insn(0xfe, 3, 0, 5),      # GET r3,rM
                 insn(0xf6, 28, 0, 1),     # PUT rWW,r1
                 insn(0xfe, 4, 0, 28),     # GET r4,rWW
+                insn(0xf7, 8, 0, 0x11),   # PUTI rC,0x11
+                insn(0xf7, 12, 0, 0x12),  # PUTI rI,0x12
+                insn(0xf7, 15, 0, 0x13),  # PUTI rK,0x13
+                insn(0xf7, 16, 0, 0x14),  # PUTI rQ,0x14
+                insn(0xf7, 13, 0, 0x15),  # PUTI rT,0x15
+                insn(0xf7, 17, 0, 0x16),  # PUTI rU,0x16
+                insn(0xf7, 14, 0, 0x17),  # PUTI rTT,0x17
+                insn(0xf7, 23, 0, 0x18),  # PUTI rP,0x18
+                insn(0xfe, 40, 0, 8),     # GET r40,rC
+                insn(0xfe, 41, 0, 12),    # GET r41,rI
+                insn(0xfe, 42, 0, 15),    # GET r42,rK
+                insn(0xfe, 43, 0, 16),    # GET r43,rQ
+                insn(0xfe, 44, 0, 13),    # GET r44,rT
+                insn(0xfe, 45, 0, 17),    # GET r45,rU
+                insn(0xfe, 46, 0, 14),    # GET r46,rTT
+                insn(0xfe, 47, 0, 23),    # GET r47,rP
                 halt(),
             ]
         ),
-        pc=0x28,
+        pc=0x68,
         regs={
             1: 0xfeedcafe12345678,
             2: 0xfeedcafe12345678,
             3: 0x7b,
             4: 0xfeedcafe12345678,
+            40: 0x11,
+            41: 0x12,
+            42: 0x13,
+            43: 0x14,
+            44: 0x15,
+            45: 0x16,
+            46: 0x17,
+            47: 0x18,
+        },
+    ),
+    MMIXTest(
+        "special-register-ra-mask",
+        b"".join(
+            [
+                *set_octa(1, 0xffffffff0003ffff),
+                insn(0xf6, 21, 0, 1),     # PUT rA,r1
+                insn(0xfe, 33, 0, 21),    # GET r33,rA
+                halt(),
+            ]
+        ),
+        pc=0x18,
+        regs={33: 0x3ffff},
+    ),
+    MMIXTest(
+        "special-register-rg-rl-policy",
+        b"".join(
+            [
+                wyde(0xe3, 1, 64),        # SETL r1,64
+                insn(0xf6, 19, 0, 1),     # PUT rG,r1
+                wyde(0xe3, 40, 0x00aa),   # SETL r40,0xaa
+                insn(0xfe, 70, 0, 20),    # GET r70,rL
+                wyde(0xe3, 2, 40),        # SETL r2,40
+                insn(0xf6, 19, 0, 2),     # PUT rG,r2
+                insn(0xfe, 65, 0, 19),    # GET r65,rG
+                insn(0xfe, 66, 0, 20),    # GET r66,rL
+                halt(),
+            ]
+        ),
+        pc=0x20,
+        regs={
+            65: 40,
+            66: 40,
+            70: 41,
         },
     ),
     MMIXTest(
@@ -1510,6 +1590,26 @@ TESTS = [
 
 
 EXPECTED_FAILURES = [
+    MMIXExpectedFailure(
+        "readonly-put-rn",
+        insn(0xf7, 9, 0, 1),             # PUTI rN,1
+        ("MMIX illegal instruction",),
+    ),
+    MMIXExpectedFailure(
+        "readonly-put-ro",
+        insn(0xf7, 10, 0, 1),            # PUTI rO,1
+        ("MMIX illegal instruction",),
+    ),
+    MMIXExpectedFailure(
+        "readonly-put-rs",
+        insn(0xf7, 11, 0, 1),            # PUTI rS,1
+        ("MMIX illegal instruction",),
+    ),
+    MMIXExpectedFailure(
+        "invalid-put-rg",
+        insn(0xf7, 19, 0, 31),           # PUTI rG,31
+        ("MMIX illegal instruction",),
+    ),
     MMIXExpectedFailure(
         "unsupported-resume-replay",
         b"".join(
