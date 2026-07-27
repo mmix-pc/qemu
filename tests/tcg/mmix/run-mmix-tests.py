@@ -1182,6 +1182,140 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "explicit-trip-resume",
+        b"".join(
+            [
+                branch(0x42, 10, 12),     # BZ r10,main
+                insn(0xfe, 40, 0, 24),    # GET r40,rW
+                insn(0xfe, 41, 0, 25),    # GET r41,rX
+                insn(0xfe, 42, 0, 26),    # GET r42,rY
+                insn(0xfe, 43, 0, 27),    # GET r43,rZ
+                insn(0xfe, 44, 0, 0),     # GET r44,rB
+                insn(0xf9, 0, 0, 0),      # RESUME 0
+                insn(0xfd, 0, 0, 0),      # padding
+                insn(0xfd, 0, 0, 0),      # padding
+                insn(0xfd, 0, 0, 0),      # padding
+                insn(0xfd, 0, 0, 0),      # padding
+                insn(0xfd, 0, 0, 0),      # padding
+                wyde(0xe3, 10, 1),        # main: SETL r10,1
+                wyde(0xe3, 1, 0x00aa),    # SETL r1,0xaa
+                wyde(0xe3, 2, 0x00bb),    # SETL r2,0xbb
+                insn(0xff, 7, 1, 2),      # TRIP 7,1,2
+                wyde(0xe3, 11, 0x55),     # SETL r11,0x55
+                halt(),
+            ]
+        ),
+        pc=0x44,
+        regs={
+            11: 0x55,
+            40: 0x40,
+            41: 0x80000000ff070102,
+            42: 0xaa,
+            43: 0xbb,
+            44: 0,
+        },
+    ),
+    MMIXTest(
+        "explicit-trap-state",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,handler
+                insn(0xf6, 13, 0, 1),     # PUT rT,r1
+                wyde(0xe3, 2, 0x00aa),    # SETL r2,0xaa
+                wyde(0xe3, 3, 0x00bb),    # SETL r3,0xbb
+                wyde(0xe3, 4, 0x00dd),    # SETL r4,0xdd
+                insn(0xf6, 4, 0, 4),      # PUT rJ,r4
+                wyde(0xe3, 255, 0x00cc),  # SETL r255,0xcc
+                insn(0x00, 1, 2, 3),      # TRAP 1,2,3
+            ],
+            0x40,
+            [
+                insn(0xfe, 40, 0, 28),    # GET r40,rWW
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 30),    # GET r42,rYY
+                insn(0xfe, 43, 0, 31),    # GET r43,rZZ
+                insn(0xfe, 44, 0, 7),     # GET r44,rBB
+                insn(0xfe, 45, 0, 15),    # GET r45,rK
+                insn(0x21, 46, 255, 0),   # ADDI r46,r255,0
+                halt(),
+            ],
+        ),
+        pc=0x5c,
+        regs={
+            40: 0x20,
+            41: 0x8000000000010203,
+            42: 0xaa,
+            43: 0xbb,
+            44: 0xcc,
+            45: 0,
+            46: 0xdd,
+        },
+    ),
+    MMIXTest(
+        "explicit-trap-resume",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,handler
+                insn(0xf6, 13, 0, 1),     # PUT rT,r1
+                wyde(0xe3, 4, 0x00dd),    # SETL r4,0xdd
+                insn(0xf6, 4, 0, 4),      # PUT rJ,r4
+                wyde(0xe3, 255, 0x00cc),  # SETL r255,0xcc
+                insn(0x00, 1, 0, 0),      # TRAP 1,0,0
+                wyde(0xe3, 10, 0x55),     # SETL r10,0x55
+                insn(0xfe, 11, 0, 15),    # GET r11,rK
+                insn(0x21, 12, 255, 0),   # ADDI r12,r255,0
+                halt(),
+            ],
+            0x40,
+            [
+                wyde(0xe3, 255, 0x0123),  # SETL r255,0x123
+                insn(0xf9, 0, 0, 1),      # RESUME 1
+            ],
+        ),
+        pc=0x24,
+        regs={10: 0x55, 11: 0x123, 12: 0xcc},
+    ),
+    MMIXTest(
+        "arithmetic-trip-resume",
+        program_with_handler(
+            [
+                *set_octa(1, f64(1.0)),
+                wyde(0xe3, 2, RA_EVENT_Z << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 2),     # PUT rA,r2
+                insn(0x14, 3, 1, 0),      # FDIV r3,r1,+0.0
+                wyde(0xe3, 10, 0x55),     # SETL r10,0x55
+                insn(0xfe, 11, 0, 21),    # GET r11,rA
+                halt(),
+            ],
+            112,
+            [
+                insn(0xf9, 0, 0, 0),      # RESUME 0
+            ],
+        ),
+        pc=0x24,
+        regs={3: 0, 10: 0x55, 11: RA_EVENT_Z << RA_ENABLE_SHIFT},
+    ),
+    MMIXTest(
+        "resume-ropcode-result",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,target
+                insn(0xf6, 24, 0, 1),     # PUT rW,r1
+                *set_octa(2, 0x0200000021050007),
+                insn(0xf6, 25, 0, 2),     # PUT rX,r2
+                wyde(0xe3, 3, 0x77),      # SETL r3,0x77
+                insn(0xf6, 27, 0, 3),     # PUT rZ,r3
+                insn(0xf9, 0, 0, 0),      # RESUME 0
+            ],
+            0x40,
+            [
+                halt(),
+            ],
+        ),
+        pc=0x40,
+        regs={5: 0x77},
+    ),
+    MMIXTest(
         "floating-point-exceptions",
         b"".join(
             [
@@ -1377,19 +1511,23 @@ TESTS = [
 
 EXPECTED_FAILURES = [
     MMIXExpectedFailure(
-        "unsupported-trap",
-        insn(0x00, 1, 0, 0),             # TRAP 1,0,0
-        ("MMIX decoded unimplemented TRAP", "MMIX illegal instruction"),
+        "unsupported-resume-replay",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x20),      # SETL r1,target
+                insn(0xf6, 24, 0, 1),     # PUT rW,r1
+                *set_octa(2, 0x0000000021010001),
+                insn(0xf6, 25, 0, 2),     # PUT rX,r2
+                insn(0xf9, 0, 0, 0),      # RESUME 0
+            ]
+        ),
+        ("MMIX unsupported RESUME ropcode 0 instruction replay",
+         "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "unsupported-trip",
-        insn(0xff, 0, 0, 0),             # TRIP 0,0,0
-        ("MMIX decoded unimplemented TRIP", "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "unsupported-resume",
-        insn(0xf9, 0, 0, 0),             # RESUME 0
-        ("MMIX decoded unimplemented RESUME", "MMIX illegal instruction"),
+        "invalid-resume-fields",
+        insn(0xf9, 1, 0, 0),             # RESUME with nonzero X
+        ("MMIX invalid RESUME x=1 y=0 z=0", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
         "unknown-opcode",

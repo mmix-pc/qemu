@@ -776,6 +776,146 @@ void helper_raise_illegal_instruction(CPUMMIXState *env)
     cpu_loop_exit(cs);
 }
 
+void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
+                      uint64_t z)
+{
+    CPUState *cs = env_cpu(env);
+
+    env->sregs[MMIX_SREG_RW] = env->npc;
+    env->sregs[MMIX_SREG_RX] = 0x8000000000000000ULL | insn;
+    env->sregs[MMIX_SREG_RY] = y;
+    env->sregs[MMIX_SREG_RZ] = z;
+    env->sregs[MMIX_SREG_RB] = mmix_cpu_read_reg(env, 255);
+    mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+    env->pc = 0;
+    env->npc = 4;
+    qemu_log_mask(CPU_LOG_INT,
+                  "MMIX trip from 0x%016" PRIx64 " to 0x%016x\n",
+                  env->sregs[MMIX_SREG_RW] - 4, 0);
+    cpu_loop_exit_noexc(cs);
+}
+
+void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
+                      uint64_t z)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t handler = env->sregs[MMIX_SREG_RT];
+
+    env->sregs[MMIX_SREG_RWW] = env->npc;
+    env->sregs[MMIX_SREG_RXX] = 0x8000000000000000ULL | insn;
+    env->sregs[MMIX_SREG_RYY] = y;
+    env->sregs[MMIX_SREG_RZZ] = z;
+    env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
+    env->sregs[MMIX_SREG_RK] = 0;
+    mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+    env->pc = handler;
+    env->npc = handler + 4;
+    qemu_log_mask(CPU_LOG_INT,
+                  "MMIX trap from 0x%016" PRIx64 " to 0x%016" PRIx64 "\n",
+                  env->sregs[MMIX_SREG_RWW] - 4, handler);
+    cpu_loop_exit_noexc(cs);
+}
+
+static void mmix_resume_unsupported(CPUMMIXState *env, const char *why,
+                                    uint64_t exec)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX unsupported RESUME %s exec=0x%016" PRIx64 "\n",
+                  why, exec);
+    helper_raise_illegal_instruction(env);
+}
+
+static void mmix_resume_state(CPUMMIXState *env, bool trap_state)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t where;
+    uint64_t exec;
+    uint64_t y;
+    uint64_t z;
+    uint8_t ropcode;
+    uint32_t insn;
+
+    if (trap_state) {
+        where = env->sregs[MMIX_SREG_RWW];
+        exec = env->sregs[MMIX_SREG_RXX];
+        y = env->sregs[MMIX_SREG_RYY];
+        z = env->sregs[MMIX_SREG_RZZ];
+        env->sregs[MMIX_SREG_RK] = mmix_cpu_read_reg(env, 255);
+        mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RBB]);
+    } else {
+        where = env->sregs[MMIX_SREG_RW];
+        exec = env->sregs[MMIX_SREG_RX];
+        y = env->sregs[MMIX_SREG_RY];
+        z = env->sregs[MMIX_SREG_RZ];
+    }
+
+    if ((int64_t)exec < 0) {
+        env->pc = where;
+        env->npc = where + 4;
+        cpu_loop_exit_noexc(cs);
+    }
+
+    ropcode = exec >> 56;
+    insn = exec;
+    switch (ropcode) {
+    case 2:
+    {
+        uint32_t events = (exec >> 40) & MMIX_RA_EVENT_MASK;
+        uint32_t reg = (insn >> 16) & 0xff;
+
+        mmix_cpu_write_reg(env, reg, z);
+        if (events != 0) {
+            env->pc = where - 4;
+            env->npc = where;
+            mmix_update_ra_events(env, events, insn, y, z);
+        }
+        env->pc = where;
+        env->npc = where + 4;
+        cpu_loop_exit_noexc(cs);
+    }
+    case 0:
+        mmix_resume_unsupported(env, "ropcode 0 instruction replay", exec);
+        break;
+    case 1:
+        mmix_resume_unsupported(env, "ropcode 1 operand substitution", exec);
+        break;
+    case 3:
+        mmix_resume_unsupported(env, "ropcode 3 virtual translation", exec);
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX invalid RESUME ropcode %u exec=0x%016" PRIx64
+                      "\n",
+                      ropcode, exec);
+        helper_raise_illegal_instruction(env);
+        break;
+    }
+    g_assert_not_reached();
+}
+
+void helper_mmix_resume(CPUMMIXState *env, uint32_t x, uint32_t y, uint32_t z)
+{
+    if (x != 0 || y != 0) {
+        qemu_log_mask(LOG_UNIMP, "MMIX invalid RESUME x=%u y=%u z=%u\n",
+                      x, y, z);
+        helper_raise_illegal_instruction(env);
+    }
+
+    switch (z) {
+    case 0:
+        mmix_resume_state(env, false);
+        break;
+    case 1:
+        mmix_resume_state(env, true);
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP, "MMIX invalid RESUME z=%u\n", z);
+        helper_raise_illegal_instruction(env);
+        break;
+    }
+    g_assert_not_reached();
+}
+
 void helper_mmix_test_exit(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);

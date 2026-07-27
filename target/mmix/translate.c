@@ -151,6 +151,7 @@ static bool mmix_put_writable(unsigned reg)
     case MMIX_SREG_RR:
     case MMIX_SREG_RA:
     case MMIX_SREG_RBB:
+    case MMIX_SREG_RT:
     case MMIX_SREG_RF:
     case MMIX_SREG_RP:
     case MMIX_SREG_RW:
@@ -204,16 +205,21 @@ static bool gen_mmix_unsupported(DisasContext *ctx, const char *mnemonic,
     return true;
 }
 
-#define TRANS_UNSUPPORTED(NAME) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_mmix_unsupported(ctx, #NAME, a); \
-    }
+static bool trans_TRIP(DisasContext *ctx, arg_xyz *a)
+{
+    gen_helper_mmix_trip(tcg_env, tcg_constant_i32(ctx->insn),
+                         gen_load_reg(a->y), gen_load_reg(a->z));
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
 
-TRANS_UNSUPPORTED(TRIP)
-TRANS_UNSUPPORTED(RESUME)
-
-#undef TRANS_UNSUPPORTED
+static bool trans_RESUME(DisasContext *ctx, arg_xyz *a)
+{
+    gen_helper_mmix_resume(tcg_env, tcg_constant_i32(a->x),
+                           tcg_constant_i32(a->y), tcg_constant_i32(a->z));
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
 
 static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
 {
@@ -224,7 +230,10 @@ static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
         return true;
     }
 
-    return gen_mmix_unsupported(ctx, "TRAP", a);
+    gen_helper_mmix_trap(tcg_env, tcg_constant_i32(ctx->insn),
+                         gen_load_reg(a->y), gen_load_reg(a->z));
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
 }
 
 static bool trans_SWYM(DisasContext *ctx, arg_xyz *a)
