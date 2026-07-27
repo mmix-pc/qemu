@@ -212,10 +212,8 @@ static bool gen_mmix_invalid_sync(DisasContext *ctx, uint32_t mode)
 
 static bool gen_mmix_privileged_sync(DisasContext *ctx, uint32_t mode)
 {
-    qemu_log_mask(LOG_UNIMP,
-                  "MMIX privileged SYNC %u at 0x%016" VADDR_PRIx "\n",
-                  mode, ctx->insn_pc);
-    gen_raise_illegal(ctx);
+    gen_helper_mmix_sync(tcg_env, tcg_constant_i32(mode));
+    tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
     return true;
 }
 

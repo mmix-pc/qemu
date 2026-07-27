@@ -979,11 +979,15 @@ TESTS = [
                 jump(0xfc, 1),            # SYNC 1
                 jump(0xfc, 2),            # SYNC 2
                 jump(0xfc, 3),            # SYNC 3
+                jump(0xfc, 4),            # SYNC 4
+                jump(0xfc, 5),            # SYNC 5
+                jump(0xfc, 6),            # SYNC 6
+                jump(0xfc, 7),            # SYNC 7
                 insn(0x8e, 4, 1, 0),      # LDOU r4,r1,r0
                 halt(),
             ]
         ),
-        pc=0x64,
+        pc=0x74,
         regs={
             1: 0x0380,
             2: 0x0123456789abcdef,
@@ -1096,6 +1100,35 @@ TESTS = [
             42: RQ_PROGRAM_K,
             43: 0x20,
             44: 0,
+        },
+    ),
+    MMIXTest(
+        "privileged-sync-user-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                jump(0xfc, 4),            # SYNC 4
+                wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
+            ],
+            0x40,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x50,
+        regs={
+            3: 0,
+            40: RQ_PROGRAM_K,
+            41: RQ_PROGRAM_K,
+            42: 0x20,
+            43: 0,
         },
     ),
     MMIXTest(
@@ -2292,11 +2325,6 @@ EXPECTED_FAILURES = [
         "invalid-unsave-fields",
         insn(0xfb, 1, 0, 32),            # UNSAVE 1,0,r32
         ("MMIX decoded unimplemented UNSAVE", "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "privileged-sync",
-        jump(0xfc, 4),                   # SYNC 4
-        ("MMIX privileged SYNC 4", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
         "invalid-sync",

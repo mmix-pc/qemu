@@ -324,6 +324,13 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
     }
 }
 
+void helper_mmix_sync(CPUMMIXState *env, uint32_t mode)
+{
+    if (mode >= 4 && mode <= 7 && !mmix_cpu_is_privileged(env)) {
+        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
+    }
+}
+
 void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 {
     unsigned rg = mmix_cpu_get_rg(env);
