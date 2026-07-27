@@ -1132,6 +1132,55 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "ldvts-current-cache-policy",
+        b"".join(
+            [
+                *set_octa(1, 0x2000000000000005),
+                wyde(0xe3, 2, 3),         # SETL r2,3
+                insn(0x98, 3, 1, 2),      # LDVTS r3,r1,r2
+                insn(0x99, 4, 1, 7),      # LDVTSI r4,r1,7
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={
+            1: 0x2000000000000005,
+            2: 3,
+            3: 0,
+            4: 0,
+        },
+    ),
+    MMIXTest(
+        "ldvts-user-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                insn(0x99, 3, 0, 7),      # LDVTSI r3,r0,7
+                wyde(0xe3, 4, 0xee),      # skipped after dynamic trap
+            ],
+            0x40,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x50,
+        regs={
+            3: 0,
+            4: 0,
+            40: RQ_PROGRAM_K,
+            41: RQ_PROGRAM_K,
+            42: 0x20,
+            43: 0,
+        },
+    ),
+    MMIXTest(
         "special-register-get-all",
         b"".join(
             [

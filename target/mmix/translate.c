@@ -1430,6 +1430,27 @@ static bool trans_LDUNCI(DisasContext *ctx, arg_xyz *a)
     return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
+static bool gen_ldvts(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 key = tcg_temp_new_i64();
+    TCGv_i64 status = tcg_temp_new_i64();
+
+    gen_effective_address(key, a, immediate, 0);
+    gen_helper_mmix_ldvts(status, tcg_env, key);
+    gen_store_reg(a->x, status);
+    return true;
+}
+
+static bool trans_LDVTS(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_ldvts(ctx, a, false);
+}
+
+static bool trans_LDVTSI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_ldvts(ctx, a, true);
+}
+
 static bool trans_LDHT(DisasContext *ctx, arg_xyz *a)
 {
     return gen_ldht(ctx, a, false);

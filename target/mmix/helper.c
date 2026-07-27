@@ -331,6 +331,19 @@ void helper_mmix_sync(CPUMMIXState *env, uint32_t mode)
     }
 }
 
+uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint64_t key)
+{
+    if (!mmix_cpu_is_privileged(env)) {
+        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
+    }
+
+    /*
+     * Translation caches are not modeled yet. No key can be present, and the
+     * requested low-bit protection-code update has no current-machine target.
+     */
+    return 0;
+}
+
 void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 {
     unsigned rg = mmix_cpu_get_rg(env);
