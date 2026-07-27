@@ -69,6 +69,14 @@ static unsigned mmix_cpu_local_index(CPUMMIXState *env, unsigned reg)
     return (base + reg) & env->lring_mask;
 }
 
+static bool mmix_cpu_local_room(CPUMMIXState *env, unsigned new_rl)
+{
+    unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
+    unsigned stack = env->sregs[MMIX_SREG_RS] >> 3;
+
+    return ((stack - base - new_rl) & env->lring_mask) != 0;
+}
+
 static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
 {
     unsigned old_rl = mmix_cpu_get_rl(env);
@@ -78,6 +86,12 @@ static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
     new_rl = MIN(new_rl, rg);
     if (new_rl <= old_rl) {
         return;
+    }
+    if (!mmix_cpu_local_room(env, new_rl)) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX register stack overflow while growing rL to %u\n",
+                      new_rl);
+        helper_raise_illegal_instruction(env);
     }
     for (i = old_rl; i < new_rl; i++) {
         env->local_regs[mmix_cpu_local_index(env, i)] = 0;
@@ -199,6 +213,76 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
         env->sregs[reg] = val;
         break;
     }
+}
+
+void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
+{
+    unsigned rg = mmix_cpu_get_rg(env);
+    unsigned old_rl = mmix_cpu_get_rl(env);
+    unsigned hole = x;
+    unsigned pushed;
+
+    if (x >= rg) {
+        hole = old_rl;
+        if (!mmix_cpu_local_room(env, old_rl + 1)) {
+            qemu_log_mask(LOG_UNIMP,
+                          "MMIX register stack overflow during PUSH x=%u\n",
+                          x);
+            helper_raise_illegal_instruction(env);
+        }
+        env->local_regs[mmix_cpu_local_index(env, hole)] = old_rl;
+        pushed = old_rl + 1;
+    } else {
+        if (x >= old_rl) {
+            mmix_cpu_grow_rl(env, x + 1);
+            old_rl = x + 1;
+        }
+        env->local_regs[mmix_cpu_local_index(env, x)] = x;
+        pushed = x + 1;
+    }
+
+    env->sregs[MMIX_SREG_RJ] = next_pc;
+    env->sregs[MMIX_SREG_RO] += (uint64_t)pushed * 8;
+    env->sregs[MMIX_SREG_RL] = old_rl - pushed;
+}
+
+uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
+{
+    unsigned old_rl = mmix_cpu_get_rl(env);
+    unsigned stack = env->sregs[MMIX_SREG_RS] >> 3;
+    unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
+    unsigned saved;
+    unsigned preserved;
+    uint64_t output = 0;
+    uint64_t dest;
+
+    if (((base - stack) & env->lring_mask) == 0) {
+        qemu_log_mask(LOG_UNIMP, "MMIX register stack underflow during POP\n");
+        helper_raise_illegal_instruction(env);
+    }
+
+    if (x != 0 && x <= old_rl) {
+        output = env->local_regs[mmix_cpu_local_index(env, x - 1)];
+    }
+
+    saved = env->local_regs[(base - 1) & env->lring_mask] & 0xff;
+    if (((base - stack) & env->lring_mask) <= saved) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX register stack fill required during POP saved=%u\n",
+                      saved);
+        helper_raise_illegal_instruction(env);
+    }
+
+    if (x != 0) {
+        env->local_regs[(base - 1) & env->lring_mask] = output;
+    }
+
+    preserved = x <= old_rl ? x : old_rl + 1;
+    env->sregs[MMIX_SREG_RO] -= (uint64_t)(saved + 1) * 8;
+    env->sregs[MMIX_SREG_RL] = MIN(saved + preserved, mmix_cpu_get_rg(env));
+
+    dest = env->sregs[MMIX_SREG_RJ] + ((uint64_t)yz << 2);
+    return dest & ~3ULL;
 }
 
 static uint32_t mmix_select_arithmetic_event(uint32_t events)

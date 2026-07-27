@@ -1026,6 +1026,43 @@ static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
+static bool gen_pushj(DisasContext *ctx, arg_xyz *a, bool backward)
+{
+    gen_helper_mmix_push(tcg_env, tcg_constant_i32(a->x),
+                         tcg_constant_i64(ctx->base.pc_next));
+    gen_goto_tb(ctx, 0, mmix_branch_dest(ctx, a, backward));
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
+
+static bool gen_pushgo(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 dest = tcg_temp_new_i64();
+
+    tcg_gen_add_i64(dest, gen_load_reg(a->y), gen_load_z(a, immediate));
+    tcg_gen_andi_i64(dest, dest, ~3ULL);
+    gen_helper_mmix_push(tcg_env, tcg_constant_i32(a->x),
+                         tcg_constant_i64(ctx->base.pc_next));
+    tcg_gen_mov_i64(cpu_pc, dest);
+    tcg_gen_addi_i64(cpu_npc, dest, 4);
+    tcg_gen_lookup_and_goto_ptr();
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
+
+static bool trans_POP(DisasContext *ctx, arg_xyz *a)
+{
+    TCGv_i64 dest = tcg_temp_new_i64();
+
+    gen_helper_mmix_pop(dest, tcg_env, tcg_constant_i32(a->x),
+                        tcg_constant_i32(a->yz));
+    tcg_gen_mov_i64(cpu_pc, dest);
+    tcg_gen_addi_i64(cpu_npc, dest, 4);
+    tcg_gen_lookup_and_goto_ptr();
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
+
 #define TRANS_BRANCH(NAME, PREDICATE, BACKWARD) \
     static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
     { \
@@ -1121,6 +1158,16 @@ static bool trans_JMPB(DisasContext *ctx, arg_xyz *a)
     return gen_jmp(ctx, a, true);
 }
 
+static bool trans_PUSHJ(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_pushj(ctx, a, false);
+}
+
+static bool trans_PUSHJB(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_pushj(ctx, a, true);
+}
+
 static bool trans_GO(DisasContext *ctx, arg_xyz *a)
 {
     return gen_go(ctx, a, false);
@@ -1129,6 +1176,26 @@ static bool trans_GO(DisasContext *ctx, arg_xyz *a)
 static bool trans_GOI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_go(ctx, a, true);
+}
+
+static bool trans_PUSHGO(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_pushgo(ctx, a, false);
+}
+
+static bool trans_PUSHGOI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_pushgo(ctx, a, true);
+}
+
+static bool trans_SAVE(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_mmix_unsupported(ctx, "SAVE", a);
+}
+
+static bool trans_UNSAVE(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_mmix_unsupported(ctx, "UNSAVE", a);
 }
 
 static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,

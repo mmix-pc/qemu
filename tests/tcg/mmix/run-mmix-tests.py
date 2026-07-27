@@ -432,6 +432,101 @@ TESTS = [
         regs={2: 0x08, 3: 5, 4: 0x18, 5: 0},
     ),
     MMIXTest(
+        "pushj-pop-single-result",
+        b"".join(
+            [
+                branch(0xf2, 0, 4),       # PUSHJ 0,sub
+                halt(),
+                insn(0xfd, 0, 0, 0),
+                insn(0xfd, 0, 0, 0),
+                wyde(0xe3, 0, 42),        # sub: SETL r0,42
+                insn(0xf8, 1, 0, 0),      # POP 1,0
+            ]
+        ),
+        pc=0x04,
+        regs={0: 42},
+    ),
+    MMIXTest(
+        "pushjb-pop-single-result",
+        b"".join(
+            [
+                jump(0xf0, 3),            # JMP caller
+                wyde(0xe3, 0, 9),         # sub: SETL r0,9
+                insn(0xf8, 1, 0, 0),      # POP 1,0
+                branch(0xf3, 0, 0xfffe),  # caller: PUSHJB 0,sub
+                halt(),
+            ]
+        ),
+        pc=0x10,
+        regs={0: 9},
+    ),
+    MMIXTest(
+        "pushgo-pop-single-result",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x10),      # SETL r1,sub
+                insn(0xbe, 0, 1, 0),      # PUSHGO 0,r1,r0
+                halt(),
+                insn(0xfd, 0, 0, 0),
+                wyde(0xe3, 0, 33),        # sub: SETL r0,33
+                insn(0xf8, 1, 0, 0),      # POP 1,0
+            ]
+        ),
+        pc=0x08,
+        regs={0: 33},
+    ),
+    MMIXTest(
+        "pushgoi-pop-single-result",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0c),      # SETL r1,sub - 4
+                insn(0xbf, 0, 1, 4),      # PUSHGOI 0,r1,4
+                halt(),
+                insn(0xfd, 0, 0, 0),
+                wyde(0xe3, 0, 44),        # sub: SETL r0,44
+                insn(0xf8, 1, 0, 0),      # POP 1,0
+            ]
+        ),
+        pc=0x08,
+        regs={0: 44},
+    ),
+    MMIXTest(
+        "pop-multiple-results",
+        b"".join(
+            [
+                branch(0xf2, 0, 4),       # PUSHJ 0,sub
+                halt(),
+                insn(0xfd, 0, 0, 0),
+                insn(0xfd, 0, 0, 0),
+                wyde(0xe3, 0, 0xaa),      # sub: SETL r0,0xaa
+                wyde(0xe3, 1, 0xbb),      # SETL r1,0xbb
+                insn(0xf8, 2, 0, 0),      # POP 2,0
+            ]
+        ),
+        pc=0x04,
+        regs={0: 0xbb, 1: 0xaa},
+    ),
+    MMIXTest(
+        "nested-pushj-pop",
+        b"".join(
+            [
+                branch(0xf2, 0, 4),       # PUSHJ 0,sub1
+                halt(),
+                insn(0xfd, 0, 0, 0),
+                insn(0xfd, 0, 0, 0),
+                insn(0xfe, 40, 0, 4),     # sub1: GET r40,rJ
+                branch(0xf2, 0, 4),       # PUSHJ 0,sub2
+                insn(0x21, 0, 0, 1),      # ADDI r0,r0,1
+                insn(0xf6, 4, 0, 40),     # PUT rJ,r40
+                insn(0xf8, 1, 0, 0),      # POP 1,0
+                wyde(0xe3, 0, 7),         # sub2: SETL r0,7
+                insn(0xf8, 1, 0, 0),      # POP 1,0
+            ]
+        ),
+        pc=0x04,
+        regs={0: 8},
+    ),
+    MMIXTest(
         "load-store",
         b"".join(
             [
@@ -1631,8 +1726,18 @@ EXPECTED_FAILURES = [
     ),
     MMIXExpectedFailure(
         "unknown-opcode",
-        insn(0xf8, 0, 0, 0),             # POP is still unknown
-        ("MMIX unknown opcode 0xf8", "MMIX illegal instruction"),
+        insn(0x18, 0, 0, 0),             # MUL is still unknown
+        ("MMIX unknown opcode 0x18", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "unsupported-save",
+        insn(0xfa, 32, 0, 0),            # SAVE r32,0
+        ("MMIX decoded unimplemented SAVE", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "unsupported-unsave",
+        insn(0xfb, 0, 0, 32),            # UNSAVE 0,r32
+        ("MMIX decoded unimplemented UNSAVE", "MMIX illegal instruction"),
     ),
 ]
 
