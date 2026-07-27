@@ -10,6 +10,7 @@
 #include "cpu-qom.h"
 #include "exec/cpu-common.h"
 #include "exec/cpu-interrupt.h"
+#include "exec/mmu-access-type.h"
 
 #ifdef CONFIG_USER_ONLY
 #error "MMIX does not support user mode emulation"
@@ -115,6 +116,13 @@ typedef struct CPUArchState {
     struct {} end_reset_fields;
 } CPUMMIXState;
 
+typedef struct MMIXAddressTranslation {
+    hwaddr physical;
+    uint64_t page_size;
+    int prot;
+    uint64_t causes;
+} MMIXAddressTranslation;
+
 struct ArchCPU {
     CPUState parent_obj;
 
@@ -143,6 +151,10 @@ void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_is_privileged(CPUMMIXState *env);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);
+bool mmix_translate_address(CPUMMIXState *env, vaddr address,
+                            MMUAccessType access_type, bool debug,
+                            bool allow_traps,
+                            MMIXAddressTranslation *translation);
 
 void mmix_translate_init(void);
 void mmix_translate_code(CPUState *cs, TranslationBlock *tb,

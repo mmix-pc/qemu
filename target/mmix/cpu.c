@@ -12,8 +12,21 @@
 #include "exec/page-protection.h"
 #include "exec/translation-block.h"
 #include "exec/target_page.h"
+#include "system/memory.h"
 #include "tcg/debug-assert.h"
 #include "accel/tcg/cpu-ops.h"
+
+#define MMIX_PHYS_MASK ((1ULL << 48) - 1)
+#define MMIX_PTE_N_SHIFT 3
+#define MMIX_PTE_N_MASK 0x3ffULL
+#define MMIX_PTE_P_MASK 0x7ULL
+#define MMIX_PTE_PR 0x4
+#define MMIX_PTE_PW 0x2
+#define MMIX_PTE_PX 0x1
+#define MMIX_PTP_SIGN (1ULL << 63)
+#define MMIX_PTP_C_SHIFT 13
+#define MMIX_PTP_C_MASK ((1ULL << 50) - 1)
+#define MMIX_PT_BLOCK_SIZE (1ULL << 13)
 
 static const char * const mmix_sreg_names[MMIX_SREGS] = {
     [MMIX_SREG_RB] = "rB",
@@ -100,6 +113,212 @@ static bool mmix_cpu_has_work(CPUState *cs)
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
     return 0;
+}
+
+static uint64_t mmix_access_cause(MMUAccessType access_type)
+{
+    switch (access_type) {
+    case MMU_DATA_STORE:
+        return MMIX_RQ_PROGRAM_W;
+    case MMU_INST_FETCH:
+        return MMIX_RQ_PROGRAM_X;
+    case MMU_DATA_LOAD:
+    default:
+        return MMIX_RQ_PROGRAM_R;
+    }
+}
+
+static int mmix_access_prot(MMUAccessType access_type)
+{
+    switch (access_type) {
+    case MMU_DATA_STORE:
+        return PAGE_WRITE;
+    case MMU_INST_FETCH:
+        return PAGE_EXEC;
+    case MMU_DATA_LOAD:
+    default:
+        return PAGE_READ;
+    }
+}
+
+static int mmix_pte_prot(uint64_t pte)
+{
+    uint64_t p = pte & MMIX_PTE_P_MASK;
+    int prot = 0;
+
+    if (p & MMIX_PTE_PR) {
+        prot |= PAGE_READ;
+    }
+    if (p & MMIX_PTE_PW) {
+        prot |= PAGE_WRITE;
+    }
+    if (p & MMIX_PTE_PX) {
+        prot |= PAGE_EXEC;
+    }
+    return prot;
+}
+
+static bool mmix_read_phys_octa(CPUState *cs, hwaddr address, uint64_t *value)
+{
+    MemTxResult result;
+
+    *value = address_space_ldq_be(cs->as, address, MEMTXATTRS_UNSPECIFIED,
+                                  &result);
+    return result == MEMTX_OK;
+}
+
+static bool mmix_finish_translation_fault(CPUMMIXState *env,
+                                          MMIXAddressTranslation *translation,
+                                          uint64_t causes, bool allow_traps)
+{
+    translation->causes = causes;
+    if (allow_traps) {
+        mmix_cpu_raise_dynamic_trap(env, causes);
+    }
+    return false;
+}
+
+static bool mmix_validate_ptp(uint64_t ptp, uint64_t address_space_number)
+{
+    return (ptp & MMIX_PTP_SIGN) != 0 &&
+           ((ptp >> MMIX_PTE_N_SHIFT) & MMIX_PTE_N_MASK) ==
+           address_space_number;
+}
+
+bool mmix_translate_address(CPUMMIXState *env, vaddr address,
+                            MMUAccessType access_type, bool debug,
+                            bool allow_traps,
+                            MMIXAddressTranslation *translation)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t causes = mmix_access_cause(access_type);
+    uint64_t rv = env->sregs[MMIX_SREG_RV];
+    uint8_t b[5];
+    uint8_t s;
+    uint64_t root;
+    uint64_t address_space_number;
+    uint8_t function;
+    uint8_t segment;
+    int table_span;
+    uint64_t segment_address;
+    uint64_t page_number;
+    uint64_t page_offset;
+    uint16_t digit[5];
+    uint64_t remaining;
+    unsigned highest_digit = 0;
+    hwaddr table_base;
+    hwaddr entry_address;
+    uint64_t entry;
+    uint64_t pte;
+    uint64_t page_base;
+    int prot;
+    int i;
+
+    *translation = (MMIXAddressTranslation) {
+        .physical = 0,
+        .page_size = TARGET_PAGE_SIZE,
+        .prot = 0,
+        .causes = 0,
+    };
+
+    if ((int64_t)address < 0) {
+        if (!mmix_cpu_is_privileged(env)) {
+            return mmix_finish_translation_fault(env, translation,
+                                                 MMIX_RQ_PROGRAM_N,
+                                                 allow_traps && !debug);
+        }
+        translation->physical = address & ~(1ULL << 63);
+        translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+        return true;
+    }
+
+    b[0] = 0;
+    b[1] = extract64(rv, 60, 4);
+    b[2] = extract64(rv, 56, 4);
+    b[3] = extract64(rv, 52, 4);
+    b[4] = extract64(rv, 48, 4);
+    s = extract64(rv, 40, 8);
+    root = extract64(rv, 13, 27);
+    address_space_number = extract64(rv, 3, 10);
+    function = extract64(rv, 0, 3);
+
+    if (s < 13 || s > 48 || function != 0) {
+        return mmix_finish_translation_fault(env, translation, causes,
+                                             allow_traps && !debug);
+    }
+
+    segment = address >> 61;
+    segment_address = address & ((1ULL << 61) - 1);
+    page_number = segment_address >> s;
+    page_offset = segment_address & ((1ULL << s) - 1);
+    table_span = (int)b[segment + 1] - (int)b[segment];
+
+    if (table_span < 0) {
+        return mmix_finish_translation_fault(env, translation, causes,
+                                             allow_traps && !debug);
+    }
+
+    remaining = page_number;
+    for (i = 0; i < ARRAY_SIZE(digit); i++) {
+        digit[i] = remaining & 0x3ff;
+        if (digit[i] != 0) {
+            highest_digit = i;
+        }
+        remaining >>= 10;
+    }
+    if (remaining != 0 ||
+        (table_span == 0 && page_number != 0) ||
+        (table_span > 0 && highest_digit >= table_span)) {
+        return mmix_finish_translation_fault(env, translation, causes,
+                                             allow_traps && !debug);
+    }
+
+    if (highest_digit == 0) {
+        entry_address = ((hwaddr)root + b[segment]) * MMIX_PT_BLOCK_SIZE +
+                        (hwaddr)digit[0] * 8;
+    } else {
+        table_base = ((hwaddr)root + b[segment] + highest_digit) *
+                     MMIX_PT_BLOCK_SIZE;
+        entry_address = table_base + (hwaddr)digit[highest_digit] * 8;
+        if (!mmix_read_phys_octa(cs, entry_address, &entry) ||
+            !mmix_validate_ptp(entry, address_space_number)) {
+            return mmix_finish_translation_fault(env, translation, causes,
+                                                 allow_traps && !debug);
+        }
+
+        table_base = ((entry >> MMIX_PTP_C_SHIFT) & MMIX_PTP_C_MASK) *
+                     MMIX_PT_BLOCK_SIZE;
+        for (i = highest_digit - 1; i >= 1; i--) {
+            entry_address = table_base + (hwaddr)digit[i] * 8;
+            if (!mmix_read_phys_octa(cs, entry_address, &entry) ||
+                !mmix_validate_ptp(entry, address_space_number)) {
+                return mmix_finish_translation_fault(env, translation, causes,
+                                                     allow_traps && !debug);
+            }
+            table_base = ((entry >> MMIX_PTP_C_SHIFT) & MMIX_PTP_C_MASK) *
+                         MMIX_PT_BLOCK_SIZE;
+        }
+        entry_address = table_base + (hwaddr)digit[0] * 8;
+    }
+
+    if (!mmix_read_phys_octa(cs, entry_address, &pte) ||
+        ((pte >> MMIX_PTE_N_SHIFT) & MMIX_PTE_N_MASK) !=
+        address_space_number) {
+        return mmix_finish_translation_fault(env, translation, causes,
+                                             allow_traps && !debug);
+    }
+
+    prot = mmix_pte_prot(pte);
+    if ((prot & mmix_access_prot(access_type)) == 0) {
+        return mmix_finish_translation_fault(env, translation, causes,
+                                             allow_traps && !debug);
+    }
+
+    page_base = pte & (MMIX_PHYS_MASK & ~((1ULL << s) - 1));
+    translation->physical = page_base | page_offset;
+    translation->page_size = 1ULL << s;
+    translation->prot = prot;
+    return true;
 }
 
 static void mmix_cpu_reset_hold(Object *obj, ResetType type)
