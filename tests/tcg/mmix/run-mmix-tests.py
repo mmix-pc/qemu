@@ -785,6 +785,117 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "memory-uncached-octa",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0300),    # SETL r1,0x300
+                *set_octa(2, 0x1122334455667788),
+                insn(0xb6, 2, 1, 0),      # STUNC r2,r1,r0
+                insn(0x8e, 3, 1, 0),      # LDOU r3,r1,r0
+                *set_octa(4, 0x99aabbccddeeff00),
+                insn(0xae, 4, 1, 0),      # STOU r4,r1,r0
+                insn(0x96, 5, 1, 0),      # LDUNC r5,r1,r0
+                insn(0xb7, 2, 1, 8),      # STUNCI r2,r1,8
+                insn(0x97, 6, 1, 8),      # LDUNCI r6,r1,8
+                halt(),
+            ]
+        ),
+        pc=0x3c,
+        regs={
+            1: 0x0300,
+            2: 0x1122334455667788,
+            3: 0x1122334455667788,
+            4: 0x99aabbccddeeff00,
+            5: 0x99aabbccddeeff00,
+            6: 0x1122334455667788,
+        },
+    ),
+    MMIXTest(
+        "memory-prefetch-sync-hints",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0380),    # SETL r1,0x380
+                *set_octa(2, 0x0123456789abcdef),
+                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
+                *set_octa(3, 0xfffffffffffffff8),
+                insn(0x9a, 15, 3, 3),     # PRELD 15,r3,r3
+                insn(0x9b, 16, 3, 0xff),  # PRELDI 16,r3,0xff
+                insn(0xba, 17, 3, 3),     # PREST 17,r3,r3
+                insn(0xbb, 18, 3, 0xff),  # PRESTI 18,r3,0xff
+                insn(0x9c, 19, 3, 3),     # PREGO 19,r3,r3
+                insn(0x9d, 20, 3, 0xff),  # PREGOI 20,r3,0xff
+                insn(0xb8, 21, 3, 3),     # SYNCD 21,r3,r3
+                insn(0xb9, 22, 3, 0xff),  # SYNCDI 22,r3,0xff
+                insn(0xbc, 23, 3, 3),     # SYNCID 23,r3,r3
+                insn(0xbd, 24, 3, 0xff),  # SYNCIDI 24,r3,0xff
+                jump(0xfc, 0),            # SYNC 0
+                jump(0xfc, 1),            # SYNC 1
+                jump(0xfc, 2),            # SYNC 2
+                jump(0xfc, 3),            # SYNC 3
+                insn(0x8e, 4, 1, 0),      # LDOU r4,r1,r0
+                halt(),
+            ]
+        ),
+        pc=0x64,
+        regs={
+            1: 0x0380,
+            2: 0x0123456789abcdef,
+            3: 0xfffffffffffffff8,
+            4: 0x0123456789abcdef,
+        },
+    ),
+    MMIXTest(
+        "memory-compare-swap",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x0400),    # SETL r1,0x400
+                *set_octa(2, 0x1111222233334444),
+                *set_octa(3, 0xaaaabbbbccccdddd),
+                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
+                insn(0xf6, 23, 0, 2),     # PUT rP,r2
+                insn(0x94, 3, 1, 0),      # CSWAP r3,r1,r0
+                insn(0x8e, 4, 1, 0),      # LDOU r4,r1,r0
+                insn(0xfe, 5, 0, 23),     # GET r5,rP
+                *set_octa(6, 0x5555666677778888),
+                *set_octa(7, 0x9999aaaabbbbcccc),
+                insn(0xf6, 23, 0, 7),     # PUT rP,r7
+                insn(0x94, 6, 1, 0),      # CSWAP r6,r1,r0
+                insn(0x8e, 8, 1, 0),      # LDOU r8,r1,r0
+                insn(0xfe, 9, 0, 23),     # GET r9,rP
+                *set_octa(10, 0x0102030405060708),
+                insn(0xaf, 10, 1, 16),    # STOUI r10,r1,16
+                *set_octa(11, 0x1020304050607080),
+                insn(0xf6, 23, 0, 10),    # PUT rP,r10
+                insn(0x95, 11, 1, 16),    # CSWAPI r11,r1,16
+                insn(0x8f, 12, 1, 16),    # LDOUI r12,r1,16
+                insn(0xfe, 13, 0, 23),    # GET r13,rP
+                *set_octa(14, 0x0f0e0d0c0b0a0908),
+                insn(0xf6, 23, 0, 14),    # PUT rP,r14
+                *set_octa(15, 0x8877665544332211),
+                insn(0x95, 15, 1, 16),    # CSWAPI r15,r1,16
+                insn(0x8f, 16, 1, 16),    # LDOUI r16,r1,16
+                insn(0xfe, 17, 0, 23),    # GET r17,rP
+                halt(),
+            ]
+        ),
+        pc=0xcc,
+        regs={
+            1: 0x0400,
+            3: 1,
+            4: 0xaaaabbbbccccdddd,
+            5: 0x1111222233334444,
+            6: 0,
+            8: 0xaaaabbbbccccdddd,
+            9: 0xaaaabbbbccccdddd,
+            11: 1,
+            12: 0x1020304050607080,
+            13: 0x0102030405060708,
+            15: 0,
+            16: 0x1020304050607080,
+            17: 0x1020304050607080,
+        },
+    ),
+    MMIXTest(
         "special-register-get-reset",
         b"".join(
             [
@@ -1998,6 +2109,16 @@ EXPECTED_FAILURES = [
         "unsupported-unsave",
         insn(0xfb, 0, 0, 32),            # UNSAVE 0,r32
         ("MMIX decoded unimplemented UNSAVE", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "privileged-sync",
+        jump(0xfc, 4),                   # SYNC 4
+        ("MMIX privileged SYNC 4", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "invalid-sync",
+        jump(0xfc, 8),                   # SYNC 8
+        ("MMIX invalid SYNC 8", "MMIX illegal instruction"),
     ),
 ]
 

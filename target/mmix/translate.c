@@ -201,6 +201,24 @@ static bool trans_SWYM(DisasContext *ctx, arg_xyz *a)
     return true;
 }
 
+static bool gen_mmix_invalid_sync(DisasContext *ctx, uint32_t mode)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX invalid SYNC %u at 0x%016" VADDR_PRIx "\n",
+                  mode, ctx->insn_pc);
+    gen_raise_illegal(ctx);
+    return true;
+}
+
+static bool gen_mmix_privileged_sync(DisasContext *ctx, uint32_t mode)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX privileged SYNC %u at 0x%016" VADDR_PRIx "\n",
+                  mode, ctx->insn_pc);
+    gen_raise_illegal(ctx);
+    return true;
+}
+
 static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
 {
     TCGv_i64 val = tcg_temp_new_i64();
@@ -1394,6 +1412,16 @@ static bool trans_LDOUI(DisasContext *ctx, arg_xyz *a)
     return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
+static bool trans_LDUNC(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, false, MO_BEUQ, 7);
+}
+
+static bool trans_LDUNCI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
+}
+
 static bool trans_LDHT(DisasContext *ctx, arg_xyz *a)
 {
     return gen_ldht(ctx, a, false);
@@ -1424,6 +1452,58 @@ static bool trans_LDSF(DisasContext *ctx, arg_xyz *a)
 static bool trans_LDSFI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_ldsf(ctx, a, true);
+}
+
+static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 addr = tcg_temp_new_i64();
+    TCGv_i64 old = tcg_temp_new_i64();
+    TCGv_i64 rp = tcg_temp_new_i64();
+    TCGv_i64 new = gen_load_reg(a->x);
+    TCGv_i64 next_rp = tcg_temp_new_i64();
+    TCGv_i64 success = tcg_temp_new_i64();
+
+    gen_effective_address(addr, a, immediate, 7);
+    gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
+    tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
+
+    tcg_gen_movcond_i64(TCG_COND_EQ, next_rp, old, rp, rp, old);
+    gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(MMIX_SREG_RP), next_rp);
+
+    tcg_gen_movcond_i64(TCG_COND_EQ, success, old, rp,
+                        tcg_constant_i64(1), tcg_constant_i64(0));
+    gen_store_reg(a->x, success);
+    return true;
+}
+
+static bool trans_CSWAP(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_cswap(ctx, a, false);
+}
+
+static bool trans_CSWAPI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_cswap(ctx, a, true);
+}
+
+static bool trans_PRELD(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_PRELDI(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_PREGO(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_PREGOI(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
 }
 
 static bool gen_store_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
@@ -1527,6 +1607,16 @@ static bool trans_STOUI(DisasContext *ctx, arg_xyz *a)
     return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
+static bool trans_STUNC(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, false, MO_BEUQ, 7);
+}
+
+static bool trans_STUNCI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
+}
+
 static bool trans_STHT(DisasContext *ctx, arg_xyz *a)
 {
     return gen_stht(ctx, a, false);
@@ -1557,6 +1647,61 @@ static bool trans_STSF(DisasContext *ctx, arg_xyz *a)
 static bool trans_STSFI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_stsf(ctx, a, true);
+}
+
+static bool trans_SYNCD(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_SYNCDI(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_PREST(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_PRESTI(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_SYNCID(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_SYNCIDI(DisasContext *ctx, arg_xyz *a)
+{
+    return true;
+}
+
+static bool trans_SYNC(DisasContext *ctx, arg_xyz *a)
+{
+    switch (a->xyz) {
+    case 0:
+        tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+        return true;
+    case 1:
+        tcg_gen_mb(TCG_MO_ST_ST | TCG_BAR_SC);
+        return true;
+    case 2:
+        tcg_gen_mb(TCG_MO_LD_LD | TCG_BAR_SC);
+        return true;
+    case 3:
+        tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+        return true;
+    case 4:
+    case 5:
+    case 6:
+    case 7:
+        return gen_mmix_privileged_sync(ctx, a->xyz);
+    default:
+        return gen_mmix_invalid_sync(ctx, a->xyz);
+    }
 }
 
 static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
