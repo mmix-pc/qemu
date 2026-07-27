@@ -1243,6 +1243,9 @@ static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(a->x),
                              gen_load_z(a, immediate));
+    if (a->x == MMIX_SREG_RK || a->x == MMIX_SREG_RV) {
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    }
     return true;
 }
 

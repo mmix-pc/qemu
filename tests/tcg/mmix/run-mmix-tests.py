@@ -21,6 +21,9 @@ RA_EVENT_V = 0x40
 RA_EVENT_D = 0x80
 RA_ENABLE_SHIFT = 8
 RQ_PROGRAM_K = 1 << 35
+RQ_PROGRAM_W = 1 << 38
+VM_PAGE_TABLE = 0x2000
+VM_RV_PAGE0 = 0x11110d0000002000
 
 
 def insn(op, x=0, y=0, z=0):
@@ -766,6 +769,53 @@ TESTS = [
         ),
         pc=0x10,
         regs={1: 0x40, 2: 0x5a, 3: 0x5a},
+    ),
+    MMIXTest(
+        "virtual-translation-page0-rwx",
+        b"".join(
+            [
+                *set_octa(1, VM_PAGE_TABLE),
+                wyde(0xe3, 2, 7),         # SETL r2,RWX PTE for page 0
+                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
+                *set_octa(3, VM_RV_PAGE0),
+                insn(0xf6, 18, 0, 3),     # PUT rV,r3
+                wyde(0xe3, 4, 0x0300),    # SETL r4,0x300
+                *set_octa(5, 0x1122334455667788),
+                insn(0xae, 5, 4, 0),      # STOU r5,r4,r0
+                insn(0x8e, 6, 4, 0),      # LDOU r6,r4,r0
+                halt(),
+            ]
+        ),
+        pc=0x48,
+        regs={6: 0x1122334455667788},
+    ),
+    MMIXTest(
+        "virtual-translation-store-protection",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x80),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(10, VM_PAGE_TABLE),
+                wyde(0xe3, 11, 5),        # SETL r11,RX PTE for page 0
+                insn(0xae, 11, 10, 0),    # STOU r11,r10,r0
+                *set_octa(12, VM_RV_PAGE0),
+                insn(0xf6, 18, 0, 12),    # PUT rV,r12
+                wyde(0xe3, 13, 0x00aa),   # SETL r13,0xaa
+                wyde(0xe3, 14, 0x0300),   # SETL r14,0x300
+                insn(0xae, 13, 14, 0),    # STOU r13,r14,r0
+                wyde(0xe3, 15, 0x00ff),   # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x90,
+        regs={40: RQ_PROGRAM_W, 41: RQ_PROGRAM_W, 42: 0x40, 43: 0},
     ),
     MMIXTest(
         "memory-octa-variants",

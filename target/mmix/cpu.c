@@ -8,6 +8,7 @@
 #include "qapi/error.h"
 #include "qemu/qemu-print.h"
 #include "cpu.h"
+#include "accel/tcg/cpu-loop.h"
 #include "exec/cputlb.h"
 #include "exec/page-protection.h"
 #include "exec/translation-block.h"
@@ -232,6 +233,12 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
         return true;
     }
 
+    if (env->flat_translation) {
+        translation->physical = address;
+        translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+        return true;
+    }
+
     b[0] = 0;
     b[1] = extract64(rv, 60, 4);
     b[2] = extract64(rv, 56, 4);
@@ -342,6 +349,7 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     cpu->env.sregs[MMIX_SREG_RL] = MMIX_INITIAL_RL;
     cpu->env.sregs[MMIX_SREG_RO] = MMIX_INITIAL_STACK;
     cpu->env.sregs[MMIX_SREG_RS] = MMIX_INITIAL_STACK;
+    cpu->env.flat_translation = true;
     cpu->env.lring_size = MMIX_LOCAL_REGS;
     cpu->env.lring_mask = MMIX_LOCAL_REGS - 1;
     cs->exception_index = -1;
@@ -422,10 +430,24 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
                               MMUAccessType access_type, int mmu_idx,
                               bool probe, uintptr_t retaddr)
 {
-    hwaddr physical = addr & TARGET_PAGE_MASK;
-    int prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+    CPUMMIXState *env = cpu_env(cs);
+    MMIXAddressTranslation translation;
+    hwaddr vpage = addr & TARGET_PAGE_MASK;
+    hwaddr ppage;
 
-    tlb_set_page(cs, physical, physical, prot, mmu_idx, TARGET_PAGE_SIZE);
+    if (!mmix_translate_address(env, addr, access_type, false, false,
+                                &translation)) {
+        if (probe) {
+            return false;
+        }
+        mmix_cpu_record_program_exception(env, translation.causes);
+        cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
+        cpu_loop_exit_restore(cs, retaddr);
+    }
+
+    ppage = translation.physical & TARGET_PAGE_MASK;
+    tlb_set_page(cs, vpage, ppage, translation.prot, mmu_idx,
+                 TARGET_PAGE_SIZE);
     return true;
 }
 

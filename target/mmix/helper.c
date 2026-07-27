@@ -9,6 +9,7 @@
 #include "accel/tcg/cpu-loop.h"
 #include "accel/tcg/cpu-ldst.h"
 #include "exec/log.h"
+#include "exec/cputlb.h"
 #include "exec/helper-proto.h"
 #include "fpu/softfloat.h"
 #include "system/runstate.h"
@@ -233,6 +234,24 @@ void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes)
     cpu_loop_exit(cs);
 }
 
+static void mmix_cpu_update_translation_state(CPUMMIXState *env)
+{
+    tlb_flush(env_cpu(env));
+}
+
+static void mmix_cpu_put_rk(CPUMMIXState *env, uint64_t val)
+{
+    env->sregs[MMIX_SREG_RK] = val;
+    mmix_cpu_update_translation_state(env);
+}
+
+static void mmix_cpu_put_rv(CPUMMIXState *env, uint64_t val)
+{
+    env->sregs[MMIX_SREG_RV] = val;
+    env->flat_translation = false;
+    mmix_cpu_update_translation_state(env);
+}
+
 uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
 {
     return mmix_cpu_read_reg(env, reg);
@@ -317,6 +336,12 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
          * architectural cause bits into rQ when they raise dynamic traps.
          */
         env->sregs[reg] = val;
+        break;
+    case MMIX_SREG_RK:
+        mmix_cpu_put_rk(env, val);
+        break;
+    case MMIX_SREG_RV:
+        mmix_cpu_put_rv(env, val);
         break;
     default:
         env->sregs[reg] = val;
@@ -1238,7 +1263,7 @@ void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
     env->sregs[MMIX_SREG_RYY] = y;
     env->sregs[MMIX_SREG_RZZ] = z;
     env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
-    env->sregs[MMIX_SREG_RK] = 0;
+    mmix_cpu_put_rk(env, 0);
     mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
     env->pc = handler;
     env->npc = handler + 4;
@@ -1272,7 +1297,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state)
         exec = env->sregs[MMIX_SREG_RXX];
         y = env->sregs[MMIX_SREG_RYY];
         z = env->sregs[MMIX_SREG_RZZ];
-        env->sregs[MMIX_SREG_RK] = mmix_cpu_read_reg(env, 255);
+        mmix_cpu_put_rk(env, mmix_cpu_read_reg(env, 255));
         mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RBB]);
     } else {
         where = env->sregs[MMIX_SREG_RW];
@@ -1402,7 +1427,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
         env->sregs[MMIX_SREG_RXX] = causes;
         env->sregs[MMIX_SREG_RYY] = 0;
         env->sregs[MMIX_SREG_RZZ] = 0;
-        env->sregs[MMIX_SREG_RK] = 0;
+        mmix_cpu_put_rk(env, 0);
         mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
         env->pc = handler;
         env->npc = handler + 4;
@@ -1430,5 +1455,12 @@ bool mmix_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 
 hwaddr mmix_cpu_get_phys_addr_debug(CPUState *cs, vaddr addr)
 {
-    return addr;
+    CPUMMIXState *env = cpu_env(cs);
+    MMIXAddressTranslation translation;
+
+    if (mmix_translate_address(env, addr, MMU_DATA_LOAD, true, false,
+                               &translation)) {
+        return translation.physical;
+    }
+    return -1;
 }

@@ -112,6 +112,7 @@ typedef struct CPUArchState {
     uint32_t lring_mask;
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
+    bool flat_translation;
 
     struct {} end_reset_fields;
 } CPUMMIXState;
