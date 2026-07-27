@@ -20,6 +20,7 @@ RA_EVENT_O = 0x08
 RA_EVENT_V = 0x40
 RA_EVENT_D = 0x80
 RA_ENABLE_SHIFT = 8
+RQ_PROGRAM_K = 1 << 35
 
 
 def insn(op, x=0, y=0, z=0):
@@ -1057,13 +1058,44 @@ TESTS = [
         ),
         pc=0x1c,
         regs={
-            33: MASK64,
+            33: 0,
             34: 0x8000000500000000,
             35: 0x8000000600000000,
             36: 0x369c200400000000,
             37: 32,
             38: 0,
             39: 0,
+        },
+    ),
+    MMIXTest(
+        "privileged-register-user-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                insn(0xf7, 8, 0, 0xaa),   # PUTI rC,0xaa
+                wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
+            ],
+            0x40,
+            [
+                insn(0xfe, 40, 0, 8),     # GET r40,rC
+                insn(0xfe, 41, 0, 16),    # GET r41,rQ
+                insn(0xfe, 42, 0, 29),    # GET r42,rXX
+                insn(0xfe, 43, 0, 28),    # GET r43,rWW
+                insn(0xfe, 44, 0, 15),    # GET r44,rK
+                halt(),
+            ],
+        ),
+        pc=0x54,
+        regs={
+            3: 0,
+            40: 0,
+            41: RQ_PROGRAM_K,
+            42: RQ_PROGRAM_K,
+            43: 0x20,
+            44: 0,
         },
     ),
     MMIXTest(
@@ -1084,7 +1116,7 @@ TESTS = [
             33 + 11: INITIAL_STACK,
             33 + 13: 0x8000000500000000,
             33 + 14: 0x8000000600000000,
-            33 + 15: MASK64,
+            33 + 15: 0,
             33 + 18: 0x369c200400000000,
             33 + 19: 32,
         },

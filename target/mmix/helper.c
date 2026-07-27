@@ -274,10 +274,30 @@ static bool mmix_sreg_read_only(uint32_t reg)
     }
 }
 
+static bool mmix_sreg_privileged(uint32_t reg)
+{
+    switch (reg) {
+    case MMIX_SREG_RC:
+    case MMIX_SREG_RI:
+    case MMIX_SREG_RT:
+    case MMIX_SREG_RTT:
+    case MMIX_SREG_RK:
+    case MMIX_SREG_RQ:
+    case MMIX_SREG_RU:
+    case MMIX_SREG_RV:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
 {
     if (reg >= MMIX_SREGS || mmix_sreg_read_only(reg)) {
         helper_raise_illegal_instruction(env);
+    }
+    if (mmix_sreg_privileged(reg) && !mmix_cpu_is_privileged(env)) {
+        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
     }
 
     switch (reg) {
@@ -292,9 +312,9 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
         break;
     case MMIX_SREG_RQ:
         /*
-         * The current machine has no modeled hardware interrupt request bits,
-         * so M12 treats rQ as software-visible storage. M16 will revisit
-         * privilege and hardware sticky-bit behavior.
+         * Hardware interrupt request bits are still not modeled. Privileged
+         * PUT[I] can write rQ as stored state; program-exception helpers OR
+         * architectural cause bits into rQ when they raise dynamic traps.
          */
         env->sregs[reg] = val;
         break;
