@@ -403,6 +403,86 @@ static bool trans_SUBUI(DisasContext *ctx, arg_xyz *a)
     return gen_alu(ctx, a, MMIX_ALU_SUB, true);
 }
 
+static bool gen_mul(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_mul(val, tcg_env, tcg_constant_i32(ctx->insn),
+                        gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_mulu(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_mulu(val, tcg_env, gen_load_reg(a->y),
+                         gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_div(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_div(val, tcg_env, tcg_constant_i32(ctx->insn),
+                        gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool gen_divu(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_divu(val, tcg_env, gen_load_reg(a->y),
+                         gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
+static bool trans_MUL(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_mul(ctx, a, false);
+}
+
+static bool trans_MULI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_mul(ctx, a, true);
+}
+
+static bool trans_MULU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_mulu(ctx, a, false);
+}
+
+static bool trans_MULUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_mulu(ctx, a, true);
+}
+
+static bool trans_DIV(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_div(ctx, a, false);
+}
+
+static bool trans_DIVI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_div(ctx, a, true);
+}
+
+static bool trans_DIVU(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_divu(ctx, a, false);
+}
+
+static bool trans_DIVUI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_divu(ctx, a, true);
+}
+
 static bool trans_OR(DisasContext *ctx, arg_xyz *a)
 {
     return gen_alu(ctx, a, MMIX_ALU_OR, false);
@@ -777,6 +857,16 @@ static bool gen_odif(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
+static bool gen_mux(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_mux(val, tcg_env, gen_load_reg(a->y),
+                        gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
 static bool gen_sadd(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
@@ -819,6 +909,8 @@ TRANS_BIT_DIFF(TDIF, tdif, false)
 TRANS_BIT_DIFF(TDIFI, tdif, true)
 TRANS_BIT_DIFF(ODIF, odif, false)
 TRANS_BIT_DIFF(ODIFI, odif, true)
+TRANS_BIT_DIFF(MUX, mux, false)
+TRANS_BIT_DIFF(MUXI, mux, true)
 TRANS_BIT_DIFF(SADD, sadd, false)
 TRANS_BIT_DIFF(SADDI, sadd, true)
 TRANS_BIT_DIFF(MOR, mor, false)

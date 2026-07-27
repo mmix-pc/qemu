@@ -18,6 +18,7 @@ RA_EVENT_X = 0x01
 RA_EVENT_Z = 0x02
 RA_EVENT_O = 0x08
 RA_EVENT_V = 0x40
+RA_EVENT_D = 0x80
 RA_ENABLE_SHIFT = 8
 
 
@@ -137,6 +138,32 @@ def matrix_multiply(y, z, exclusive):
                 x_row |= 0x80 >> j
         result |= x_row << ((7 - i) * 8)
     return result
+
+
+def mux(y, z, mask):
+    return ((y & mask) | (z & ~mask)) & MASK64
+
+
+def signed_div(y, z):
+    y = s64(y)
+    z = s64(z)
+    if z == 0:
+        return 0, y & MASK64
+    quotient = y // z
+    remainder = y - quotient * z
+    return quotient & MASK64, remainder & MASK64
+
+
+def unsigned_div(high, low, divisor):
+    if divisor == 0 or high >= divisor:
+        return high & MASK64, low & MASK64
+    dividend = (high << 64) | low
+    return (dividend // divisor) & MASK64, (dividend % divisor) & MASK64
+
+
+def s64(value):
+    value &= MASK64
+    return value - (1 << 64) if value & (1 << 63) else value
 
 
 def f64(value):
@@ -1204,6 +1231,184 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "integer-multiply",
+        b"".join(
+            [
+                *set_octa(1, 0xfffffffffffffff0),
+                wyde(0xe3, 2, 3),         # SETL r2,3
+                insn(0x18, 3, 1, 2),      # MUL r3,r1,r2
+                insn(0x19, 4, 1, 5),      # MULI r4,r1,5
+                *set_octa(5, MASK64),
+                insn(0x1a, 6, 5, 5),      # MULU r6,r5,r5
+                insn(0xfe, 7, 0, 3),      # GET r7,rH
+                insn(0x1b, 8, 5, 2),      # MULUI r8,r5,2
+                insn(0xfe, 9, 0, 3),      # GET r9,rH
+                halt(),
+            ]
+        ),
+        pc=0x3c,
+        regs={
+            3: (-16 * 3) & MASK64,
+            4: (-16 * 5) & MASK64,
+            6: 1,
+            7: MASK64 - 1,
+            8: MASK64 - 1,
+            9: 1,
+        },
+    ),
+    MMIXTest(
+        "integer-multiply-overflow-status",
+        b"".join(
+            [
+                *set_octa(1, 0x7fffffffffffffff),
+                wyde(0xe3, 2, 2),         # SETL r2,2
+                insn(0x18, 3, 1, 2),      # MUL r3,r1,r2
+                insn(0xfe, 4, 0, 21),     # GET r4,rA
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={3: MASK64 - 1, 4: RA_EVENT_V},
+    ),
+    MMIXTest(
+        "enabled-integer-multiply-overflow-trip",
+        program_with_handler(
+            [
+                *set_octa(1, 0x7fffffffffffffff),
+                wyde(0xe3, 2, 2),                         # SETL r2,2
+                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
+                insn(0x18, 3, 1, 2),                      # MUL r3,r1,r2
+            ],
+            32,
+            [
+                insn(0xfe, 40, 0, 24),                    # GET r40,rW
+                insn(0xfe, 41, 0, 25),                    # GET r41,rX
+                insn(0xfe, 42, 0, 26),                    # GET r42,rY
+                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
+                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                halt(),
+            ],
+        ),
+        pc=0x34,
+        regs={
+            40: 0x20,
+            41: 0x8000000018030102,
+            42: 0x7fffffffffffffff,
+            43: 2,
+            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+        },
+    ),
+    MMIXTest(
+        "integer-divide",
+        b"".join(
+            [
+                *set_octa(1, (-7) & MASK64),
+                wyde(0xe3, 2, 3),         # SETL r2,3
+                insn(0x1c, 3, 1, 2),      # DIV r3,r1,r2
+                insn(0xfe, 4, 0, 6),      # GET r4,rR
+                wyde(0xe3, 5, 7),         # SETL r5,7
+                *set_octa(6, (-3) & MASK64),
+                insn(0x1c, 7, 5, 6),      # DIV r7,r5,r6
+                insn(0xfe, 8, 0, 6),      # GET r8,rR
+                insn(0x1d, 9, 1, 3),      # DIVI r9,r1,3
+                insn(0xfe, 10, 0, 6),     # GET r10,rR
+                insn(0x1c, 11, 5, 0),     # DIV r11,r5,r0
+                insn(0xfe, 12, 0, 6),     # GET r12,rR
+                insn(0xfe, 13, 0, 21),    # GET r13,rA
+                halt(),
+            ]
+        ),
+        pc=0x4c,
+        regs={
+            3: signed_div((-7) & MASK64, 3)[0],
+            4: signed_div((-7) & MASK64, 3)[1],
+            7: signed_div(7, (-3) & MASK64)[0],
+            8: signed_div(7, (-3) & MASK64)[1],
+            9: signed_div((-7) & MASK64, 3)[0],
+            10: signed_div((-7) & MASK64, 3)[1],
+            11: 0,
+            12: 7,
+            13: RA_EVENT_D,
+        },
+    ),
+    MMIXTest(
+        "integer-divide-overflow-status",
+        b"".join(
+            [
+                *set_octa(1, 0x8000000000000000),
+                *set_octa(2, MASK64),
+                insn(0x1c, 3, 1, 2),      # DIV r3,r1,r2
+                insn(0xfe, 4, 0, 6),      # GET r4,rR
+                insn(0xfe, 5, 0, 21),     # GET r5,rA
+                halt(),
+            ]
+        ),
+        pc=0x2c,
+        regs={3: 0x8000000000000000, 4: 0, 5: RA_EVENT_V},
+    ),
+    MMIXTest(
+        "integer-unsigned-divide",
+        b"".join(
+            [
+                wyde(0xe3, 1, 1),         # SETL r1,1
+                insn(0xf6, 1, 0, 1),      # PUT rD,r1
+                wyde(0xe3, 3, 2),         # SETL r3,2
+                insn(0x1e, 4, 0, 3),      # DIVU r4,r0,r3
+                insn(0xfe, 5, 0, 6),      # GET r5,rR
+                insn(0xfe, 6, 0, 1),      # GET r6,rD
+                wyde(0xe3, 7, 5),         # SETL r7,5
+                insn(0xf6, 1, 0, 7),      # PUT rD,r7
+                wyde(0xe3, 8, 0x1234),    # SETL r8,0x1234
+                insn(0x1e, 9, 8, 7),      # DIVU r9,r8,r7
+                insn(0xfe, 10, 0, 6),     # GET r10,rR
+                wyde(0xe3, 11, 1),        # SETL r11,1
+                insn(0xf6, 1, 0, 11),     # PUT rD,r11
+                insn(0x1f, 12, 0, 2),     # DIVUI r12,r0,2
+                insn(0xfe, 13, 0, 6),     # GET r13,rR
+                halt(),
+            ]
+        ),
+        pc=0x3c,
+        regs={
+            4: unsigned_div(1, 0, 2)[0],
+            5: unsigned_div(1, 0, 2)[1],
+            6: 1,
+            9: 5,
+            10: 0x1234,
+            12: unsigned_div(1, 0, 2)[0],
+            13: unsigned_div(1, 0, 2)[1],
+        },
+    ),
+    MMIXTest(
+        "bit-mux",
+        b"".join(
+            [
+                *set_octa(1, 0xff00ff00ff00ff00),
+                insn(0xf6, 5, 0, 1),      # PUT rM,r1
+                *set_octa(2, MASK64),
+                *set_octa(3, 0x123456789abcdef0),
+                insn(0xd8, 4, 2, 3),      # MUX r4,r2,r3
+                insn(0xd9, 5, 3, 0xaa),   # MUXI r5,r3,0xaa
+                insn(0xf7, 5, 0, 0),      # PUTI rM,0
+                insn(0xd8, 6, 2, 3),      # MUX r6,r2,r3
+                *set_octa(7, MASK64),
+                insn(0xf6, 5, 0, 7),      # PUT rM,r7
+                insn(0xd8, 8, 2, 3),      # MUX r8,r2,r3
+                insn(0xfe, 9, 0, 5),      # GET r9,rM
+                halt(),
+            ]
+        ),
+        pc=0x60,
+        regs={
+            4: mux(MASK64, 0x123456789abcdef0, 0xff00ff00ff00ff00),
+            5: mux(0x123456789abcdef0, 0xaa, 0xff00ff00ff00ff00),
+            6: 0x123456789abcdef0,
+            8: MASK64,
+            9: MASK64,
+        },
+    ),
+    MMIXTest(
         "integer-overflow-status",
         b"".join(
             [
@@ -1781,8 +1986,8 @@ EXPECTED_FAILURES = [
     ),
     MMIXExpectedFailure(
         "unknown-opcode",
-        insn(0x18, 0, 0, 0),             # MUL is still unknown
-        ("MMIX unknown opcode 0x18", "MMIX illegal instruction"),
+        insn(0x34, 0, 0, 0),             # NEG is still unknown
+        ("MMIX unknown opcode 0x34", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
         "unsupported-save",
