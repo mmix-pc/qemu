@@ -1043,6 +1043,22 @@ TESTS = [
         },
     ),
     MMIXTest(
+        "memory-store-constant-octa",
+        b"".join(
+            [
+                wyde(0xe3, 1, 0x02a0),    # SETL r1,0x2a0
+                wyde(0xe3, 2, 8),         # SETL r2,8
+                insn(0xb4, 0x5a, 1, 2),   # STCO 0x5a,r1,r2
+                insn(0x8e, 3, 1, 2),      # LDOU r3,r1,r2
+                insn(0xb5, 0xa5, 1, 16),  # STCOI 0xa5,r1,16
+                insn(0x8f, 4, 1, 16),     # LDOUI r4,r1,16
+                halt(),
+            ]
+        ),
+        pc=0x18,
+        regs={3: 0x5a, 4: 0xa5},
+    ),
+    MMIXTest(
         "memory-load-extension",
         b"".join(
             [
@@ -1773,6 +1789,57 @@ TESTS = [
         regs={1: 5, 2: 5, 3: MASK64, 4: MASK64 - 4, 5: 0},
     ),
     MMIXTest(
+        "signed-negate",
+        b"".join(
+            [
+                wyde(0xe3, 1, 5),         # SETL r1,5
+                wyde(0xe3, 2, 2),         # SETL r2,2
+                insn(0x34, 3, 10, 1),     # NEG r3,10,r1
+                insn(0x35, 4, 1, 2),      # NEGI r4,1,2
+                *set_octa(5, 0x8000000000000000),
+                insn(0x34, 6, 0, 5),      # NEG r6,0,r5
+                insn(0xfe, 7, 0, 21),     # GET r7,rA
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={
+            3: 5,
+            4: MASK64,
+            6: 0x8000000000000000,
+            7: RA_EVENT_V,
+        },
+    ),
+    MMIXTest(
+        "enabled-signed-negate-overflow-trip",
+        program_with_handler(
+            [
+                *set_octa(1, 0x8000000000000000),
+                wyde(0xe3, 2, 1),                         # SETL r2,1
+                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
+                insn(0x34, 3, 0, 1),                      # NEG r3,0,r1
+            ],
+            32,
+            [
+                insn(0xfe, 40, 0, 24),                    # GET r40,rW
+                insn(0xfe, 41, 0, 25),                    # GET r41,rX
+                insn(0xfe, 42, 0, 26),                    # GET r42,rY
+                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
+                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                halt(),
+            ],
+        ),
+        pc=0x34,
+        regs={
+            40: 0x20,
+            41: 0x8000000034030001,
+            42: 0,
+            43: 0x8000000000000000,
+            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+        },
+    ),
+    MMIXTest(
         "low-risk-shifts",
         b"".join(
             [
@@ -1801,6 +1868,61 @@ TESTS = [
             8: 0x7ffffffffffffffc,
             9: 0,
             10: 1,
+        },
+    ),
+    MMIXTest(
+        "signed-shift-left",
+        b"".join(
+            [
+                wyde(0xe3, 1, 2),         # SETL r1,2
+                wyde(0xe3, 2, 4),         # SETL r2,4
+                insn(0x39, 3, 1, 4),      # SLI r3,r1,4
+                insn(0x38, 4, 1, 2),      # SL r4,r1,r2
+                insn(0x39, 5, 1, 62),     # SLI r5,r1,62
+                wyde(0xe3, 6, 64),        # SETL r6,64
+                insn(0x38, 7, 1, 6),      # SL r7,r1,r6
+                insn(0x39, 8, 0, 64),     # SLI r8,r0,64
+                insn(0xfe, 9, 0, 21),     # GET r9,rA
+                halt(),
+            ]
+        ),
+        pc=0x24,
+        regs={
+            3: 32,
+            4: 32,
+            5: 0x8000000000000000,
+            7: 0,
+            8: 0,
+            9: RA_EVENT_V,
+        },
+    ),
+    MMIXTest(
+        "enabled-signed-shift-left-overflow-trip",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 2),                         # SETL r1,2
+                wyde(0xe3, 2, 62),                        # SETL r2,62
+                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
+                insn(0x38, 3, 1, 2),                      # SL r3,r1,r2
+            ],
+            32,
+            [
+                insn(0xfe, 40, 0, 24),                    # GET r40,rW
+                insn(0xfe, 41, 0, 25),                    # GET r41,rX
+                insn(0xfe, 42, 0, 26),                    # GET r42,rY
+                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
+                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                halt(),
+            ],
+        ),
+        pc=0x34,
+        regs={
+            40: 0x14,
+            41: 0x8000000038030102,
+            42: 2,
+            43: 62,
+            44: RA_EVENT_V << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
@@ -2628,11 +2750,6 @@ EXPECTED_FAILURES = [
         "invalid-resume-fields",
         insn(0xf9, 1, 0, 0),             # RESUME with nonzero X
         ("MMIX invalid RESUME x=1 y=0 z=0", "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "unknown-opcode",
-        insn(0x34, 0, 0, 0),             # NEG is still unknown
-        ("MMIX unknown opcode 0x34", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
         "invalid-save-fields",

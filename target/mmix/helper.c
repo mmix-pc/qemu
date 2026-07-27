@@ -709,6 +709,29 @@ uint64_t helper_mmix_divu(CPUMMIXState *env, uint64_t y, uint64_t z)
     return quotient;
 }
 
+uint64_t helper_mmix_sl(CPUMMIXState *env, uint32_t insn, uint64_t y,
+                        uint64_t z)
+{
+    uint64_t result;
+    bool overflow;
+
+    if (z >= 64) {
+        result = 0;
+        overflow = y != 0;
+    } else {
+        __int128 product = (__int128)(int64_t)y * ((__int128)1 << z);
+
+        result = y << z;
+        overflow = product < (__int128)INT64_MIN ||
+                   product > (__int128)INT64_MAX;
+    }
+
+    if (overflow) {
+        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+    }
+    return result;
+}
+
 static uint64_t mmix_lane_difference(uint64_t y, uint64_t z,
                                      unsigned lane_bits)
 {

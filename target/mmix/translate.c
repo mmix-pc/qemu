@@ -43,6 +43,7 @@ typedef enum MMIXCompareOp {
 } MMIXCompareOp;
 
 typedef enum MMIXShiftOp {
+    MMIX_SHIFT_SL,
     MMIX_SHIFT_SLU,
     MMIX_SHIFT_SR,
     MMIX_SHIFT_SRU,
@@ -379,6 +380,16 @@ static bool gen_addsub_checked(DisasContext *ctx, arg_xyz *a, bool sub,
     return true;
 }
 
+static bool gen_neg_checked(DisasContext *ctx, arg_xyz *a, bool immediate)
+{
+    TCGv_i64 val = tcg_temp_new_i64();
+
+    gen_helper_mmix_sub(val, tcg_env, tcg_constant_i32(ctx->insn),
+                        tcg_constant_i64(a->y), gen_load_z(a, immediate));
+    gen_store_reg(a->x, val);
+    return true;
+}
+
 static bool trans_ADD(DisasContext *ctx, arg_xyz *a)
 {
     return gen_addsub_checked(ctx, a, false, false);
@@ -607,9 +618,15 @@ static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftOp op,
     TCGv_i64 safe_count = tcg_temp_new_i64();
     TCGv_i64 lhs = gen_load_reg(a->y);
 
-    tcg_gen_andi_i64(safe_count, count, 63);
+    if (op != MMIX_SHIFT_SL) {
+        tcg_gen_andi_i64(safe_count, count, 63);
+    }
 
     switch (op) {
+    case MMIX_SHIFT_SL:
+        gen_helper_mmix_sl(val, tcg_env, tcg_constant_i32(ctx->insn),
+                           lhs, count);
+        break;
     case MMIX_SHIFT_SLU:
         tcg_gen_shl_i64(val, lhs, safe_count);
         tcg_gen_movcond_i64(TCG_COND_LTU, val, count, tcg_constant_i64(64),
@@ -683,9 +700,29 @@ static bool trans_NEGU(DisasContext *ctx, arg_xyz *a)
     return gen_negu(ctx, a, false);
 }
 
+static bool trans_NEG(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_neg_checked(ctx, a, false);
+}
+
 static bool trans_NEGUI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_negu(ctx, a, true);
+}
+
+static bool trans_NEGI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_neg_checked(ctx, a, true);
+}
+
+static bool trans_SL(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SL, false);
+}
+
+static bool trans_SLI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_shift(ctx, a, MMIX_SHIFT_SL, true);
 }
 
 static bool trans_SLU(DisasContext *ctx, arg_xyz *a)
@@ -1538,14 +1575,28 @@ static bool trans_PREGOI(DisasContext *ctx, arg_xyz *a)
     return true;
 }
 
-static bool gen_store_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
-                          MemOp memop, uint64_t align_mask)
+static bool gen_store_value(DisasContext *ctx, arg_xyz *a, bool immediate,
+                            MemOp memop, uint64_t align_mask, TCGv_i64 val)
 {
     TCGv_i64 addr = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, align_mask);
-    tcg_gen_qemu_st_i64(gen_load_reg(a->x), addr, 0, memop);
+    tcg_gen_qemu_st_i64(val, addr, 0, memop);
     return true;
+}
+
+static bool gen_store_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
+                          MemOp memop, uint64_t align_mask)
+{
+    return gen_store_value(ctx, a, immediate, memop, align_mask,
+                           gen_load_reg(a->x));
+}
+
+static bool gen_store_const_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
+                                MemOp memop, uint64_t align_mask)
+{
+    return gen_store_value(ctx, a, immediate, memop, align_mask,
+                           tcg_constant_i64(a->x));
 }
 
 static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
@@ -1637,6 +1688,16 @@ static bool trans_STOU(DisasContext *ctx, arg_xyz *a)
 static bool trans_STOUI(DisasContext *ctx, arg_xyz *a)
 {
     return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
+}
+
+static bool trans_STCO(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_const_mem(ctx, a, false, MO_BEUQ, 7);
+}
+
+static bool trans_STCOI(DisasContext *ctx, arg_xyz *a)
+{
+    return gen_store_const_mem(ctx, a, true, MO_BEUQ, 7);
 }
 
 static bool trans_STUNC(DisasContext *ctx, arg_xyz *a)
