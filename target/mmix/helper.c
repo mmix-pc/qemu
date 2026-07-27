@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "accel/tcg/cpu-loop.h"
+#include "accel/tcg/cpu-ldst.h"
 #include "exec/log.h"
 #include "exec/helper-proto.h"
 #include "fpu/softfloat.h"
@@ -73,8 +74,62 @@ static bool mmix_cpu_local_room(CPUMMIXState *env, unsigned new_rl)
 {
     unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
     unsigned stack = env->sregs[MMIX_SREG_RS] >> 3;
+    unsigned distance = (stack - base) & env->lring_mask;
 
-    return ((stack - base - new_rl) & env->lring_mask) != 0;
+    if (distance == 0 && env->sregs[MMIX_SREG_RO] == env->sregs[MMIX_SREG_RS]) {
+        distance = env->lring_size;
+    }
+
+    return new_rl < distance;
+}
+
+static unsigned mmix_cpu_stack_depth(CPUMMIXState *env)
+{
+    unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
+    unsigned stack = env->sregs[MMIX_SREG_RS] >> 3;
+
+    return (base - stack) & env->lring_mask;
+}
+
+static void mmix_cpu_stack_store(CPUMMIXState *env)
+{
+    uintptr_t ra = GETPC();
+    uint64_t addr = env->sregs[MMIX_SREG_RS];
+    unsigned idx = (addr >> 3) & env->lring_mask;
+
+    cpu_stq_be_data_ra(env, addr, env->local_regs[idx], ra);
+    env->sregs[MMIX_SREG_RS] = addr + 8;
+}
+
+static void mmix_cpu_stack_load(CPUMMIXState *env)
+{
+    uintptr_t ra = GETPC();
+    uint64_t addr = env->sregs[MMIX_SREG_RS] - 8;
+    unsigned idx = (addr >> 3) & env->lring_mask;
+
+    env->sregs[MMIX_SREG_RS] = addr;
+    env->local_regs[idx] = cpu_ldq_be_data_ra(env, addr, ra);
+}
+
+static void mmix_cpu_fill_stack(CPUMMIXState *env)
+{
+    if (env->sregs[MMIX_SREG_RS] <= MMIX_INITIAL_STACK) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX register stack underflow during POP "
+                      "rO=0x%" PRIx64 " rS=0x%" PRIx64 " depth=%u\n",
+                      env->sregs[MMIX_SREG_RO],
+                      env->sregs[MMIX_SREG_RS],
+                      mmix_cpu_stack_depth(env));
+        helper_raise_illegal_instruction(env);
+    }
+    mmix_cpu_stack_load(env);
+}
+
+static void mmix_cpu_ensure_local_room(CPUMMIXState *env, unsigned new_rl)
+{
+    while (!mmix_cpu_local_room(env, new_rl)) {
+        mmix_cpu_stack_store(env);
+    }
 }
 
 static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
@@ -87,12 +142,7 @@ static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
     if (new_rl <= old_rl) {
         return;
     }
-    if (!mmix_cpu_local_room(env, new_rl)) {
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX register stack overflow while growing rL to %u\n",
-                      new_rl);
-        helper_raise_illegal_instruction(env);
-    }
+    mmix_cpu_ensure_local_room(env, new_rl);
     for (i = old_rl; i < new_rl; i++) {
         env->local_regs[mmix_cpu_local_index(env, i)] = 0;
     }
@@ -224,12 +274,7 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 
     if (x >= rg) {
         hole = old_rl;
-        if (!mmix_cpu_local_room(env, old_rl + 1)) {
-            qemu_log_mask(LOG_UNIMP,
-                          "MMIX register stack overflow during PUSH x=%u\n",
-                          x);
-            helper_raise_illegal_instruction(env);
-        }
+        mmix_cpu_ensure_local_room(env, old_rl + 1);
         env->local_regs[mmix_cpu_local_index(env, hole)] = old_rl;
         pushed = old_rl + 1;
     } else {
@@ -249,16 +294,14 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
 {
     unsigned old_rl = mmix_cpu_get_rl(env);
-    unsigned stack = env->sregs[MMIX_SREG_RS] >> 3;
     unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
     unsigned saved;
     unsigned preserved;
     uint64_t output = 0;
     uint64_t dest;
 
-    if (((base - stack) & env->lring_mask) == 0) {
-        qemu_log_mask(LOG_UNIMP, "MMIX register stack underflow during POP\n");
-        helper_raise_illegal_instruction(env);
+    if (mmix_cpu_stack_depth(env) == 0) {
+        mmix_cpu_fill_stack(env);
     }
 
     if (x != 0 && x <= old_rl) {
@@ -266,11 +309,8 @@ uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
     }
 
     saved = env->local_regs[(base - 1) & env->lring_mask] & 0xff;
-    if (((base - stack) & env->lring_mask) <= saved) {
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX register stack fill required during POP saved=%u\n",
-                      saved);
-        helper_raise_illegal_instruction(env);
+    while (mmix_cpu_stack_depth(env) <= saved) {
+        mmix_cpu_fill_stack(env);
     }
 
     if (x != 0) {

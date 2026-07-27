@@ -121,6 +121,8 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     cpu->env.sregs[MMIX_SREG_RV] = MMIX_INITIAL_RV;
     cpu->env.sregs[MMIX_SREG_RG] = MMIX_INITIAL_RG;
     cpu->env.sregs[MMIX_SREG_RL] = MMIX_INITIAL_RL;
+    cpu->env.sregs[MMIX_SREG_RO] = MMIX_INITIAL_STACK;
+    cpu->env.sregs[MMIX_SREG_RS] = MMIX_INITIAL_STACK;
     cpu->env.lring_size = MMIX_LOCAL_REGS;
     cpu->env.lring_mask = MMIX_LOCAL_REGS - 1;
     cs->exception_index = -1;

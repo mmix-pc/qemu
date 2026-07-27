@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 MASK64 = (1 << 64) - 1
+INITIAL_STACK = 0x00010000
 RA_EVENT_X = 0x01
 RA_EVENT_Z = 0x02
 RA_EVENT_O = 0x08
@@ -58,6 +59,45 @@ def program_with_handler(prefix, handler_addr, handler):
         raise ValueError("handler address is not instruction-aligned")
     padding = insn(0xfd, 0, 0, 0) * ((handler_addr - len(prefix)) // 4)
     return prefix + padding + handler
+
+
+def register_stack_spill_fill_program(depth):
+    sub_base = 0x20
+    body_size = 6 * 4
+    program = [
+        branch(0xf2, 31, sub_base // 4),   # PUSHJ 31,sub0
+        insn(0x21, 60, 31, 0),             # ADDI r60,r31,0
+        insn(0xfe, 50, 0, 10),             # GET r50,rO
+        insn(0xfe, 51, 0, 11),             # GET r51,rS
+        halt(),
+    ]
+
+    program.extend([insn(0xfd, 0, 0, 0)] * ((sub_base - len(program) * 4) // 4))
+
+    for level in range(depth):
+        program.extend(
+            [
+                insn(0xfe, 40 + level, 0, 4),  # GET global,rJ
+                wyde(0xe3, 31, level + 1),     # SETL r31,level+1
+                branch(0xf2, 31, 4),           # PUSHJ 31,next
+                insn(0x21, 0, 31, 1),          # ADDI r0,r31,1
+                insn(0xf6, 4, 0, 40 + level),  # PUT rJ,global
+                insn(0xf8, 1, 0, 0),           # POP 1,0
+            ]
+        )
+
+    program.extend(
+        [
+            wyde(0xe3, 0, 1),                  # SETL r0,1
+            insn(0xf8, 1, 0, 0),               # POP 1,0
+        ]
+    )
+
+    image = b"".join(program)
+    expected_image_len = sub_base + depth * body_size + 2 * 4
+    if len(image) != expected_image_len:
+        raise AssertionError("register-stack spill/fill image layout changed")
+    return image, 4 * 4, depth + 1
 
 
 def lane_difference(y, z, lane_bits):
@@ -121,6 +161,9 @@ class MMIXExpectedFailure:
     program: bytes
     patterns: tuple[str, ...]
     absent: tuple[str, ...] = ("MMIX test exit",)
+
+
+REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
 
 
 TESTS = [
@@ -527,6 +570,16 @@ TESTS = [
         regs={0: 8},
     ),
     MMIXTest(
+        "register-stack-spill-fill",
+        REGISTER_STACK_SPILL_FILL[0],
+        pc=REGISTER_STACK_SPILL_FILL[1],
+        regs={
+            50: INITIAL_STACK,
+            51: INITIAL_STACK,
+            60: REGISTER_STACK_SPILL_FILL[2],
+        },
+    ),
+    MMIXTest(
         "load-store",
         b"".join(
             [
@@ -743,6 +796,8 @@ TESTS = [
         pc=0x80,
         regs={
             **{33 + reg: 0 for reg in range(32)},
+            33 + 10: INITIAL_STACK,
+            33 + 11: INITIAL_STACK,
             33 + 13: 0x8000000500000000,
             33 + 14: 0x8000000600000000,
             33 + 15: MASK64,
