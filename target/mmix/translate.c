@@ -1300,12 +1300,22 @@ static bool trans_PUSHGOI(DisasContext *ctx, arg_xyz *a)
 
 static bool trans_SAVE(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_mmix_unsupported(ctx, "SAVE", a);
+    if (a->y != 0 || a->z != 0) {
+        return gen_mmix_unsupported(ctx, "SAVE", a);
+    }
+
+    gen_helper_mmix_save(tcg_env, tcg_constant_i32(a->x));
+    return true;
 }
 
 static bool trans_UNSAVE(DisasContext *ctx, arg_xyz *a)
 {
-    return gen_mmix_unsupported(ctx, "UNSAVE", a);
+    if (a->x != 0 || a->y != 0) {
+        return gen_mmix_unsupported(ctx, "UNSAVE", a);
+    }
+
+    gen_helper_mmix_unsave(tcg_env, tcg_constant_i32(a->z));
+    return true;
 }
 
 static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,

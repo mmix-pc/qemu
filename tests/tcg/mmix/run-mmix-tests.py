@@ -101,6 +101,106 @@ def register_stack_spill_fill_program(depth):
     return image, 4 * 4, depth + 1
 
 
+def register_stack_save_unsave_program(depth):
+    sub_base = 0x20
+    body_size = 6 * 4
+    program = [
+        branch(0xf2, 31, sub_base // 4),   # PUSHJ 31,sub0
+        insn(0x21, 60, 31, 0),             # ADDI r60,r31,0
+        insn(0xfe, 50, 0, 10),             # GET r50,rO
+        insn(0xfe, 51, 0, 11),             # GET r51,rS
+        halt(),
+    ]
+
+    program.extend([insn(0xfd, 0, 0, 0)] * ((sub_base - len(program) * 4) // 4))
+
+    for level in range(depth):
+        program.extend(
+            [
+                insn(0xfe, 40 + level, 0, 4),  # GET global,rJ
+                wyde(0xe3, 31, level + 1),     # SETL r31,level+1
+                branch(0xf2, 31, 4),           # PUSHJ 31,next
+                insn(0x21, 0, 31, 1),          # ADDI r0,r31,1
+                insn(0xf6, 4, 0, 40 + level),  # PUT rJ,global
+                insn(0xf8, 1, 0, 0),           # POP 1,0
+            ]
+        )
+
+    program.extend(
+        [
+            wyde(0xe3, 0, 0x55),               # SETL r0,0x55
+            insn(0xfa, 32, 0, 0),              # SAVE r32,0
+            wyde(0xe3, 0, 0xaa),               # SETL r0,0xaa
+            insn(0xfb, 0, 0, 32),              # UNSAVE 0,r32
+            insn(0xf8, 1, 0, 0),               # POP 1,0
+        ]
+    )
+
+    image = b"".join(program)
+    expected_image_len = sub_base + depth * body_size + 5 * 4
+    if len(image) != expected_image_len:
+        raise AssertionError("register-stack save/unsave image layout changed")
+    return image, 4 * 4, 0x55 + depth
+
+
+def save_state_after_save_program():
+    program = [
+        wyde(0xe3, 0, 0x11),               # SETL r0,0x11
+        wyde(0xe3, 1, 0x22),               # SETL r1,0x22
+        insn(0xfa, 32, 0, 0),              # SAVE r32,0
+        insn(0xfe, 33, 0, 20),             # GET r33,rL
+        insn(0xfe, 34, 0, 10),             # GET r34,rO
+        insn(0xfe, 35, 0, 11),             # GET r35,rS
+        insn(0x21, 36, 32, 0),             # ADDI r36,r32,0
+        halt(),
+    ]
+    return b"".join(program), (len(program) - 1) * 4
+
+
+def save_unsave_roundtrip_program():
+    program = [
+        wyde(0xe3, 0, 0x11),               # SETL r0,0x11
+        wyde(0xe3, 1, 0x22),               # SETL r1,0x22
+        wyde(0xe3, 2, 0x33),               # SETL r2,0x33
+        *set_octa(40, 0x1111222233334444),
+        *set_octa(41, 0x5555666677778888),
+        *set_octa(42, 0x0000000000001234),
+        insn(0xf6, 4, 0, 42),              # PUT rJ,r42
+        insn(0xf7, 5, 0, 0x5a),            # PUTI rM,0x5a
+        insn(0xf7, 23, 0, 0x6b),           # PUTI rP,0x6b
+        *set_octa(43, 0x000000000003ffff),
+        insn(0xf6, 21, 0, 43),             # PUT rA,r43
+        insn(0xfa, 32, 0, 0),              # SAVE r32,0
+        insn(0x21, 33, 32, 0),             # ADDI r33,r32,0
+        wyde(0xe3, 40, 0),                 # SETL r40,0
+        wyde(0xe3, 41, 0),                 # SETL r41,0
+        insn(0xf7, 4, 0, 0),               # PUTI rJ,0
+        insn(0xf7, 5, 0, 0),               # PUTI rM,0
+        insn(0xf7, 23, 0, 0),              # PUTI rP,0
+        insn(0xf7, 21, 0, 0),              # PUTI rA,0
+        wyde(0xe3, 0, 0xee),               # SETL r0,0xee
+        wyde(0xe3, 1, 0xff),               # SETL r1,0xff
+        wyde(0xe3, 2, 0xaa),               # SETL r2,0xaa
+        insn(0xfb, 0, 0, 33),              # UNSAVE 0,r33
+        insn(0x21, 50, 0, 0),              # ADDI r50,r0,0
+        insn(0x21, 51, 1, 0),              # ADDI r51,r1,0
+        insn(0x21, 52, 2, 0),              # ADDI r52,r2,0
+        insn(0xfe, 53, 0, 4),              # GET r53,rJ
+        insn(0xfe, 54, 0, 5),              # GET r54,rM
+        insn(0xfe, 55, 0, 23),             # GET r55,rP
+        insn(0xfe, 56, 0, 21),             # GET r56,rA
+        insn(0xfe, 57, 0, 20),             # GET r57,rL
+        insn(0xfe, 58, 0, 10),             # GET r58,rO
+        insn(0xfe, 59, 0, 11),             # GET r59,rS
+        insn(0x21, 60, 40, 0),             # ADDI r60,r40,0
+        insn(0x21, 61, 41, 0),             # ADDI r61,r41,0
+        insn(0x21, 62, 32, 0),             # ADDI r62,r32,0
+        insn(0x21, 63, 33, 0),             # ADDI r63,r33,0
+        halt(),
+    ]
+    return b"".join(program), (len(program) - 1) * 4
+
+
 def lane_difference(y, z, lane_bits):
     result = 0
     mask = (1 << lane_bits) - 1
@@ -191,6 +291,9 @@ class MMIXExpectedFailure:
 
 
 REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
+REGISTER_STACK_SAVE_UNSAVE = register_stack_save_unsave_program(10)
+SAVE_STATE_AFTER_SAVE = save_state_after_save_program()
+SAVE_UNSAVE_ROUNDTRIP = save_unsave_roundtrip_program()
 
 
 TESTS = [
@@ -604,6 +707,49 @@ TESTS = [
             50: INITIAL_STACK,
             51: INITIAL_STACK,
             60: REGISTER_STACK_SPILL_FILL[2],
+        },
+    ),
+    MMIXTest(
+        "save-state-after-save",
+        SAVE_STATE_AFTER_SAVE[0],
+        pc=SAVE_STATE_AFTER_SAVE[1],
+        regs={
+            32: INITIAL_STACK + 0x778,
+            33: 0,
+            34: INITIAL_STACK + 0x780,
+            35: INITIAL_STACK + 0x780,
+            36: INITIAL_STACK + 0x778,
+        },
+    ),
+    MMIXTest(
+        "save-unsave-roundtrip",
+        SAVE_UNSAVE_ROUNDTRIP[0],
+        pc=SAVE_UNSAVE_ROUNDTRIP[1],
+        regs={
+            50: 0x11,
+            51: 0x22,
+            52: 0x33,
+            53: 0x1234,
+            54: 0x5a,
+            55: 0x6b,
+            56: 0x3ffff,
+            57: 3,
+            58: INITIAL_STACK,
+            59: INITIAL_STACK,
+            60: 0x1111222233334444,
+            61: 0x5555666677778888,
+            62: 0,
+            63: 0,
+        },
+    ),
+    MMIXTest(
+        "register-stack-save-unsave-spill-fill",
+        REGISTER_STACK_SAVE_UNSAVE[0],
+        pc=REGISTER_STACK_SAVE_UNSAVE[1],
+        regs={
+            50: INITIAL_STACK,
+            51: INITIAL_STACK,
+            60: REGISTER_STACK_SAVE_UNSAVE[2],
         },
     ),
     MMIXTest(
@@ -2101,13 +2247,18 @@ EXPECTED_FAILURES = [
         ("MMIX unknown opcode 0x34", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "unsupported-save",
-        insn(0xfa, 32, 0, 0),            # SAVE r32,0
+        "invalid-save-fields",
+        insn(0xfa, 32, 1, 0),            # SAVE r32,1,0
         ("MMIX decoded unimplemented SAVE", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "unsupported-unsave",
-        insn(0xfb, 0, 0, 32),            # UNSAVE 0,r32
+        "invalid-save-local-destination",
+        insn(0xfa, 0, 0, 0),             # SAVE r0,0
+        ("MMIX invalid SAVE local destination 0", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "invalid-unsave-fields",
+        insn(0xfb, 1, 0, 32),            # UNSAVE 1,0,r32
         ("MMIX decoded unimplemented UNSAVE", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
