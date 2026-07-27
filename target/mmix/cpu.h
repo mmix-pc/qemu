@@ -66,7 +66,19 @@ enum {
     EXCP_MMIX_ILLEGAL = 1,
     EXCP_MMIX_INTERRUPT = 2,
     EXCP_MMIX_ARITHMETIC_TRIP = 3,
+    EXCP_MMIX_DYNAMIC_TRAP = 4,
 };
+
+#define MMIX_RQ_PROGRAM_SHIFT 32
+#define MMIX_RQ_PROGRAM_R     (1ULL << 39)
+#define MMIX_RQ_PROGRAM_W     (1ULL << 38)
+#define MMIX_RQ_PROGRAM_X     (1ULL << 37)
+#define MMIX_RQ_PROGRAM_N     (1ULL << 36)
+#define MMIX_RQ_PROGRAM_K     (1ULL << 35)
+#define MMIX_RQ_PROGRAM_B     (1ULL << 34)
+#define MMIX_RQ_PROGRAM_S     (1ULL << 33)
+#define MMIX_RQ_PROGRAM_P     (1ULL << 32)
+#define MMIX_RQ_PROGRAM_MASK  (0xffULL << MMIX_RQ_PROGRAM_SHIFT)
 
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)
@@ -98,6 +110,7 @@ typedef struct CPUArchState {
     uint32_t lring_size;
     uint32_t lring_mask;
     uint32_t arithmetic_trip_event;
+    uint64_t program_exception_causes;
 
     struct {} end_reset_fields;
 } CPUMMIXState;
@@ -127,6 +140,9 @@ int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *buf, int reg);
 uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
+bool mmix_cpu_is_privileged(CPUMMIXState *env);
+void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
+void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);
 
 void mmix_translate_init(void);
 void mmix_translate_code(CPUState *cs, TranslationBlock *tb,

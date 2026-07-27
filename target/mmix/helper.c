@@ -212,6 +212,27 @@ void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val)
     env->sregs[MMIX_SREG_RL] = new_rl;
 }
 
+bool mmix_cpu_is_privileged(CPUMMIXState *env)
+{
+    return (int64_t)env->pc < 0 ||
+           (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_K) == 0;
+}
+
+void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes)
+{
+    env->program_exception_causes |= causes & MMIX_RQ_PROGRAM_MASK;
+    env->sregs[MMIX_SREG_RQ] |= causes & MMIX_RQ_PROGRAM_MASK;
+}
+
+void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes)
+{
+    CPUState *cs = env_cpu(env);
+
+    mmix_cpu_record_program_exception(env, causes);
+    cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
+    cpu_loop_exit(cs);
+}
+
 uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
 {
     return mmix_cpu_read_reg(env, reg);
@@ -1307,6 +1328,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
 {
     CPUMMIXState *env = cpu_env(cs);
     uint32_t event;
+    uint64_t causes;
     hwaddr handler;
 
     switch (cs->exception_index) {
@@ -1326,6 +1348,25 @@ void mmix_cpu_do_interrupt(CPUState *cs)
         env->pc = handler;
         env->npc = handler + 4;
         env->arithmetic_trip_event = 0;
+        cs->exception_index = -1;
+        break;
+    case EXCP_MMIX_DYNAMIC_TRAP:
+        causes = env->program_exception_causes & MMIX_RQ_PROGRAM_MASK;
+        handler = env->sregs[MMIX_SREG_RTT];
+        qemu_log_mask(CPU_LOG_INT,
+                      "MMIX dynamic trap causes=0x%016" PRIx64
+                      " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
+                      causes, env->pc, handler);
+        env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
+        env->sregs[MMIX_SREG_RWW] = env->npc;
+        env->sregs[MMIX_SREG_RXX] = causes;
+        env->sregs[MMIX_SREG_RYY] = 0;
+        env->sregs[MMIX_SREG_RZZ] = 0;
+        env->sregs[MMIX_SREG_RK] = 0;
+        mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+        env->pc = handler;
+        env->npc = handler + 4;
+        env->program_exception_causes = 0;
         cs->exception_index = -1;
         break;
     default:
