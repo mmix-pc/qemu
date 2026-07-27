@@ -21,9 +21,15 @@ RA_EVENT_V = 0x40
 RA_EVENT_D = 0x80
 RA_ENABLE_SHIFT = 8
 RQ_PROGRAM_K = 1 << 35
+RQ_PROGRAM_R = 1 << 39
 RQ_PROGRAM_W = 1 << 38
+RQ_PROGRAM_X = 1 << 37
+RQ_PROGRAM_N = 1 << 36
 VM_PAGE_TABLE = 0x2000
 VM_RV_PAGE0 = 0x11110d0000002000
+VM_PAGE_TABLE_ROOT2 = 0x4000
+VM_RV_ROOT2 = 0x11110d0000004000
+NEGATIVE_HANDLER = 0x8000000000000080
 
 
 def insn(op, x=0, y=0, z=0):
@@ -818,6 +824,195 @@ TESTS = [
         regs={40: RQ_PROGRAM_W, 41: RQ_PROGRAM_W, 42: 0x40, 43: 0},
     ),
     MMIXTest(
+        "virtual-translation-nonidentity-load",
+        b"".join(
+            [
+                *set_octa(1, VM_PAGE_TABLE_ROOT2),
+                wyde(0xe3, 2, 7),         # SETL r2,RWX PTE for page 0
+                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
+                *set_octa(3, 0x0000000000006007),
+                insn(0xaf, 3, 1, 8),      # STOUI r3,r1,8
+                *set_octa(4, 0x0000000000006000),
+                *set_octa(5, 0x0102030405060708),
+                insn(0xae, 5, 4, 0),      # STOU r5,r4,r0
+                *set_octa(6, VM_RV_ROOT2),
+                insn(0xf6, 18, 0, 6),     # PUT rV,r6
+                *set_octa(7, 0x0000000000002000),
+                insn(0x8e, 8, 7, 0),      # LDOU r8,r7,r0
+                halt(),
+            ]
+        ),
+        pc=0x78,
+        regs={8: 0x0102030405060708},
+    ),
+    MMIXTest(
+        "virtual-translation-read-protection",
+        program_with_handler(
+            [
+                *set_octa(1, NEGATIVE_HANDLER),
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, VM_PAGE_TABLE),
+                wyde(0xe3, 3, 3),         # SETL r3,WX PTE for page 0
+                insn(0xae, 3, 2, 0),      # STOU r3,r2,r0
+                *set_octa(4, VM_RV_PAGE0),
+                insn(0xf6, 18, 0, 4),     # PUT rV,r4
+                wyde(0xe3, 5, 0x0300),    # SETL r5,0x300
+                insn(0x8e, 6, 5, 0),      # LDOU r6,r5,r0
+                wyde(0xe3, 7, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                halt(),
+            ],
+        ),
+        pc=0x800000000000008c,
+        regs={6: 0, 7: 0, 40: RQ_PROGRAM_R, 41: RQ_PROGRAM_R, 42: 0x48},
+    ),
+    MMIXTest(
+        "virtual-translation-execute-protection",
+        program_with_handler(
+            [
+                *set_octa(1, NEGATIVE_HANDLER),
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, VM_PAGE_TABLE),
+                wyde(0xe3, 3, 6),         # SETL r3,RW PTE for page 0
+                insn(0xae, 3, 2, 0),      # STOU r3,r2,r0
+                *set_octa(4, VM_RV_PAGE0),
+                insn(0xf6, 18, 0, 4),     # PUT rV,r4
+                wyde(0xe3, 5, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                halt(),
+            ],
+        ),
+        pc=0x800000000000008c,
+        regs={5: 0, 40: RQ_PROGRAM_X, 41: RQ_PROGRAM_X, 42: 0x44},
+    ),
+    MMIXTest(
+        "virtual-translation-asn-mismatch",
+        program_with_handler(
+            [
+                *set_octa(1, NEGATIVE_HANDLER),
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, VM_PAGE_TABLE_ROOT2),
+                wyde(0xe3, 3, 7),         # SETL r3,RWX PTE for page 0
+                insn(0xae, 3, 2, 0),      # STOU r3,r2,r0
+                *set_octa(4, 0x000000000000600f),
+                insn(0xaf, 4, 2, 8),      # STOUI r4,r2,8
+                *set_octa(5, VM_RV_ROOT2),
+                insn(0xf6, 18, 0, 5),     # PUT rV,r5
+                *set_octa(6, 0x0000000000002000),
+                insn(0x8e, 7, 6, 0),      # LDOU r7,r6,r0
+                wyde(0xe3, 8, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                halt(),
+            ],
+        ),
+        pc=0x800000000000008c,
+        regs={7: 0, 8: 0, 40: RQ_PROGRAM_R, 41: RQ_PROGRAM_R, 42: 0x68},
+    ),
+    MMIXTest(
+        "virtual-translation-invalid-rv",
+        program_with_handler(
+            [
+                *set_octa(1, NEGATIVE_HANDLER),
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, 0x11110c0000002000),
+                insn(0xf6, 18, 0, 2),     # PUT rV,r2
+                wyde(0xe3, 3, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                halt(),
+            ],
+        ),
+        pc=0x800000000000008c,
+        regs={3: 0, 40: RQ_PROGRAM_X, 41: RQ_PROGRAM_X, 42: 0x2c},
+    ),
+    MMIXTest(
+        "negative-address-load-user-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x80),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                *set_octa(3, 0x8000000000000300),
+                insn(0x8e, 4, 3, 0),      # LDOU r4,r3,r0
+                wyde(0xe3, 5, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x90,
+        regs={4: 0, 5: 0, 40: RQ_PROGRAM_N, 41: RQ_PROGRAM_N, 42: 0x30, 43: 0},
+    ),
+    MMIXTest(
+        "negative-address-store-user-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x80),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                *set_octa(3, 0x8000000000000300),
+                wyde(0xe3, 4, 0x00aa),    # SETL r4,0xaa
+                insn(0xae, 4, 3, 0),      # STOU r4,r3,r0
+                wyde(0xe3, 5, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x90,
+        regs={5: 0, 40: RQ_PROGRAM_N, 41: RQ_PROGRAM_N, 42: 0x34, 43: 0},
+    ),
+    MMIXTest(
+        "negative-address-fetch-direct",
+        program_with_handler(
+            [
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                *set_octa(3, 0x8000000000000300),
+                insn(0x9e, 4, 3, 0),      # GO r4,r3,r0
+                wyde(0xe3, 5, 0x00ff),    # skipped
+            ],
+            0x300,
+            [
+                wyde(0xe3, 5, 0x0055),    # SETL r5,0x55
+                halt(),
+            ],
+        ),
+        pc=0x8000000000000304,
+        regs={4: 0x28, 5: 0x55},
+    ),
+    MMIXTest(
         "memory-octa-variants",
         b"".join(
             [
@@ -1161,6 +1356,35 @@ TESTS = [
                 *set_octa(2, RQ_PROGRAM_K),
                 insn(0xf6, 15, 0, 2),     # PUT rK,r2
                 jump(0xfc, 4),            # SYNC 4
+                wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
+            ],
+            0x40,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x50,
+        regs={
+            3: 0,
+            40: RQ_PROGRAM_K,
+            41: RQ_PROGRAM_K,
+            42: 0x20,
+            43: 0,
+        },
+    ),
+    MMIXTest(
+        "privileged-sync7-user-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x40),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                jump(0xfc, 7),            # SYNC 7
                 wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
             ],
             0x40,
