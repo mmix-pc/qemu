@@ -150,6 +150,12 @@ def mmo_line(line):
     return mmo_lop(MMIX_MMO_LOP_LINE, line)
 
 
+def mmo_spec(kind):
+    if not 0 <= kind <= 0xffff:
+        raise ValueError("mmo_spec kind must fit in 16 bits")
+    return mmo_lop(MMIX_MMO_LOP_SPEC, kind)
+
+
 def mmo_post(global_base, globals_):
     if not 32 <= global_base <= 255:
         raise ValueError("mmo_post global base must be in 32..255")
@@ -3023,9 +3029,19 @@ LOADER_FAILURES = [
         ("expected MMIX .mmo lop_stab after postamble", "tetra 5"),
     ),
     MMIXLoaderFailure(
-        "mmo-spec-unsupported",
+        "mmo-spec-unterminated",
         mmo_image([mmo_lop(MMIX_MMO_LOP_SPEC, 1)]),
-        ("unsupported MMIX .mmo lop_spec", "tetra 2"),
+        ("unterminated MMIX .mmo lop_spec", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-spec-invalid-quote",
+        mmo_image([mmo_spec(1), mmo_lop(MMIX_MMO_LOP_QUOTE, 2)]),
+        ("invalid MMIX .mmo lop_quote yz=2 in lop_spec", "tetra 3"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-spec-truncated-quote-payload",
+        mmo_image([mmo_spec(1), mmo_lop(MMIX_MMO_LOP_QUOTE, 1)]),
+        ("truncated MMIX .mmo object", "tetra 3"),
     ),
     MMIXLoaderFailure(
         "mmo-stab-invalid-yz",
@@ -3100,6 +3116,52 @@ MMO_TESTS = [
         ),
         pc=0x24,
         regs={1: 0x55},
+    ),
+    MMIXMMOTest(
+        "mmo-spec-before-code",
+        mmo_image(
+            [
+                mmo_spec(1),
+                struct.pack(">I", 0x11223344),
+                mmo_quote(mmo_lop(MMIX_MMO_LOP_POST, 0)),
+                mmo_loc(0),
+                wyde(0xe3, 1, 0x44),       # SETL r1,0x44
+                halt(),
+            ]
+        ),
+        pc=0x04,
+        regs={1: 0x44},
+    ),
+    MMIXMMOTest(
+        "mmo-spec-between-records",
+        mmo_image(
+            [
+                wyde(0xe3, 1, 0x11),       # SETL r1,0x11
+                mmo_spec(2),
+                struct.pack(">I", 0x55667788),
+                mmo_skip(0),
+                wyde(0xe3, 2, 0x22),       # SETL r2,0x22
+                halt(),
+            ]
+        ),
+        pc=0x08,
+        regs={1: 0x11, 2: 0x22},
+    ),
+    MMIXMMOTest(
+        "mmo-spec-before-postamble",
+        mmo_image(
+            [
+                mmo_loc(0x20),
+                wyde(0xe3, 3, 0x33),       # SETL r3,0x33
+                halt(),
+                mmo_spec(3),
+                struct.pack(">I", 0x99aabbcc),
+                mmo_post(255, {255: 0x20}),
+                mmo_stab_end(),
+            ]
+        ),
+        pc=0x24,
+        regs={3: 0x33, 255: 0x20},
     ),
     MMIXMMOTest(
         "mmo-fixo-load",

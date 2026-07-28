@@ -42,7 +42,10 @@ typedef struct MMIXMMOLoader {
     uint64_t ram_size;
     uint64_t cur_loc;
     uint64_t tetra_index;
+    uint64_t pending_tetra_index;
     ssize_t loaded_size;
+    bool has_pending_tetra;
+    uint8_t pending_tetra[MMIX_MMO_PREAMBLE_SIZE];
 } MMIXMMOLoader;
 
 static bool mmix_read_mmo_preamble(const char *filename,
@@ -110,6 +113,13 @@ static bool mmix_mmo_read_tetra(MMIXMMOLoader *loader,
 {
     size_t size;
 
+    if (loader->has_pending_tetra) {
+        memcpy(tetra, loader->pending_tetra, MMIX_MMO_PREAMBLE_SIZE);
+        loader->tetra_index = loader->pending_tetra_index;
+        loader->has_pending_tetra = false;
+        return true;
+    }
+
     size = fread(tetra, 1, MMIX_MMO_PREAMBLE_SIZE, loader->file);
     if (size == MMIX_MMO_PREAMBLE_SIZE) {
         loader->tetra_index++;
@@ -127,6 +137,16 @@ static bool mmix_mmo_read_tetra(MMIXMMOLoader *loader,
     error_setg(errp, "truncated MMIX .mmo object '%s' at tetra %" PRIu64,
                loader->filename, loader->tetra_index);
     return false;
+}
+
+static void mmix_mmo_unread_tetra(MMIXMMOLoader *loader,
+                                  const uint8_t tetra[MMIX_MMO_PREAMBLE_SIZE])
+{
+    g_assert(!loader->has_pending_tetra);
+
+    memcpy(loader->pending_tetra, tetra, MMIX_MMO_PREAMBLE_SIZE);
+    loader->pending_tetra_index = loader->tetra_index;
+    loader->has_pending_tetra = true;
 }
 
 static bool mmix_mmo_skip_tetras(MMIXMMOLoader *loader, uint8_t count,
@@ -457,6 +477,42 @@ static bool mmix_mmo_fixrx(MMIXMMOLoader *loader,
                                  record_tetra, errp);
 }
 
+static bool mmix_mmo_skip_spec(MMIXMMOLoader *loader, uint64_t record_tetra,
+                               Error **errp)
+{
+    uint8_t tetra[MMIX_MMO_PREAMBLE_SIZE];
+    Error *local_err = NULL;
+
+    while (mmix_mmo_read_tetra(loader, tetra, true, &local_err)) {
+        if (tetra[0] != MMIX_MMO_ESCAPE) {
+            continue;
+        }
+
+        if (tetra[1] != MMIX_MMO_LOP_QUOTE) {
+            mmix_mmo_unread_tetra(loader, tetra);
+            return true;
+        }
+
+        if (mmix_mmo_yz(tetra) != 1) {
+            error_setg(errp, "invalid MMIX .mmo lop_quote yz=%u in lop_spec "
+                       "at tetra %" PRIu64, mmix_mmo_yz(tetra),
+                       loader->tetra_index);
+            return false;
+        }
+        if (!mmix_mmo_read_tetra(loader, tetra, false, errp)) {
+            return false;
+        }
+    }
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return false;
+    }
+
+    error_setg(errp, "unterminated MMIX .mmo lop_spec at tetra %" PRIu64,
+               record_tetra);
+    return false;
+}
+
 static bool mmix_mmo_read_postamble(MMIXMMOLoader *loader,
                                     const uint8_t lop[MMIX_MMO_PREAMBLE_SIZE],
                                     MMIXKernelLoadInfo *info, Error **errp)
@@ -627,10 +683,11 @@ static ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
             case MMIX_MMO_LOP_LINE:
                 continue;
             case MMIX_MMO_LOP_SPEC:
-                error_setg(errp, "unsupported MMIX .mmo lop_spec at tetra %"
-                           PRIu64, loader.tetra_index);
-                fclose(loader.file);
-                return -1;
+                if (!mmix_mmo_skip_spec(&loader, record_tetra, errp)) {
+                    fclose(loader.file);
+                    return -1;
+                }
+                continue;
             case MMIX_MMO_LOP_POST:
                 if (!mmix_mmo_read_postamble(&loader, tetra, info, errp)) {
                     fclose(loader.file);
