@@ -27,6 +27,7 @@
 #define MMIX_MMO_LOP_END 0x0c
 #define MMIX_MMO_VERSION 1
 #define MMIX_MMO_PREAMBLE_SIZE 4
+#define MMIX_MMO_OCTABYTE_SIZE 8
 #define MMIX_MMO_GLOBAL_BASE_MIN 32
 #define MMIX_MMO_GLOBAL_REGS 256
 
@@ -241,35 +242,18 @@ static bool mmix_mmo_skip(MMIXMMOLoader *loader, uint16_t bytes, Error **errp)
     return true;
 }
 
+static bool mmix_mmo_xor_tetra(MMIXMMOLoader *loader, uint64_t address,
+                               uint32_t value, const char *name,
+                               Error **errp);
+
 static bool mmix_mmo_store_tetra(MMIXMMOLoader *loader,
                                  const uint8_t tetra[MMIX_MMO_PREAMBLE_SIZE],
                                  Error **errp)
 {
-    MemTxResult result;
+    uint32_t value = ldl_be_p(tetra);
 
-    if (loader->cur_loc & 3) {
-        error_setg(errp, "unaligned MMIX .mmo tetrabyte location 0x%"
-                   HWADDR_PRIx, loader->cur_loc);
-        return false;
-    }
-    if (loader->cur_loc > loader->ram_size ||
-        loader->ram_size - loader->cur_loc < MMIX_MMO_PREAMBLE_SIZE) {
-        error_setg(errp, "MMIX .mmo tetrabyte at 0x%" HWADDR_PRIx
-                   " is outside RAM", loader->cur_loc);
-        return false;
-    }
-    if (loader->loaded_size > SSIZE_MAX - MMIX_MMO_PREAMBLE_SIZE) {
-        error_setg(errp, "MMIX .mmo object '%s' is too large",
-                   loader->filename);
-        return false;
-    }
-
-    result = address_space_write(&address_space_memory, loader->cur_loc,
-                                 MEMTXATTRS_UNSPECIFIED, tetra,
-                                 MMIX_MMO_PREAMBLE_SIZE);
-    if (result != MEMTX_OK) {
-        error_setg(errp, "could not write MMIX .mmo tetrabyte at 0x%"
-                   HWADDR_PRIx, loader->cur_loc);
+    if (!mmix_mmo_xor_tetra(loader, loader->cur_loc, value, "tetrabyte",
+                            errp)) {
         return false;
     }
 
@@ -287,37 +271,29 @@ static bool mmix_mmo_store_tetra(MMIXMMOLoader *loader,
 static bool mmix_mmo_store_octa(MMIXMMOLoader *loader, uint64_t address,
                                 uint64_t value, Error **errp)
 {
-    uint8_t data[8];
-    MemTxResult result;
-
     if (address & 7) {
         error_setg(errp, "unaligned MMIX .mmo octabyte location 0x%"
                    HWADDR_PRIx, address);
         return false;
     }
     if (address > loader->ram_size ||
-        loader->ram_size - address < sizeof(data)) {
+        loader->ram_size - address < MMIX_MMO_OCTABYTE_SIZE) {
         error_setg(errp, "MMIX .mmo octabyte at 0x%" HWADDR_PRIx
                    " is outside RAM", address);
         return false;
     }
-    if (loader->loaded_size > SSIZE_MAX - sizeof(data)) {
+    if (loader->loaded_size > SSIZE_MAX - MMIX_MMO_OCTABYTE_SIZE) {
         error_setg(errp, "MMIX .mmo object '%s' is too large",
                    loader->filename);
         return false;
     }
 
-    stq_be_p(data, value);
-    result = address_space_write(&address_space_memory, address,
-                                 MEMTXATTRS_UNSPECIFIED, data, sizeof(data));
-    if (result != MEMTX_OK) {
-        error_setg(errp, "could not write MMIX .mmo octabyte at 0x%"
-                   HWADDR_PRIx, address);
+    if (!mmix_mmo_xor_tetra(loader, address, value >> 32, "octabyte",
+                            errp)) {
         return false;
     }
-
-    loader->loaded_size += sizeof(data);
-    return true;
+    return mmix_mmo_xor_tetra(loader, address + MMIX_MMO_PREAMBLE_SIZE,
+                              value, "octabyte", errp);
 }
 
 static bool mmix_mmo_check_tetra_address(MMIXMMOLoader *loader,

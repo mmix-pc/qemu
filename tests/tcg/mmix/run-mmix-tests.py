@@ -3092,6 +3092,19 @@ MMO_TESTS = [
         regs={1: 0x77},
     ),
     MMIXMMOTest(
+        "mmo-overlapping-tetrabytes-xor",
+        mmo_image(
+            [
+                wyde(0xe3, 1, 0),         # SETL r1,0 before XOR overlay
+                mmo_loc(0),
+                struct.pack(">I", 0x00000066),
+                halt(),
+            ]
+        ),
+        pc=0x04,
+        regs={1: 0x66},
+    ),
+    MMIXMMOTest(
         "mmo-loc-sparse-load",
         mmo_image(
             [
@@ -3175,6 +3188,22 @@ MMO_TESTS = [
         ),
         pc=0x14,
         regs={2: 0x18},
+    ),
+    MMIXMMOTest(
+        "mmo-fixo-xor-overlay",
+        mmo_image(
+            [
+                *set_octa(1, 0x80),
+                insn(0x8e, 2, 1, 0),      # LDOU r2,r1,r0
+                halt(),
+                mmo_loc(0x80),
+                struct.pack(">Q", 0x10),
+                mmo_loc(0x18),
+                mmo_fixo(0x80),
+            ]
+        ),
+        pc=0x14,
+        regs={2: 0x08},
     ),
     MMIXMMOTest(
         "mmo-fixr-branch-forward",
