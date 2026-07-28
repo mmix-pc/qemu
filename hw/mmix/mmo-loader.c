@@ -300,6 +300,64 @@ static bool mmix_mmo_store_octa(MMIXMMOLoader *loader, uint64_t address,
     return true;
 }
 
+static bool mmix_mmo_check_tetra_address(MMIXMMOLoader *loader,
+                                         uint64_t address, const char *name,
+                                         Error **errp)
+{
+    if (address & 3) {
+        error_setg(errp, "unaligned MMIX .mmo %s target 0x%" HWADDR_PRIx,
+                   name, address);
+        return false;
+    }
+    if (address > loader->ram_size ||
+        loader->ram_size - address < MMIX_MMO_PREAMBLE_SIZE) {
+        error_setg(errp, "MMIX .mmo %s target 0x%" HWADDR_PRIx
+                   " is outside RAM", name, address);
+        return false;
+    }
+
+    return true;
+}
+
+static bool mmix_mmo_xor_tetra(MMIXMMOLoader *loader, uint64_t address,
+                               uint32_t value, const char *name,
+                               Error **errp)
+{
+    uint8_t data[MMIX_MMO_PREAMBLE_SIZE];
+    uint32_t old_value;
+    MemTxResult result;
+
+    if (!mmix_mmo_check_tetra_address(loader, address, name, errp)) {
+        return false;
+    }
+    if (loader->loaded_size > SSIZE_MAX - MMIX_MMO_PREAMBLE_SIZE) {
+        error_setg(errp, "MMIX .mmo object '%s' is too large",
+                   loader->filename);
+        return false;
+    }
+
+    result = address_space_read(&address_space_memory, address,
+                                MEMTXATTRS_UNSPECIFIED, data, sizeof(data));
+    if (result != MEMTX_OK) {
+        error_setg(errp, "could not read MMIX .mmo %s target at 0x%"
+                   HWADDR_PRIx, name, address);
+        return false;
+    }
+
+    old_value = ldl_be_p(data);
+    stl_be_p(data, old_value ^ value);
+    result = address_space_write(&address_space_memory, address,
+                                 MEMTXATTRS_UNSPECIFIED, data, sizeof(data));
+    if (result != MEMTX_OK) {
+        error_setg(errp, "could not write MMIX .mmo %s target at 0x%"
+                   HWADDR_PRIx, name, address);
+        return false;
+    }
+
+    loader->loaded_size += MMIX_MMO_PREAMBLE_SIZE;
+    return true;
+}
+
 static bool mmix_mmo_fix_octa(MMIXMMOLoader *loader,
                               const uint8_t lop[MMIX_MMO_PREAMBLE_SIZE],
                               Error **errp)
@@ -311,6 +369,92 @@ static bool mmix_mmo_fix_octa(MMIXMMOLoader *loader,
     }
 
     return mmix_mmo_store_octa(loader, address, loader->cur_loc, errp);
+}
+
+static bool mmix_mmo_relative_target(MMIXMMOLoader *loader, uint32_t delta,
+                                     unsigned width, const char *name,
+                                     uint64_t record_tetra,
+                                     uint64_t *target, Error **errp)
+{
+    int64_t rel_tetras;
+
+    g_assert(width == 16 || width == 24);
+
+    if (delta & 0xfe000000) {
+        error_setg(errp, "invalid MMIX .mmo %s delta 0x%08x at tetra %"
+                   PRIu64, name, delta, record_tetra);
+        return false;
+    }
+    if (width == 16 && (delta & 0x00ff0000)) {
+        error_setg(errp, "invalid MMIX .mmo %s delta 0x%08x for 16-bit "
+                   "relative fixup at tetra %" PRIu64, name, delta,
+                   record_tetra);
+        return false;
+    }
+
+    if (delta >= 0x01000000) {
+        rel_tetras = (int64_t)(delta & 0x00ffffff) - (1LL << width);
+    } else {
+        rel_tetras = delta;
+    }
+
+    if (rel_tetras >= 0) {
+        uint64_t bytes = (uint64_t)rel_tetras << 2;
+
+        if (loader->cur_loc < bytes) {
+            error_setg(errp, "MMIX .mmo %s target before address 0 at "
+                       "tetra %" PRIu64, name, record_tetra);
+            return false;
+        }
+        *target = loader->cur_loc - bytes;
+    } else {
+        uint64_t bytes = (uint64_t)(-rel_tetras) << 2;
+
+        if (loader->cur_loc > UINT64_MAX - bytes) {
+            error_setg(errp, "MMIX .mmo %s target address overflow at "
+                       "tetra %" PRIu64, name, record_tetra);
+            return false;
+        }
+        *target = loader->cur_loc + bytes;
+    }
+
+    return true;
+}
+
+static bool mmix_mmo_fix_relative(MMIXMMOLoader *loader, uint32_t delta,
+                                  unsigned width, const char *name,
+                                  uint64_t record_tetra, Error **errp)
+{
+    uint64_t target;
+
+    if (!mmix_mmo_relative_target(loader, delta, width, name, record_tetra,
+                                  &target, errp)) {
+        return false;
+    }
+
+    return mmix_mmo_xor_tetra(loader, target, delta, name, errp);
+}
+
+static bool mmix_mmo_fixrx(MMIXMMOLoader *loader,
+                           const uint8_t lop[MMIX_MMO_PREAMBLE_SIZE],
+                           uint64_t record_tetra, Error **errp)
+{
+    uint8_t tetra[MMIX_MMO_PREAMBLE_SIZE];
+    uint16_t yz = mmix_mmo_yz(lop);
+    uint32_t delta;
+
+    if (yz != 16 && yz != 24) {
+        error_setg(errp, "invalid MMIX .mmo lop_fixrx yz=%u at tetra %"
+                   PRIu64, yz, record_tetra);
+        return false;
+    }
+    if (!mmix_mmo_read_tetra(loader, tetra, false, errp)) {
+        return false;
+    }
+
+    delta = ldl_be_p(tetra);
+    return mmix_mmo_fix_relative(loader, delta, yz, "lop_fixrx",
+                                 record_tetra, errp);
 }
 
 static bool mmix_mmo_read_postamble(MMIXMMOLoader *loader,
@@ -427,6 +571,8 @@ static ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
 
     while (mmix_mmo_read_tetra(&loader, tetra, true, &local_err)) {
         if (tetra[0] == MMIX_MMO_ESCAPE) {
+            uint64_t record_tetra = loader.tetra_index;
+
             switch (tetra[1]) {
             case MMIX_MMO_LOP_QUOTE:
                 if (mmix_mmo_yz(tetra) != 1) {
@@ -460,21 +606,18 @@ static ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
                 }
                 continue;
             case MMIX_MMO_LOP_FIXR:
-                error_setg(errp, "unsupported MMIX .mmo lop_fixr at tetra %"
-                           PRIu64, loader.tetra_index);
-                fclose(loader.file);
-                return -1;
-            case MMIX_MMO_LOP_FIXRX:
-                if (mmix_mmo_yz(tetra) != 16 && mmix_mmo_yz(tetra) != 24) {
-                    error_setg(errp, "invalid MMIX .mmo lop_fixrx yz=%u at "
-                               "tetra %" PRIu64, mmix_mmo_yz(tetra),
-                               loader.tetra_index);
-                } else {
-                    error_setg(errp, "unsupported MMIX .mmo lop_fixrx at "
-                               "tetra %" PRIu64, loader.tetra_index);
+                if (!mmix_mmo_fix_relative(&loader, mmix_mmo_yz(tetra), 16,
+                                           "lop_fixr", record_tetra, errp)) {
+                    fclose(loader.file);
+                    return -1;
                 }
-                fclose(loader.file);
-                return -1;
+                continue;
+            case MMIX_MMO_LOP_FIXRX:
+                if (!mmix_mmo_fixrx(&loader, tetra, record_tetra, errp)) {
+                    fclose(loader.file);
+                    return -1;
+                }
+                continue;
             case MMIX_MMO_LOP_FILE:
                 if (!mmix_mmo_skip_tetras(&loader, tetra[3], errp)) {
                     fclose(loader.file);

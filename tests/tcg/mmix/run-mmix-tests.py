@@ -2953,9 +2953,9 @@ LOADER_FAILURES = [
         ("invalid MMIX .mmo lop_fixo z=0", "tetra 2"),
     ),
     MMIXLoaderFailure(
-        "mmo-fixr-unsupported",
+        "mmo-fixr-target-before-zero",
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXR, 4)]),
-        ("unsupported MMIX .mmo lop_fixr", "tetra 2"),
+        ("MMIX .mmo lop_fixr target before address 0", "tetra 2"),
     ),
     MMIXLoaderFailure(
         "mmo-fixrx-invalid-yz",
@@ -2963,9 +2963,25 @@ LOADER_FAILURES = [
         ("invalid MMIX .mmo lop_fixrx yz=8", "tetra 2"),
     ),
     MMIXLoaderFailure(
-        "mmo-fixrx-unsupported",
-        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 16), struct.pack(">I", 0)]),
-        ("unsupported MMIX .mmo lop_fixrx", "tetra 2"),
+        "mmo-fixrx-truncated-delta",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 16)]),
+        ("truncated MMIX .mmo object", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-fixrx-delta-too-large",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 24), struct.pack(">I", 0x02000000)]),
+        ("invalid MMIX .mmo lop_fixrx delta 0x02000000", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-fixrx-invalid-16-bit-delta",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 16), struct.pack(">I", 0x00010000)]),
+        ("invalid MMIX .mmo lop_fixrx delta 0x00010000 for 16-bit relative fixup",
+         "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-fixrx-target-before-zero",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 16), struct.pack(">I", 1)]),
+        ("MMIX .mmo lop_fixrx target before address 0", "tetra 2"),
     ),
     MMIXLoaderFailure(
         "mmo-post-invalid-y",
