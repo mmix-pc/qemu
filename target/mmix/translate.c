@@ -184,9 +184,9 @@ static bool trans_RESUME(DisasContext *ctx, arg_xyz *a)
 
 static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
 {
-    if (a->x == 0 && a->y == 0 && a->z == 0) {
-        /* QEMU porting test exit, not final MMIX TRAP semantics. */
-        gen_helper_mmix_test_exit(tcg_env);
+    if (a->x == 0) {
+        gen_helper_mmix_hosted_trap(tcg_env, tcg_constant_i32(a->y),
+                                    tcg_constant_i32(a->z));
         ctx->base.is_jmp = DISAS_NORETURN;
         return true;
     }

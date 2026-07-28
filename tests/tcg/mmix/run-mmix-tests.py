@@ -35,6 +35,8 @@ MMIX_VIRT_UART_BASE = 0x0000000100000000
 MMIX_VIRT_UART_TX = 0x04
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
+MMIX_HOSTED_STDOUT = 1
+MMIX_HOSTED_FPUTWS = 8
 MMIX_MMO_ESCAPE = 0x98
 MMIX_MMO_LOP_QUOTE = 0x00
 MMIX_MMO_LOP_LOC = 0x01
@@ -3008,6 +3010,12 @@ EXPECTED_FAILURES = [
         "invalid-sync",
         jump(0xfc, 8),                   # SYNC 8
         ("MMIX invalid SYNC 8", "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "unsupported-hosted-trap-service",
+        insn(0x00, 0, MMIX_HOSTED_FPUTWS, MMIX_HOSTED_STDOUT),
+        ("MMIX unsupported hosted TRAP service 8 handle 1",
+         "MMIX illegal instruction"),
     ),
 ]
 

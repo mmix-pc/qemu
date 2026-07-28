@@ -18,6 +18,15 @@
 #define MMIX_QNAN_BIT      0x0008000000000000ULL
 #define MMIX_DEFAULT_NAN   0x7ff8000000000000ULL
 
+typedef enum MMIXHostedTrap {
+    MMIX_HOSTED_TRAP_HALT = 0,
+    MMIX_HOSTED_TRAP_FPUTS = 7,
+} MMIXHostedTrap;
+
+typedef enum MMIXHostedHandle {
+    MMIX_HOSTED_HANDLE_STDOUT = 1,
+} MMIXHostedHandle;
+
 typedef enum MMIXFPOp {
     MMIX_FP_FCMP,
     MMIX_FP_FUN,
@@ -1396,12 +1405,17 @@ void helper_mmix_resume(CPUMMIXState *env, uint32_t x, uint32_t y, uint32_t z)
     g_assert_not_reached();
 }
 
-void helper_mmix_test_exit(CPUMMIXState *env)
+static G_NORETURN void mmix_shutdown_with_cpu_log(CPUMMIXState *env,
+                                                  const char *reason)
 {
     CPUState *cs = env_cpu(env);
 
     if (!env->test_exit_seen) {
         env->test_exit_seen = true;
+        if (g_strcmp0(reason, "MMIX test exit") != 0) {
+            qemu_log_mask(CPU_LOG_INT, "%s at 0x%016" PRIx64 "\n", reason,
+                          env->pc);
+        }
         qemu_log_mask(CPU_LOG_INT, "MMIX test exit at 0x%016" PRIx64 "\n",
                       env->pc);
         log_cpu_state_mask(CPU_LOG_INT, cs, 0);
@@ -1410,6 +1424,25 @@ void helper_mmix_test_exit(CPUMMIXState *env)
     }
     cs->halted = 1;
     cpu_loop_exit_noexc(cs);
+}
+
+void helper_mmix_test_exit(CPUMMIXState *env)
+{
+    mmix_shutdown_with_cpu_log(env, "MMIX test exit");
+}
+
+void helper_mmix_hosted_trap(CPUMMIXState *env, uint32_t service,
+                             uint32_t handle)
+{
+    if (service == MMIX_HOSTED_TRAP_HALT && handle == 0) {
+        mmix_shutdown_with_cpu_log(env, "MMIX hosted Halt");
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX unsupported hosted TRAP service %u handle %u at "
+                  "0x%016" PRIx64 "\n",
+                  service, handle, env->pc);
+    helper_raise_illegal_instruction(env);
 }
 
 void mmix_cpu_do_interrupt(CPUState *cs)
