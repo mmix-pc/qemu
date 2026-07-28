@@ -523,6 +523,16 @@ Main    SETL    $2,'Q'
         TRAP    0,0,0
 """
 
+MMIXAL_HOSTED_SOURCE = """\
+        LOC     Data_Segment
+Msg     BYTE    "Hosted MMIXAL",#a,0
+Ptr     GREG    Msg
+        LOC     #0
+Main    ADDU    $255,Ptr,0
+        TRAP    0,Fputs,StdOut
+        TRAP    0,Halt,0
+"""
+
 
 TESTS = [
     MMIXTest(
@@ -3752,6 +3762,13 @@ def optional_mmixal_tests(workdir):
             assemble_mmixal_mmo(mmixal, workdir, "uart", MMIXAL_UART_SOURCE),
             pc=0x28,
             output=b"QEMU\n",
+        ),
+        MMIXSerialTest(
+            "mmixal-mmo-hosted-fputs-output",
+            assemble_mmixal_mmo(mmixal, workdir, "hosted",
+                                MMIXAL_HOSTED_SOURCE),
+            pc=0x08,
+            output=b"Hosted MMIXAL\n",
         ),
     ], [
         MMIXMMOTest(
