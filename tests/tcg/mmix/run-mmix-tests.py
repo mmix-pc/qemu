@@ -203,6 +203,20 @@ def serial_tx_program():
     )
 
 
+def hosted_fputs_program():
+    message_address = 0x40
+    message = b"Hosted MMIX\n"
+    prefix = b"".join(
+        [
+            *set_octa(255, message_address),
+            insn(0x00, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+            halt(),
+        ]
+    )
+    padding = insn(0xfd, 0, 0, 0) * ((message_address - len(prefix)) // 4)
+    return prefix + padding + message + b"\0"
+
+
 def program_with_handler(prefix, handler_addr, handler):
     prefix = b"".join(prefix)
     handler = b"".join(handler)
@@ -3044,6 +3058,17 @@ EXPECTED_FAILURES = [
          "without NUL",
          "MMIX illegal instruction"),
     ),
+    MMIXExpectedFailure(
+        "hosted-fputs-unsupported-handle",
+        b"".join(
+            [
+                *set_octa(255, 0x40),
+                insn(0x00, 0, MMIX_HOSTED_FPUTS, 2),
+            ]
+        ),
+        ("MMIX hosted Fputs unsupported handle 2",
+         "MMIX illegal instruction"),
+    ),
 ]
 
 
@@ -3053,6 +3078,12 @@ SERIAL_TESTS = [
         serial_tx_program(),
         pc=0x38,
         output=b"MMIX\n",
+    ),
+    MMIXSerialTest(
+        "hosted-fputs-stdout",
+        hosted_fputs_program(),
+        pc=0x14,
+        output=b"Hosted MMIX\n",
     ),
     MMIXSerialTest(
         "mmo-serial-tx-output",

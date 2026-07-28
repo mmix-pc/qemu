@@ -187,7 +187,6 @@ static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
     if (a->x == 0) {
         gen_helper_mmix_hosted_trap(tcg_env, tcg_constant_i32(a->y),
                                     tcg_constant_i32(a->z));
-        ctx->base.is_jmp = DISAS_NORETURN;
         return true;
     }
 

@@ -19,6 +19,12 @@
 #define MMIX_QNAN_BIT      0x0008000000000000ULL
 #define MMIX_DEFAULT_NAN   0x7ff8000000000000ULL
 #define MMIX_HOSTED_STRING_MAX 256
+/*
+ * Hosted Fputs is a compatibility shim for the MMIX virt machine. Route
+ * bytes through the same UARTLite TX register used by bare-metal code so
+ * output still honors the normal QEMU -serial backend.
+ */
+#define MMIX_HOSTED_STDOUT_TX 0x100000004ULL
 
 typedef enum MMIXHostedTrap {
     MMIX_HOSTED_TRAP_HALT = 0,
@@ -1493,6 +1499,28 @@ static bool mmix_hosted_read_cstring(CPUMMIXState *env, uint64_t address,
     return false;
 }
 
+static bool mmix_hosted_write_stdout(CPUMMIXState *env,
+                                     const GByteArray *bytes)
+{
+    CPUState *cs = env_cpu(env);
+    MemTxResult result;
+    size_t i;
+
+    for (i = 0; i < bytes->len; i++) {
+        address_space_stb(cs->as, MMIX_HOSTED_STDOUT_TX, bytes->data[i],
+                          MEMTXATTRS_UNSPECIFIED, &result);
+        if (result != MEMTX_OK) {
+            qemu_log_mask(LOG_UNIMP,
+                          "MMIX hosted Fputs could not write StdOut at "
+                          "0x%016" PRIx64 "\n",
+                          env->pc);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void helper_mmix_hosted_trap(CPUMMIXState *env, uint32_t service,
                              uint32_t handle)
 {
@@ -1509,11 +1537,19 @@ void helper_mmix_hosted_trap(CPUMMIXState *env, uint32_t service,
             helper_raise_illegal_instruction(env);
         }
 
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX hosted Fputs output is not implemented yet at "
-                      "0x%016" PRIx64 "\n",
-                      env->pc);
+        if (!mmix_hosted_write_stdout(env, bytes)) {
+            g_byte_array_free(bytes, true);
+            helper_raise_illegal_instruction(env);
+        }
+
         g_byte_array_free(bytes, true);
+        return;
+    }
+    if (service == MMIX_HOSTED_TRAP_FPUTS) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted Fputs unsupported handle %u at 0x%016"
+                      PRIx64 "\n",
+                      handle, env->pc);
         helper_raise_illegal_instruction(env);
     }
 
