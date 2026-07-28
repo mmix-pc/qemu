@@ -115,6 +115,20 @@ def mmo_fixo(address):
     return mmo_address_lop(MMIX_MMO_LOP_FIXO, address)
 
 
+def mmo_fixr(delta):
+    if not 0 <= delta <= 0xffff:
+        raise ValueError("mmo_fixr only supports a 16-bit delta")
+    return mmo_lop(MMIX_MMO_LOP_FIXR, delta)
+
+
+def mmo_fixrx(width, delta):
+    if width not in (16, 24):
+        raise ValueError("mmo_fixrx width must be 16 or 24")
+    if not 0 <= delta <= 0x01ffffff:
+        raise ValueError("mmo_fixrx delta must fit the accepted range")
+    return mmo_lop(MMIX_MMO_LOP_FIXRX, width) + struct.pack(">I", delta)
+
+
 def mmo_skip(bytes_):
     if not 0 <= bytes_ <= 0xffff:
         raise ValueError("mmo_skip only supports a 16-bit byte count")
@@ -3099,6 +3113,69 @@ MMO_TESTS = [
         ),
         pc=0x14,
         regs={2: 0x18},
+    ),
+    MMIXMMOTest(
+        "mmo-fixr-branch-forward",
+        mmo_image(
+            [
+                wyde(0xe3, 1, 1),         # SETL r1,1
+                branch(0x4a, 1, 0),       # BNZ r1,target, fixed later
+                wyde(0xe3, 2, 0xaa),      # skipped after fixup
+                mmo_loc(0x0c),
+                mmo_fixr(2),
+                wyde(0xe3, 2, 0x55),      # target: SETL r2,0x55
+                halt(),
+            ]
+        ),
+        pc=0x10,
+        regs={2: 0x55},
+    ),
+    MMIXMMOTest(
+        "mmo-fixr-geta-forward",
+        mmo_image(
+            [
+                branch(0xf4, 1, 0),       # GETA r1,target, fixed later
+                halt(),
+                mmo_loc(0x08),
+                mmo_fixr(2),
+                wyde(0xe3, 2, 0x33),      # target data/code location
+            ]
+        ),
+        pc=0x04,
+        regs={1: 0x08, 2: 0},
+    ),
+    MMIXMMOTest(
+        "mmo-fixrx-probable-branch-backward",
+        mmo_image(
+            [
+                jump(0xf0, 3),            # JMP branch
+                mmo_loc(0x0c),
+                branch(0x52, 0, 0),       # PBZ r0,target, fixed later
+                mmo_loc(0x04),
+                mmo_fixrx(16, 0x0100fffe),
+                wyde(0xe3, 3, 0x66),      # target: SETL r3,0x66
+                halt(),
+            ]
+        ),
+        pc=0x08,
+        regs={3: 0x66},
+    ),
+    MMIXMMOTest(
+        "mmo-fixrx-jmp-backward",
+        mmo_image(
+            [
+                mmo_loc(0x08),
+                jump(0xf0, 0),            # JMP target, fixed later
+                mmo_loc(0x00),
+                mmo_fixrx(24, 0x01fffffe),
+                wyde(0xe3, 4, 0x77),      # target: SETL r4,0x77
+                halt(),
+                mmo_post(255, {255: 0x08}),
+                mmo_stab_end(),
+            ]
+        ),
+        pc=0x04,
+        regs={4: 0x77, 255: 0x08},
     ),
     MMIXMMOTest(
         "mmo-post-entry-globals",
