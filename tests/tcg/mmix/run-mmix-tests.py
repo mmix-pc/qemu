@@ -53,6 +53,9 @@ MMIX_MMO_LOP_PRE = 0x09
 MMIX_MMO_LOP_POST = 0x0A
 MMIX_MMO_LOP_STAB = 0x0B
 MMIX_MMO_LOP_END = 0x0C
+MMIX_TEST_DIR = pathlib.Path(__file__).resolve().parent
+MMIXAL_PRIME_TABLE_SOURCE = MMIX_TEST_DIR / "prime_table.mms"
+MMIXAL_PRIME_TABLE_OUTPUT = MMIX_TEST_DIR / "prime_table.out"
 
 
 def insn(op, x=0, y=0, z=0):
@@ -3750,6 +3753,23 @@ def assemble_mmixal_mmo(mmixal, workdir, name, source):
     return object_path.read_bytes()
 
 
+def assemble_mmixal_mmo_from_file(mmixal, workdir, name, source_path):
+    source_dir = workdir / "mmixal-fixtures"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_path = pathlib.Path(source_path)
+    fixture_source = source_dir / source_path.name
+    object_path = source_dir / f"{name}.mmo"
+
+    shutil.copyfile(source_path, fixture_source)
+    subprocess.run(
+        [mmixal, "-o", object_path.name, fixture_source.name],
+        cwd=source_dir,
+        check=True,
+        timeout=10,
+    )
+    return object_path.read_bytes()
+
+
 def optional_mmixal_tests(workdir):
     mmixal = shutil.which("mmixal")
     if mmixal is None:
@@ -3769,6 +3789,13 @@ def optional_mmixal_tests(workdir):
                                 MMIXAL_HOSTED_SOURCE),
             pc=0x08,
             output=b"Hosted MMIXAL\n",
+        ),
+        MMIXSerialTest(
+            "mmixal-mmo-prime-table",
+            assemble_mmixal_mmo_from_file(mmixal, workdir, "prime_table",
+                                          MMIXAL_PRIME_TABLE_SOURCE),
+            pc=0x1b8,
+            output=MMIXAL_PRIME_TABLE_OUTPUT.read_bytes(),
         ),
     ], [
         MMIXMMOTest(
