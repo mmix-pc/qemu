@@ -32,6 +32,11 @@ VM_RV_ROOT2 = 0x11110d0000004000
 NEGATIVE_HANDLER = 0x8000000000000080
 MMIX_VIRT_UART_BASE = 0x0000000100000000
 MMIX_VIRT_UART_TX = 0x04
+MMIX_MMO_ESCAPE = 0x98
+MMIX_MMO_LOP_QUOTE = 0x00
+MMIX_MMO_LOP_LOC = 0x01
+MMIX_MMO_LOP_SKIP = 0x02
+MMIX_MMO_LOP_PRE = 0x09
 
 
 def insn(op, x=0, y=0, z=0):
@@ -61,6 +66,42 @@ def set_octa(reg, value):
         wyde(0xe6, reg, (value >> 16) & 0xffff),
         wyde(0xe7, reg, value & 0xffff),
     ]
+
+
+def mmo_lop(lop, yz, y=None, z=None):
+    if y is None:
+        y = (yz >> 8) & 0xff
+    if z is None:
+        z = yz & 0xff
+    return bytes((MMIX_MMO_ESCAPE, lop & 0xff, y & 0xff, z & 0xff))
+
+
+def mmo_image(items):
+    return b"".join([mmo_lop(MMIX_MMO_LOP_PRE, 0, y=1, z=0), *items])
+
+
+def mmo_quote(tetra):
+    return mmo_lop(MMIX_MMO_LOP_QUOTE, 1) + tetra
+
+
+def mmo_loc(address):
+    high = (address >> 32) & 0xffffffff
+    low = address & 0xffffffff
+    if high & 0x00ffffff:
+        return (
+            mmo_lop(MMIX_MMO_LOP_LOC, 0, y=(high >> 24) & 0xff, z=2)
+            + struct.pack(">I", high & 0x00ffffff)
+            + struct.pack(">I", low)
+        )
+    return mmo_lop(MMIX_MMO_LOP_LOC, 0, y=(high >> 24) & 0xff, z=1) + struct.pack(
+        ">I", low
+    )
+
+
+def mmo_skip(bytes_):
+    if not 0 <= bytes_ <= 0xffff:
+        raise ValueError("mmo_skip only supports a 16-bit byte count")
+    return mmo_lop(MMIX_MMO_LOP_SKIP, bytes_)
 
 
 def program_with_handler(prefix, handler_addr, handler):
@@ -315,6 +356,14 @@ class MMIXLoaderFailure:
     name: str
     image: bytes
     patterns: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class MMIXMMOTest:
+    name: str
+    image: bytes
+    pc: int
+    regs: dict[int, int]
 
 
 REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
@@ -2818,11 +2867,6 @@ SERIAL_TESTS = [
 
 LOADER_FAILURES = [
     MMIXLoaderFailure(
-        "mmo-detected-unsupported",
-        bytes((0x98, 0x09, 0x01, 0x00)),
-        ("MMIX .mmo object loading is not implemented yet",),
-    ),
-    MMIXLoaderFailure(
         "mmo-truncated-preamble",
         bytes((0x98, 0x09)),
         ("truncated MMIX .mmo preamble",),
@@ -2831,6 +2875,58 @@ LOADER_FAILURES = [
         "mmo-unsupported-preamble-version",
         bytes((0x98, 0x09, 0x02, 0x00)),
         ("unsupported MMIX .mmo preamble version 2",),
+    ),
+]
+
+
+MMO_TESTS = [
+    MMIXMMOTest(
+        "mmo-straight-line-load",
+        mmo_image(
+            [
+                wyde(0xe3, 1, 0x42),       # SETL r1,0x42
+                halt(),
+            ]
+        ),
+        pc=0x04,
+        regs={1: 0x42},
+    ),
+    MMIXMMOTest(
+        "mmo-quote-load",
+        mmo_image(
+            [
+                mmo_quote(wyde(0xe3, 1, 0x77)),   # SETL r1,0x77
+                halt(),
+            ]
+        ),
+        pc=0x04,
+        regs={1: 0x77},
+    ),
+    MMIXMMOTest(
+        "mmo-loc-sparse-load",
+        mmo_image(
+            [
+                jump(0xf0, 8),             # JMP 0x20
+                mmo_loc(0x20),
+                wyde(0xe3, 1, 0x33),       # SETL r1,0x33
+                halt(),
+            ]
+        ),
+        pc=0x24,
+        regs={1: 0x33},
+    ),
+    MMIXMMOTest(
+        "mmo-skip-sparse-load",
+        mmo_image(
+            [
+                jump(0xf0, 8),             # JMP 0x20
+                mmo_skip(0x1c),
+                wyde(0xe3, 1, 0x55),       # SETL r1,0x55
+                halt(),
+            ]
+        ),
+        pc=0x24,
+        regs={1: 0x55},
     ),
 ]
 
@@ -3020,6 +3116,53 @@ def run_loader_failure(qemu, workdir, test):
             )
 
 
+def run_mmo_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.mmo"
+    log = workdir / f"{test.name}.log"
+
+    image.write_bytes(test.image)
+    if log.exists():
+        log.unlink()
+
+    cmd = [
+        str(qemu),
+        "-machine",
+        "virt",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-serial",
+        "none",
+        "-kernel",
+        str(image),
+        "-d",
+        "int",
+        "-D",
+        str(log),
+    ]
+    subprocess.run(cmd, check=True, timeout=10)
+
+    pc, npc, regs = parse_log(log.read_text(encoding="utf-8"))
+    if pc != test.pc:
+        raise AssertionError(f"{test.name}: pc expected 0x{test.pc:x}, got 0x{pc:x}")
+    if npc != test.pc + 4:
+        raise AssertionError(
+            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{npc:x}"
+        )
+
+    for reg, expected in test.regs.items():
+        actual = regs.get(reg)
+        if actual is None:
+            raise AssertionError(f"{test.name}: missing r{reg} in log")
+        expected &= MASK64
+        if actual != expected:
+            raise AssertionError(
+                f"{test.name}: r{reg} expected 0x{expected:016x}, "
+                f"got 0x{actual:016x}"
+            )
+
+
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True, type=pathlib.Path)
@@ -3038,6 +3181,9 @@ def main(argv):
         print(f"PASS {test.name}")
     for test in LOADER_FAILURES:
         run_loader_failure(args.qemu, args.workdir, test)
+        print(f"PASS {test.name}")
+    for test in MMO_TESTS:
+        run_mmo_test(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
 
 
