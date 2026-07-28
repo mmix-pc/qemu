@@ -18,8 +18,13 @@
 #define MMIX_MMO_LOP_FIXO 0x03
 #define MMIX_MMO_LOP_FIXR 0x04
 #define MMIX_MMO_LOP_FIXRX 0x05
+#define MMIX_MMO_LOP_FILE 0x06
+#define MMIX_MMO_LOP_LINE 0x07
+#define MMIX_MMO_LOP_SPEC 0x08
 #define MMIX_MMO_LOP_PRE 0x09
 #define MMIX_MMO_LOP_POST 0x0a
+#define MMIX_MMO_LOP_STAB 0x0b
+#define MMIX_MMO_LOP_END 0x0c
 #define MMIX_MMO_VERSION 1
 #define MMIX_MMO_PREAMBLE_SIZE 4
 #define MMIX_MMO_GLOBAL_BASE_MIN 32
@@ -337,6 +342,53 @@ static bool mmix_mmo_read_postamble(MMIXMMOLoader *loader,
     return true;
 }
 
+static bool mmix_mmo_read_symbol_tail(MMIXMMOLoader *loader, Error **errp)
+{
+    uint8_t tetra[MMIX_MMO_PREAMBLE_SIZE];
+    Error *local_err = NULL;
+    uint64_t symbol_tetras = 0;
+
+    if (!mmix_mmo_read_tetra(loader, tetra, false, errp)) {
+        return false;
+    }
+    if (tetra[0] != MMIX_MMO_ESCAPE || tetra[1] != MMIX_MMO_LOP_STAB) {
+        error_setg(errp, "expected MMIX .mmo lop_stab after postamble at "
+                   "tetra %" PRIu64, loader->tetra_index);
+        return false;
+    }
+    if (mmix_mmo_yz(tetra) != 0) {
+        error_setg(errp, "invalid MMIX .mmo lop_stab yz=%u at tetra %" PRIu64,
+                   mmix_mmo_yz(tetra), loader->tetra_index);
+        return false;
+    }
+
+    while (mmix_mmo_read_tetra(loader, tetra, false, errp)) {
+        if (tetra[0] == MMIX_MMO_ESCAPE && tetra[1] == MMIX_MMO_LOP_END) {
+            if (mmix_mmo_yz(tetra) != symbol_tetras) {
+                error_setg(errp, "invalid MMIX .mmo lop_end yz=%u at tetra %"
+                           PRIu64 ", expected %" PRIu64,
+                           mmix_mmo_yz(tetra), loader->tetra_index,
+                           symbol_tetras);
+                return false;
+            }
+            if (mmix_mmo_read_tetra(loader, tetra, true, &local_err)) {
+                error_setg(errp, "unsupported MMIX .mmo records after "
+                           "lop_end at tetra %" PRIu64, loader->tetra_index);
+                return false;
+            }
+            if (local_err) {
+                error_propagate(errp, local_err);
+                return false;
+            }
+            return true;
+        }
+
+        symbol_tetras++;
+    }
+
+    return false;
+}
+
 static ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
                              MMIXKernelLoadInfo *info, Error **errp)
 {
@@ -423,15 +475,25 @@ static ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
                 }
                 fclose(loader.file);
                 return -1;
+            case MMIX_MMO_LOP_FILE:
+                if (!mmix_mmo_skip_tetras(&loader, tetra[3], errp)) {
+                    fclose(loader.file);
+                    return -1;
+                }
+                continue;
+            case MMIX_MMO_LOP_LINE:
+                continue;
+            case MMIX_MMO_LOP_SPEC:
+                error_setg(errp, "unsupported MMIX .mmo lop_spec at tetra %"
+                           PRIu64, loader.tetra_index);
+                fclose(loader.file);
+                return -1;
             case MMIX_MMO_LOP_POST:
                 if (!mmix_mmo_read_postamble(&loader, tetra, info, errp)) {
                     fclose(loader.file);
                     return -1;
                 }
-                if (mmix_mmo_read_tetra(&loader, tetra, true, &local_err)) {
-                    error_setg(errp, "unsupported MMIX .mmo records after "
-                               "postamble at tetra %" PRIu64,
-                               loader.tetra_index);
+                if (!mmix_mmo_read_symbol_tail(&loader, errp)) {
                     fclose(loader.file);
                     return -1;
                 }

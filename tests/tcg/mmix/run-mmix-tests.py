@@ -39,8 +39,13 @@ MMIX_MMO_LOP_SKIP = 0x02
 MMIX_MMO_LOP_FIXO = 0x03
 MMIX_MMO_LOP_FIXR = 0x04
 MMIX_MMO_LOP_FIXRX = 0x05
+MMIX_MMO_LOP_FILE = 0x06
+MMIX_MMO_LOP_LINE = 0x07
+MMIX_MMO_LOP_SPEC = 0x08
 MMIX_MMO_LOP_PRE = 0x09
 MMIX_MMO_LOP_POST = 0x0A
+MMIX_MMO_LOP_STAB = 0x0B
+MMIX_MMO_LOP_END = 0x0C
 
 
 def insn(op, x=0, y=0, z=0):
@@ -116,6 +121,21 @@ def mmo_skip(bytes_):
     return mmo_lop(MMIX_MMO_LOP_SKIP, bytes_)
 
 
+def mmo_file(file_number, name):
+    encoded = name.encode("ascii")
+    encoded += b"\0" * ((4 - len(encoded) % 4) % 4)
+    tetra_count = len(encoded) // 4
+    if not 0 <= file_number <= 255 or not 0 <= tetra_count <= 255:
+        raise ValueError("mmo_file fields must fit in one byte")
+    return mmo_lop(MMIX_MMO_LOP_FILE, 0, y=file_number, z=tetra_count) + encoded
+
+
+def mmo_line(line):
+    if not 0 <= line <= 0xffff:
+        raise ValueError("mmo_line line must fit in 16 bits")
+    return mmo_lop(MMIX_MMO_LOP_LINE, line)
+
+
 def mmo_post(global_base, globals_):
     if not 32 <= global_base <= 255:
         raise ValueError("mmo_post global base must be in 32..255")
@@ -123,6 +143,37 @@ def mmo_post(global_base, globals_):
     for reg in range(global_base, 256):
         records.append(struct.pack(">Q", globals_.get(reg, 0)))
     return b"".join(records)
+
+
+def mmo_stab_end(symbol_tetras=()):
+    symbol_data = b"".join(symbol_tetras)
+    if len(symbol_data) % 4:
+        raise ValueError("mmo_stab_end symbol data must be tetrabyte-aligned")
+    tetra_count = len(symbol_data) // 4
+    if tetra_count > 0xffff:
+        raise ValueError("mmo_stab_end symbol data is too large")
+    return mmo_lop(MMIX_MMO_LOP_STAB, 0) + symbol_data + mmo_lop(
+        MMIX_MMO_LOP_END, tetra_count
+    )
+
+
+def serial_tx_program():
+    return b"".join(
+        [
+            *set_octa(1, MMIX_VIRT_UART_BASE),
+            wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
+            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+            wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
+            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+            wyde(0xe3, 2, ord("I")),                  # SETL r2,'I'
+            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+            wyde(0xe3, 2, ord("X")),                  # SETL r2,'X'
+            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+            wyde(0xe3, 2, ord("\n")),                 # SETL r2,'\n'
+            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+            halt(),
+        ]
+    )
 
 
 def program_with_handler(prefix, handler_addr, handler):
@@ -2864,20 +2915,19 @@ EXPECTED_FAILURES = [
 SERIAL_TESTS = [
     MMIXSerialTest(
         "serial-tx-output",
-        b"".join(
+        serial_tx_program(),
+        pc=0x38,
+        output=b"MMIX\n",
+    ),
+    MMIXSerialTest(
+        "mmo-serial-tx-output",
+        mmo_image(
             [
-                *set_octa(1, MMIX_VIRT_UART_BASE),
-                wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
-                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-                wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
-                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-                wyde(0xe3, 2, ord("I")),                  # SETL r2,'I'
-                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-                wyde(0xe3, 2, ord("X")),                  # SETL r2,'X'
-                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-                wyde(0xe3, 2, ord("\n")),                 # SETL r2,'\n'
-                insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-                halt(),
+                mmo_file(1, "mmo-serial.mms"),
+                mmo_line(1),
+                serial_tx_program(),
+                mmo_post(255, {255: 0}),
+                mmo_stab_end(),
             ]
         ),
         pc=0x38,
@@ -2940,7 +2990,34 @@ LOADER_FAILURES = [
                 halt(),
             ]
         ),
-        ("unsupported MMIX .mmo records after postamble", "tetra 5"),
+        ("expected MMIX .mmo lop_stab after postamble", "tetra 5"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-spec-unsupported",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_SPEC, 1)]),
+        ("unsupported MMIX .mmo lop_spec", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-stab-invalid-yz",
+        mmo_image([mmo_post(255, {255: 0}), mmo_lop(MMIX_MMO_LOP_STAB, 1)]),
+        ("invalid MMIX .mmo lop_stab yz=1", "tetra 5"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-end-invalid-count",
+        mmo_image(
+            [
+                mmo_post(255, {255: 0}),
+                mmo_lop(MMIX_MMO_LOP_STAB, 0),
+                struct.pack(">I", 0),
+                mmo_lop(MMIX_MMO_LOP_END, 0),
+            ]
+        ),
+        ("invalid MMIX .mmo lop_end yz=0", "expected 1"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-records-after-end",
+        mmo_image([mmo_post(255, {255: 0}), mmo_stab_end(), halt()]),
+        ("unsupported MMIX .mmo records after lop_end", "tetra 7"),
     ),
 ]
 
@@ -3016,6 +3093,7 @@ MMO_TESTS = [
                 insn(0x21, 3, 255, 0),    # ADDI r3,r255,0
                 halt(),
                 mmo_post(254, {254: 0x123456789ABCDEF0, 255: 0x40}),
+                mmo_stab_end(),
             ]
         ),
         pc=0x48,
@@ -3134,7 +3212,9 @@ def run_expected_failure(qemu, workdir, test):
 
 
 def run_serial_test(qemu, workdir, test):
-    image = workdir / f"{test.name}.bin"
+    suffix = ".mmo" if test.program.startswith(bytes((MMIX_MMO_ESCAPE,
+                                                      MMIX_MMO_LOP_PRE))) else ".bin"
+    image = workdir / f"{test.name}{suffix}"
     log = workdir / f"{test.name}.log"
     serial = workdir / f"{test.name}.serial"
 
