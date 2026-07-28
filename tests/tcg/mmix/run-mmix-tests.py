@@ -36,6 +36,9 @@ MMIX_MMO_ESCAPE = 0x98
 MMIX_MMO_LOP_QUOTE = 0x00
 MMIX_MMO_LOP_LOC = 0x01
 MMIX_MMO_LOP_SKIP = 0x02
+MMIX_MMO_LOP_FIXO = 0x03
+MMIX_MMO_LOP_FIXR = 0x04
+MMIX_MMO_LOP_FIXRX = 0x05
 MMIX_MMO_LOP_PRE = 0x09
 
 
@@ -84,18 +87,26 @@ def mmo_quote(tetra):
     return mmo_lop(MMIX_MMO_LOP_QUOTE, 1) + tetra
 
 
-def mmo_loc(address):
+def mmo_address_lop(lop, address):
     high = (address >> 32) & 0xffffffff
     low = address & 0xffffffff
     if high & 0x00ffffff:
         return (
-            mmo_lop(MMIX_MMO_LOP_LOC, 0, y=(high >> 24) & 0xff, z=2)
+            mmo_lop(lop, 0, y=(high >> 24) & 0xff, z=2)
             + struct.pack(">I", high & 0x00ffffff)
             + struct.pack(">I", low)
         )
-    return mmo_lop(MMIX_MMO_LOP_LOC, 0, y=(high >> 24) & 0xff, z=1) + struct.pack(
+    return mmo_lop(lop, 0, y=(high >> 24) & 0xff, z=1) + struct.pack(
         ">I", low
     )
+
+
+def mmo_loc(address):
+    return mmo_address_lop(MMIX_MMO_LOP_LOC, address)
+
+
+def mmo_fixo(address):
+    return mmo_address_lop(MMIX_MMO_LOP_FIXO, address)
 
 
 def mmo_skip(bytes_):
@@ -2876,6 +2887,26 @@ LOADER_FAILURES = [
         bytes((0x98, 0x09, 0x02, 0x00)),
         ("unsupported MMIX .mmo preamble version 2",),
     ),
+    MMIXLoaderFailure(
+        "mmo-fixo-invalid-z",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXO, 0, y=0, z=0)]),
+        ("invalid MMIX .mmo lop_fixo z=0", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-fixr-unsupported",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXR, 4)]),
+        ("unsupported MMIX .mmo lop_fixr", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-fixrx-invalid-yz",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 8)]),
+        ("invalid MMIX .mmo lop_fixrx yz=8", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-fixrx-unsupported",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 16), struct.pack(">I", 0)]),
+        ("unsupported MMIX .mmo lop_fixrx", "tetra 2"),
+    ),
 ]
 
 
@@ -2927,6 +2958,19 @@ MMO_TESTS = [
         ),
         pc=0x24,
         regs={1: 0x55},
+    ),
+    MMIXMMOTest(
+        "mmo-fixo-load",
+        mmo_image(
+            [
+                *set_octa(1, 0x80),
+                insn(0x8e, 2, 1, 0),      # LDOU r2,r1,r0
+                halt(),
+                mmo_fixo(0x80),
+            ]
+        ),
+        pc=0x14,
+        regs={2: 0x18},
     ),
 ]
 
