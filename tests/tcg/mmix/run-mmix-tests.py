@@ -36,7 +36,9 @@ MMIX_VIRT_UART_TX = 0x04
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
 MMIX_HOSTED_STDOUT = 1
+MMIX_HOSTED_FPUTS = 7
 MMIX_HOSTED_FPUTWS = 8
+MMIX_HOSTED_STRING_MAX = 256
 MMIX_MMO_ESCAPE = 0x98
 MMIX_MMO_LOP_QUOTE = 0x00
 MMIX_MMO_LOP_LOC = 0x01
@@ -3015,6 +3017,31 @@ EXPECTED_FAILURES = [
         "unsupported-hosted-trap-service",
         insn(0x00, 0, MMIX_HOSTED_FPUTWS, MMIX_HOSTED_STDOUT),
         ("MMIX unsupported hosted TRAP service 8 handle 1",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "hosted-fputs-invalid-string-address",
+        b"".join(
+            [
+                *set_octa(255, 0x4000000000000000),
+                insn(0x00, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+            ]
+        ),
+        ("MMIX hosted Fputs invalid string address 0x4000000000000000",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "hosted-fputs-unterminated-string",
+        b"".join(
+            [
+                *set_octa(255, 0x100),
+                insn(0x00, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+                insn(0xfd, 0, 0, 0) * ((0x100 - 0x14) // 4),
+                b"A" * MMIX_HOSTED_STRING_MAX,
+            ]
+        ),
+        ("MMIX hosted Fputs string at 0x0000000000000100 exceeds 256 bytes "
+         "without NUL",
          "MMIX illegal instruction"),
     ),
 ]

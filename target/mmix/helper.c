@@ -12,11 +12,13 @@
 #include "exec/cputlb.h"
 #include "exec/helper-proto.h"
 #include "fpu/softfloat.h"
+#include "system/memory.h"
 #include "system/runstate.h"
 #include <math.h>
 
 #define MMIX_QNAN_BIT      0x0008000000000000ULL
 #define MMIX_DEFAULT_NAN   0x7ff8000000000000ULL
+#define MMIX_HOSTED_STRING_MAX 256
 
 typedef enum MMIXHostedTrap {
     MMIX_HOSTED_TRAP_HALT = 0,
@@ -1431,11 +1433,88 @@ void helper_mmix_test_exit(CPUMMIXState *env)
     mmix_shutdown_with_cpu_log(env, "MMIX test exit");
 }
 
+static bool mmix_hosted_read_byte(CPUMMIXState *env, uint64_t address,
+                                  uint8_t *byte)
+{
+    CPUState *cs = env_cpu(env);
+    MMIXAddressTranslation translation;
+    MemTxResult result;
+
+    if (!mmix_translate_address(env, address, MMU_DATA_LOAD, true, false,
+                                &translation)) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted Fputs invalid string address 0x%016"
+                      PRIx64 "\n",
+                      address);
+        return false;
+    }
+
+    *byte = address_space_ldub(cs->as, translation.physical,
+                               MEMTXATTRS_UNSPECIFIED, &result);
+    if (result != MEMTX_OK) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted Fputs could not read string address "
+                      "0x%016" PRIx64 "\n",
+                      address);
+        return false;
+    }
+    return true;
+}
+
+static bool mmix_hosted_read_cstring(CPUMMIXState *env, uint64_t address,
+                                     GByteArray *bytes)
+{
+    uint8_t byte;
+    uint64_t current;
+    size_t i;
+
+    for (i = 0; i < MMIX_HOSTED_STRING_MAX; i++) {
+        current = address + i;
+        if (current < address) {
+            qemu_log_mask(LOG_UNIMP,
+                          "MMIX hosted Fputs invalid string address 0x%016"
+                          PRIx64 "\n",
+                          current);
+            return false;
+        }
+        if (!mmix_hosted_read_byte(env, current, &byte)) {
+            return false;
+        }
+        if (byte == 0) {
+            return true;
+        }
+        g_byte_array_append(bytes, &byte, 1);
+    }
+
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX hosted Fputs string at 0x%016" PRIx64
+                  " exceeds %u bytes without NUL\n",
+                  address, MMIX_HOSTED_STRING_MAX);
+    return false;
+}
+
 void helper_mmix_hosted_trap(CPUMMIXState *env, uint32_t service,
                              uint32_t handle)
 {
     if (service == MMIX_HOSTED_TRAP_HALT && handle == 0) {
         mmix_shutdown_with_cpu_log(env, "MMIX hosted Halt");
+    }
+    if (service == MMIX_HOSTED_TRAP_FPUTS &&
+        handle == MMIX_HOSTED_HANDLE_STDOUT) {
+        GByteArray *bytes = g_byte_array_new();
+        uint64_t address = mmix_cpu_read_reg(env, 255);
+
+        if (!mmix_hosted_read_cstring(env, address, bytes)) {
+            g_byte_array_free(bytes, true);
+            helper_raise_illegal_instruction(env);
+        }
+
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted Fputs output is not implemented yet at "
+                      "0x%016" PRIx64 "\n",
+                      env->pc);
+        g_byte_array_free(bytes, true);
+        helper_raise_illegal_instruction(env);
     }
 
     qemu_log_mask(LOG_UNIMP,
