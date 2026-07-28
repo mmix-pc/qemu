@@ -11,12 +11,12 @@
 #include "system/address-spaces.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
-#include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/core/sysbus.h"
 #include "system/system.h"
 #include "target/mmix/cpu-qom.h"
+#include "mmo-loader.h"
 
 #define MMIX_VIRT_UART_BASE 0x100000000ULL
 
@@ -45,14 +45,15 @@ static void mmix_virt_init(MachineState *machine)
     if (machine->kernel_filename) {
         Error *err = NULL;
         ssize_t image_size;
+        hwaddr entry;
 
-        image_size = load_image_targphys(machine->kernel_filename, 0,
-                                         machine->ram_size, &err);
+        image_size = mmix_load_kernel(machine->kernel_filename,
+                                      machine->ram_size, &entry, &err);
         if (image_size < 0) {
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
-        cpu_set_pc(cpu, 0);
+        cpu_set_pc(cpu, entry);
     }
 }
 

@@ -310,6 +310,13 @@ class MMIXSerialTest:
     output: bytes
 
 
+@dataclasses.dataclass(frozen=True)
+class MMIXLoaderFailure:
+    name: str
+    image: bytes
+    patterns: tuple[str, ...]
+
+
 REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
 REGISTER_STACK_SAVE_UNSAVE = register_stack_save_unsave_program(10)
 SAVE_STATE_AFTER_SAVE = save_state_after_save_program()
@@ -2809,6 +2816,25 @@ SERIAL_TESTS = [
 ]
 
 
+LOADER_FAILURES = [
+    MMIXLoaderFailure(
+        "mmo-detected-unsupported",
+        bytes((0x98, 0x09, 0x01, 0x00)),
+        ("MMIX .mmo object loading is not implemented yet",),
+    ),
+    MMIXLoaderFailure(
+        "mmo-truncated-preamble",
+        bytes((0x98, 0x09)),
+        ("truncated MMIX .mmo preamble",),
+    ),
+    MMIXLoaderFailure(
+        "mmo-unsupported-preamble-version",
+        bytes((0x98, 0x09, 0x02, 0x00)),
+        ("unsupported MMIX .mmo preamble version 2",),
+    ),
+]
+
+
 def parse_log(log_text):
     if "MMIX test exit" not in log_text:
         raise AssertionError("missing MMIX test exit line")
@@ -2957,6 +2983,43 @@ def run_serial_test(qemu, workdir, test):
         )
 
 
+def run_loader_failure(qemu, workdir, test):
+    image = workdir / f"{test.name}.mmo"
+
+    image.write_bytes(test.image)
+
+    cmd = [
+        str(qemu),
+        "-machine",
+        "virt",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-serial",
+        "none",
+        "-kernel",
+        str(image),
+    ]
+    result = subprocess.run(
+        cmd,
+        check=False,
+        timeout=10,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode == 0:
+        raise AssertionError(f"{test.name}: expected loader failure")
+
+    output = result.stdout + result.stderr
+    text = output.decode("utf-8", errors="replace")
+    for pattern in test.patterns:
+        if pattern not in text:
+            raise AssertionError(
+                f"{test.name}: missing expected output pattern {pattern!r}"
+            )
+
+
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True, type=pathlib.Path)
@@ -2972,6 +3035,9 @@ def main(argv):
         print(f"PASS {test.name}")
     for test in SERIAL_TESTS:
         run_serial_test(args.qemu, args.workdir, test)
+        print(f"PASS {test.name}")
+    for test in LOADER_FAILURES:
+        run_loader_failure(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
 
 
