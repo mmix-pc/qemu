@@ -40,6 +40,7 @@ MMIX_MMO_LOP_FIXO = 0x03
 MMIX_MMO_LOP_FIXR = 0x04
 MMIX_MMO_LOP_FIXRX = 0x05
 MMIX_MMO_LOP_PRE = 0x09
+MMIX_MMO_LOP_POST = 0x0A
 
 
 def insn(op, x=0, y=0, z=0):
@@ -113,6 +114,15 @@ def mmo_skip(bytes_):
     if not 0 <= bytes_ <= 0xffff:
         raise ValueError("mmo_skip only supports a 16-bit byte count")
     return mmo_lop(MMIX_MMO_LOP_SKIP, bytes_)
+
+
+def mmo_post(global_base, globals_):
+    if not 32 <= global_base <= 255:
+        raise ValueError("mmo_post global base must be in 32..255")
+    records = [mmo_lop(MMIX_MMO_LOP_POST, 0, y=0, z=global_base)]
+    for reg in range(global_base, 256):
+        records.append(struct.pack(">Q", globals_.get(reg, 0)))
+    return b"".join(records)
 
 
 def program_with_handler(prefix, handler_addr, handler):
@@ -2907,6 +2917,31 @@ LOADER_FAILURES = [
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXRX, 16), struct.pack(">I", 0)]),
         ("unsupported MMIX .mmo lop_fixrx", "tetra 2"),
     ),
+    MMIXLoaderFailure(
+        "mmo-post-invalid-y",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_POST, 0, y=1, z=32)]),
+        ("invalid MMIX .mmo lop_post y=1", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-post-invalid-z",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_POST, 0, y=0, z=31)]),
+        ("invalid MMIX .mmo lop_post z=31", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-post-truncated-global",
+        mmo_image([mmo_lop(MMIX_MMO_LOP_POST, 0, y=0, z=255), struct.pack(">I", 0)]),
+        ("truncated MMIX .mmo object", "tetra 3"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-post-trailing-records",
+        mmo_image(
+            [
+                mmo_post(255, {255: 0}),
+                halt(),
+            ]
+        ),
+        ("unsupported MMIX .mmo records after postamble", "tetra 5"),
+    ),
 ]
 
 
@@ -2971,6 +3006,25 @@ MMO_TESTS = [
         ),
         pc=0x14,
         regs={2: 0x18},
+    ),
+    MMIXMMOTest(
+        "mmo-post-entry-globals",
+        mmo_image(
+            [
+                mmo_loc(0x40),
+                insn(0xfe, 1, 0, 19),     # GET r1,rG
+                insn(0x21, 3, 255, 0),    # ADDI r3,r255,0
+                halt(),
+                mmo_post(254, {254: 0x123456789ABCDEF0, 255: 0x40}),
+            ]
+        ),
+        pc=0x48,
+        regs={
+            1: 254,
+            3: 0x40,
+            254: 0x123456789ABCDEF0,
+            255: 0x40,
+        },
     ),
 ]
 

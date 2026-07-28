@@ -15,10 +15,27 @@
 #include "hw/core/qdev-properties-system.h"
 #include "hw/core/sysbus.h"
 #include "system/system.h"
+#include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
 #include "mmo-loader.h"
 
 #define MMIX_VIRT_UART_BASE 0x100000000ULL
+
+static void mmix_apply_kernel_load_info(CPUState *cpu,
+                                        const MMIXKernelLoadInfo *info)
+{
+    CPUMMIXState *env = cpu_env(cpu);
+    unsigned reg;
+
+    if (info->has_mmo_globals) {
+        env->sregs[MMIX_SREG_RG] = info->global_base;
+        for (reg = info->global_base; reg < MMIX_REGS; reg++) {
+            mmix_cpu_write_reg(env, reg, info->globals[reg]);
+        }
+    }
+
+    cpu_set_pc(cpu, info->entry);
+}
 
 static void mmix_virt_init(MachineState *machine)
 {
@@ -45,15 +62,15 @@ static void mmix_virt_init(MachineState *machine)
     if (machine->kernel_filename) {
         Error *err = NULL;
         ssize_t image_size;
-        hwaddr entry;
+        MMIXKernelLoadInfo load_info;
 
         image_size = mmix_load_kernel(machine->kernel_filename,
-                                      machine->ram_size, &entry, &err);
+                                      machine->ram_size, &load_info, &err);
         if (image_size < 0) {
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
-        cpu_set_pc(cpu, entry);
+        mmix_apply_kernel_load_info(cpu, &load_info);
     }
 }
 

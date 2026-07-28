@@ -10,7 +10,14 @@
 #include "exec/hwaddr.h"
 #include "qapi/error.h"
 
+typedef struct MMIXKernelLoadInfo {
+    hwaddr entry;
+    bool has_mmo_globals;
+    uint8_t global_base;
+    uint64_t globals[256];
+} MMIXKernelLoadInfo;
+
 ssize_t mmix_load_kernel(const char *filename, uint64_t ram_size,
-                         hwaddr *entry, Error **errp);
+                         MMIXKernelLoadInfo *info, Error **errp);
 
 #endif
