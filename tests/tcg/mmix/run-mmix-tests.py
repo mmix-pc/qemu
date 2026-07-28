@@ -8,6 +8,7 @@ import argparse
 import dataclasses
 import pathlib
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -464,6 +465,45 @@ REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
 REGISTER_STACK_SAVE_UNSAVE = register_stack_save_unsave_program(10)
 SAVE_STATE_AFTER_SAVE = save_state_after_save_program()
 SAVE_UNSAVE_ROUNDTRIP = save_unsave_roundtrip_program()
+
+MMIXAL_DATA_RW_SOURCE = """\
+        LOC     Data_Segment
+Base    GREG    @
+Data    OCTA    #1122334455667788
+Out     OCTA    0
+        LOC     #0
+Main    LDOU    $2,Data
+        SETL    $3,#2211
+        STOU    $3,Out
+        LDOU    $4,Out
+        TRAP    0,0,0
+"""
+
+MMIXAL_GREG_DATA_SOURCE = """\
+        LOC     Data_Segment
+Data    OCTA    #0102030405060708
+Ptr     GREG    Data
+        LOC     #0
+Main    ADDU    $2,Ptr,0
+        LDOU    $3,Ptr,0
+        TRAP    0,0,0
+"""
+
+MMIXAL_UART_SOURCE = """\
+Uart    GREG    #100000000
+        LOC     #0
+Main    SETL    $2,'Q'
+        STBU    $2,Uart,#4
+        SETL    $2,'E'
+        STBU    $2,Uart,#4
+        SETL    $2,'M'
+        STBU    $2,Uart,#4
+        SETL    $2,'U'
+        STBU    $2,Uart,#4
+        SETL    $2,#a
+        STBU    $2,Uart,#4
+        TRAP    0,0,0
+"""
 
 
 TESTS = [
@@ -3618,6 +3658,62 @@ def run_mmo_test(qemu, workdir, test):
             )
 
 
+def assemble_mmixal_mmo(mmixal, workdir, name, source):
+    source_dir = workdir / "mmixal-fixtures"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_path = source_dir / f"{name}.mms"
+    object_path = source_dir / f"{name}.mmo"
+
+    source_path.write_text(source, encoding="ascii")
+    subprocess.run(
+        [mmixal, "-o", object_path.name, source_path.name],
+        cwd=source_dir,
+        check=True,
+        timeout=10,
+    )
+    return object_path.read_bytes()
+
+
+def optional_mmixal_tests(workdir):
+    mmixal = shutil.which("mmixal")
+    if mmixal is None:
+        print("SKIP mmixal-mmo-fixtures (mmixal not found)")
+        return [], []
+
+    return [
+        MMIXSerialTest(
+            "mmixal-mmo-uart-output",
+            assemble_mmixal_mmo(mmixal, workdir, "uart", MMIXAL_UART_SOURCE),
+            pc=0x28,
+            output=b"QEMU\n",
+        ),
+    ], [
+        MMIXMMOTest(
+            "mmixal-mmo-data-segment-read-write",
+            assemble_mmixal_mmo(mmixal, workdir, "data_rw",
+                                MMIXAL_DATA_RW_SOURCE),
+            pc=0x10,
+            regs={
+                2: 0x1122334455667788,
+                3: 0x2211,
+                4: 0x2211,
+                254: MMIX_DATA_SEGMENT_BASE,
+            },
+        ),
+        MMIXMMOTest(
+            "mmixal-mmo-greg-data-label",
+            assemble_mmixal_mmo(mmixal, workdir, "greg_data",
+                                MMIXAL_GREG_DATA_SOURCE),
+            pc=0x08,
+            regs={
+                2: MMIX_DATA_SEGMENT_BASE,
+                3: 0x0102030405060708,
+                254: MMIX_DATA_SEGMENT_BASE,
+            },
+        ),
+    ]
+
+
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True, type=pathlib.Path)
@@ -3625,19 +3721,21 @@ def main(argv):
     args = parser.parse_args(argv)
 
     args.workdir.mkdir(parents=True, exist_ok=True)
+    mmixal_serial_tests, mmixal_mmo_tests = optional_mmixal_tests(args.workdir)
+
     for test in TESTS:
         run_one(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
     for test in EXPECTED_FAILURES:
         run_expected_failure(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
-    for test in SERIAL_TESTS:
+    for test in [*SERIAL_TESTS, *mmixal_serial_tests]:
         run_serial_test(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
     for test in LOADER_FAILURES:
         run_loader_failure(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
-    for test in MMO_TESTS:
+    for test in [*MMO_TESTS, *mmixal_mmo_tests]:
         run_mmo_test(args.qemu, args.workdir, test)
         print(f"PASS {test.name}")
 
