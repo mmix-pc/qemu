@@ -234,6 +234,14 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
     }
 
     if (env->flat_translation) {
+        if (mmix_bare_data_segment_to_phys(address, &translation->physical)) {
+            translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+            return true;
+        }
+        if (mmix_bare_unsupported_high_segment(address)) {
+            return mmix_finish_translation_fault(env, translation, causes,
+                                                 allow_traps && !debug);
+        }
         translation->physical = address;
         translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
         return true;

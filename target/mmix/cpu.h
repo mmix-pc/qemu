@@ -28,6 +28,35 @@
 #define MMIX_INITIAL_RL 0
 #define MMIX_INITIAL_STACK 0x0000000000010000ULL
 
+#define MMIX_DATA_SEGMENT_BASE 0x2000000000000000ULL
+#define MMIX_DATA_SEGMENT_PHYS_BASE 0x0000000004000000ULL
+#define MMIX_DATA_SEGMENT_SIZE 0x0000000004000000ULL
+#define MMIX_POSITIVE_HIGH_SEGMENT_BASE 0x2000000000000000ULL
+#define MMIX_NEGATIVE_SEGMENT_BASE 0x8000000000000000ULL
+
+static inline bool mmix_bare_data_segment_to_phys(uint64_t address,
+                                                  hwaddr *physical)
+{
+    uint64_t offset = address - MMIX_DATA_SEGMENT_BASE;
+
+    if (address < MMIX_DATA_SEGMENT_BASE ||
+        offset >= MMIX_DATA_SEGMENT_SIZE) {
+        return false;
+    }
+
+    *physical = MMIX_DATA_SEGMENT_PHYS_BASE + offset;
+    return true;
+}
+
+static inline bool mmix_bare_unsupported_high_segment(uint64_t address)
+{
+    hwaddr physical;
+
+    return address >= MMIX_POSITIVE_HIGH_SEGMENT_BASE &&
+           address < MMIX_NEGATIVE_SEGMENT_BASE &&
+           !mmix_bare_data_segment_to_phys(address, &physical);
+}
+
 typedef enum MMIXSpecialReg {
     MMIX_SREG_RB = 0,
     MMIX_SREG_RD = 1,

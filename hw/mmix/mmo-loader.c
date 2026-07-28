@@ -9,6 +9,7 @@
 #include "hw/core/loader.h"
 #include "system/address-spaces.h"
 #include "system/memory.h"
+#include "target/mmix/cpu.h"
 #include "mmo-loader.h"
 
 #define MMIX_MMO_ESCAPE 0x98
@@ -276,12 +277,6 @@ static bool mmix_mmo_store_octa(MMIXMMOLoader *loader, uint64_t address,
                    HWADDR_PRIx, address);
         return false;
     }
-    if (address > loader->ram_size ||
-        loader->ram_size - address < MMIX_MMO_OCTABYTE_SIZE) {
-        error_setg(errp, "MMIX .mmo octabyte at 0x%" HWADDR_PRIx
-                   " is outside RAM", address);
-        return false;
-    }
     if (loader->loaded_size > SSIZE_MAX - MMIX_MMO_OCTABYTE_SIZE) {
         error_setg(errp, "MMIX .mmo object '%s' is too large",
                    loader->filename);
@@ -296,19 +291,40 @@ static bool mmix_mmo_store_octa(MMIXMMOLoader *loader, uint64_t address,
                               value, "octabyte", errp);
 }
 
+static bool mmix_mmo_translate_address(MMIXMMOLoader *loader, uint64_t address,
+                                       const char *name, hwaddr *physical,
+                                       Error **errp)
+{
+    if (mmix_bare_data_segment_to_phys(address, physical)) {
+        return true;
+    }
+    if (mmix_bare_unsupported_high_segment(address)) {
+        error_setg(errp, "unsupported MMIX .mmo high-segment %s address 0x%"
+                   HWADDR_PRIx " at tetra %" PRIu64, name, address,
+                   loader->tetra_index);
+        return false;
+    }
+
+    *physical = address;
+    return true;
+}
+
 static bool mmix_mmo_check_tetra_address(MMIXMMOLoader *loader,
                                          uint64_t address, const char *name,
-                                         Error **errp)
+                                         hwaddr *physical, Error **errp)
 {
     if (address & 3) {
         error_setg(errp, "unaligned MMIX .mmo %s target 0x%" HWADDR_PRIx,
                    name, address);
         return false;
     }
-    if (address > loader->ram_size ||
-        loader->ram_size - address < MMIX_MMO_PREAMBLE_SIZE) {
+    if (!mmix_mmo_translate_address(loader, address, name, physical, errp)) {
+        return false;
+    }
+    if (*physical > loader->ram_size ||
+        loader->ram_size - *physical < MMIX_MMO_PREAMBLE_SIZE) {
         error_setg(errp, "MMIX .mmo %s target 0x%" HWADDR_PRIx
-                   " is outside RAM", name, address);
+                   " maps outside RAM", name, address);
         return false;
     }
 
@@ -322,8 +338,9 @@ static bool mmix_mmo_xor_tetra(MMIXMMOLoader *loader, uint64_t address,
     uint8_t data[MMIX_MMO_PREAMBLE_SIZE];
     uint32_t old_value;
     MemTxResult result;
+    hwaddr physical;
 
-    if (!mmix_mmo_check_tetra_address(loader, address, name, errp)) {
+    if (!mmix_mmo_check_tetra_address(loader, address, name, &physical, errp)) {
         return false;
     }
     if (loader->loaded_size > SSIZE_MAX - MMIX_MMO_PREAMBLE_SIZE) {
@@ -332,7 +349,7 @@ static bool mmix_mmo_xor_tetra(MMIXMMOLoader *loader, uint64_t address,
         return false;
     }
 
-    result = address_space_read(&address_space_memory, address,
+    result = address_space_read(&address_space_memory, physical,
                                 MEMTXATTRS_UNSPECIFIED, data, sizeof(data));
     if (result != MEMTX_OK) {
         error_setg(errp, "could not read MMIX .mmo %s target at 0x%"
@@ -342,7 +359,7 @@ static bool mmix_mmo_xor_tetra(MMIXMMOLoader *loader, uint64_t address,
 
     old_value = ldl_be_p(data);
     stl_be_p(data, old_value ^ value);
-    result = address_space_write(&address_space_memory, address,
+    result = address_space_write(&address_space_memory, physical,
                                  MEMTXATTRS_UNSPECIFIED, data, sizeof(data));
     if (result != MEMTX_OK) {
         error_setg(errp, "could not write MMIX .mmo %s target at 0x%"

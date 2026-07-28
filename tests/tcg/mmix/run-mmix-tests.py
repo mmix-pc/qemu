@@ -32,6 +32,8 @@ VM_RV_ROOT2 = 0x11110d0000004000
 NEGATIVE_HANDLER = 0x8000000000000080
 MMIX_VIRT_UART_BASE = 0x0000000100000000
 MMIX_VIRT_UART_TX = 0x04
+MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
+MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
 MMIX_MMO_ESCAPE = 0x98
 MMIX_MMO_LOP_QUOTE = 0x00
 MMIX_MMO_LOP_LOC = 0x01
@@ -933,6 +935,44 @@ TESTS = [
         ),
         pc=0x10,
         regs={1: 0x40, 2: 0x5a, 3: 0x5a},
+    ),
+    MMIXTest(
+        "data-segment-runtime-load-store",
+        b"".join(
+            [
+                *set_octa(1, MMIX_DATA_SEGMENT_BASE + 0x100),
+                *set_octa(2, 0x1122334455667788),
+                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
+                insn(0x8e, 3, 1, 0),      # LDOU r3,r1,r0
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={2: 0x1122334455667788, 3: 0x1122334455667788},
+    ),
+    MMIXTest(
+        "unsupported-high-segment-runtime-trap",
+        program_with_handler(
+            [
+                wyde(0xe3, 1, 0x80),      # SETL r1,handler
+                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
+                *set_octa(2, RQ_PROGRAM_K),
+                insn(0xf6, 15, 0, 2),     # PUT rK,r2
+                *set_octa(3, 0x4000000000000000),
+                insn(0x8e, 4, 3, 0),      # LDOU r4,r3,r0
+                wyde(0xe3, 5, 0x00ff),    # skipped after dynamic trap
+            ],
+            0x80,
+            [
+                insn(0xfe, 40, 0, 16),    # GET r40,rQ
+                insn(0xfe, 41, 0, 29),    # GET r41,rXX
+                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                halt(),
+            ],
+        ),
+        pc=0x90,
+        regs={4: 0, 5: 0, 40: RQ_PROGRAM_R, 41: RQ_PROGRAM_R, 42: 0x30, 43: 0},
     ),
     MMIXTest(
         "virtual-translation-page0-rwx",
@@ -2973,6 +3013,18 @@ LOADER_FAILURES = [
         ("invalid MMIX .mmo lop_fixo z=0", "tetra 2"),
     ),
     MMIXLoaderFailure(
+        "mmo-unsupported-data-segment-range",
+        mmo_image([mmo_loc(MMIX_DATA_SEGMENT_BASE + MMIX_DATA_SEGMENT_SIZE), halt()]),
+        ("unsupported MMIX .mmo high-segment tetrabyte address "
+         "0x2000000004000000",),
+    ),
+    MMIXLoaderFailure(
+        "mmo-unsupported-pool-segment",
+        mmo_image([mmo_loc(0x4000000000000000), halt()]),
+        ("unsupported MMIX .mmo high-segment tetrabyte address "
+         "0x4000000000000000",),
+    ),
+    MMIXLoaderFailure(
         "mmo-fixr-target-before-zero",
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXR, 4)]),
         ("MMIX .mmo lop_fixr target before address 0", "tetra 2"),
@@ -3177,6 +3229,34 @@ MMO_TESTS = [
         regs={3: 0x33, 255: 0x20},
     ),
     MMIXMMOTest(
+        "mmo-data-segment-load",
+        mmo_image(
+            [
+                *set_octa(1, MMIX_DATA_SEGMENT_BASE + 0x100),
+                insn(0x8e, 2, 1, 0),      # LDOU r2,r1,r0
+                halt(),
+                mmo_loc(MMIX_DATA_SEGMENT_BASE + 0x100),
+                struct.pack(">Q", 0x1122334455667788),
+            ]
+        ),
+        pc=0x14,
+        regs={2: 0x1122334455667788},
+    ),
+    MMIXMMOTest(
+        "mmo-data-segment-store",
+        mmo_image(
+            [
+                *set_octa(1, MMIX_DATA_SEGMENT_BASE + 0x120),
+                *set_octa(2, 0x8877665544332211),
+                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
+                insn(0x8e, 3, 1, 0),      # LDOU r3,r1,r0
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={3: 0x8877665544332211},
+    ),
+    MMIXMMOTest(
         "mmo-fixo-load",
         mmo_image(
             [
@@ -3204,6 +3284,19 @@ MMO_TESTS = [
         ),
         pc=0x14,
         regs={2: 0x08},
+    ),
+    MMIXMMOTest(
+        "mmo-fixo-data-segment-target",
+        mmo_image(
+            [
+                *set_octa(1, MMIX_DATA_SEGMENT_BASE + 0x200),
+                insn(0x8e, 2, 1, 0),      # LDOU r2,r1,r0
+                halt(),
+                mmo_fixo(MMIX_DATA_SEGMENT_BASE + 0x200),
+            ]
+        ),
+        pc=0x14,
+        regs={2: 0x18},
     ),
     MMIXMMOTest(
         "mmo-fixr-branch-forward",
