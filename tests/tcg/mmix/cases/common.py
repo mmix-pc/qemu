@@ -355,6 +355,10 @@ class MMIXMMOTest:
     regs: dict[int, int]
 
 
+def case_id(test):
+    return test.name
+
+
 REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
 REGISTER_STACK_SAVE_UNSAVE = register_stack_save_unsave_program(10)
 SAVE_STATE_AFTER_SAVE = save_state_after_save_program()

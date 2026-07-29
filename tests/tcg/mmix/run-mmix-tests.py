@@ -11,8 +11,8 @@ import pytest
 
 
 def main(argv):
-    test_file = pathlib.Path(__file__).resolve().with_name("test_mmix_softmmu.py")
-    return pytest.main(["-q", str(test_file), *argv])
+    test_dir = pathlib.Path(__file__).resolve().parent
+    return pytest.main(["-q", str(test_dir), *argv])
 
 
 if __name__ == "__main__":
