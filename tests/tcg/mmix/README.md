@@ -1,0 +1,43 @@
+# MMIX TCG Tests
+
+This directory contains pytest-based softmmu tests for the MMIX target.
+
+The tests run `qemu-system-mmix` with small raw instruction images or `.mmo`
+images and check CPU state, loader failures, and serial output. Some fixtures
+are generated from MMIXAL sources when `mmixal` is available.
+
+## Dependencies
+
+Required Python packages:
+
+- `pytest`
+- `bitstruct`
+- `construct`
+
+Required binary:
+
+- `qemu-system-mmix`
+
+Optional binary:
+
+- `mmixal`
+
+Tests that need `mmixal` are skipped when it is not found in `PATH`.
+
+## Running
+
+From the QEMU source tree, the normal TCG entry point is:
+
+```sh
+make -C build/tests/tcg/mmix-softmmu run
+```
+
+To run the pytest wrapper directly:
+
+```sh
+tests/tcg/mmix/run-mmix-tests.py \
+    --qemu build/qemu-system-mmix \
+    --workdir build/tests/tcg/mmix-softmmu/mmix-tests
+```
+
+The `--workdir` directory is used for generated images, logs, and serial output.

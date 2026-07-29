@@ -13,6 +13,9 @@ run-mmix-baseline:
 			--qemu $(QEMU) --workdir $(MMIX_TEST_WORKDIR))
 
 CLEANFILES += mmix-tests/*.bin mmix-tests/*.log mmix-tests/*.mmo
+CLEANFILES += mmix-tests/*.serial
+CLEANFILES += mmix-tests/mmixal-fixtures/*.mms
+CLEANFILES += mmix-tests/mmixal-fixtures/*.mmo
 
 # These tests generate raw instruction images directly and do not use the
 # multiarch system tests or a guest cross compiler.
