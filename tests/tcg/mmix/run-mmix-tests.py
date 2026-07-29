@@ -12,6 +12,14 @@ import struct
 import subprocess
 import sys
 
+from lib.asserts import (
+    assert_exit_pc,
+    assert_log_patterns,
+    assert_output_patterns,
+    assert_process_failed,
+    assert_regs,
+    assert_serial_output,
+)
 from lib.qemu import read_log, run_kernel
 
 MASK64 = (1 << 64) - 1
@@ -3515,25 +3523,8 @@ def run_one(qemu, workdir, test):
     run_kernel(qemu, image, trace="int", log=log, check=True, timeout=10)
 
     result = read_log(log)
-    if result.pc != test.pc:
-        raise AssertionError(
-            f"{test.name}: pc expected 0x{test.pc:x}, got 0x{result.pc:x}"
-        )
-    if result.npc != test.pc + 4:
-        raise AssertionError(
-            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{result.npc:x}"
-        )
-
-    for reg, expected in test.regs.items():
-        actual = result.regs.get(reg)
-        if actual is None:
-            raise AssertionError(f"{test.name}: missing r{reg} in log")
-        expected &= MASK64
-        if actual != expected:
-            raise AssertionError(
-                f"{test.name}: r{reg} expected 0x{expected:016x}, "
-                f"got 0x{actual:016x}"
-            )
+    assert_exit_pc(test.name, result, test.pc)
+    assert_regs(test.name, result, test.regs)
 
 
 def run_expected_failure(qemu, workdir, test):
@@ -3553,12 +3544,7 @@ def run_expected_failure(qemu, workdir, test):
         raise AssertionError(f"{test.name}: missing log")
 
     log_text = log.read_text(encoding="utf-8")
-    for pattern in test.patterns:
-        if pattern not in log_text:
-            raise AssertionError(f"{test.name}: missing expected log pattern {pattern!r}")
-    for pattern in test.absent:
-        if pattern in log_text:
-            raise AssertionError(f"{test.name}: unexpected log pattern {pattern!r}")
+    assert_log_patterns(test.name, log_text, test.patterns, test.absent)
 
 
 def run_serial_test(qemu, workdir, test):
@@ -3584,20 +3570,10 @@ def run_serial_test(qemu, workdir, test):
     )
 
     result = read_log(log)
-    if result.pc != test.pc:
-        raise AssertionError(
-            f"{test.name}: pc expected 0x{test.pc:x}, got 0x{result.pc:x}"
-        )
-    if result.npc != test.pc + 4:
-        raise AssertionError(
-            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{result.npc:x}"
-        )
+    assert_exit_pc(test.name, result, test.pc)
 
     actual = serial.read_bytes()
-    if actual != test.output:
-        raise AssertionError(
-            f"{test.name}: serial output expected {test.output!r}, got {actual!r}"
-        )
+    assert_serial_output(test.name, actual, test.output)
 
 
 def run_loader_failure(qemu, workdir, test):
@@ -3612,16 +3588,11 @@ def run_loader_failure(qemu, workdir, test):
         timeout=10,
         capture_output=True,
     )
-    if result.returncode == 0:
-        raise AssertionError(f"{test.name}: expected loader failure")
+    assert_process_failed(test.name, result)
 
     output = result.stdout + result.stderr
     text = output.decode("utf-8", errors="replace")
-    for pattern in test.patterns:
-        if pattern not in text:
-            raise AssertionError(
-                f"{test.name}: missing expected output pattern {pattern!r}"
-            )
+    assert_output_patterns(test.name, text, test.patterns)
 
 
 def run_mmo_test(qemu, workdir, test):
@@ -3635,25 +3606,8 @@ def run_mmo_test(qemu, workdir, test):
     run_kernel(qemu, image, trace="int", log=log, check=True, timeout=10)
 
     result = read_log(log)
-    if result.pc != test.pc:
-        raise AssertionError(
-            f"{test.name}: pc expected 0x{test.pc:x}, got 0x{result.pc:x}"
-        )
-    if result.npc != test.pc + 4:
-        raise AssertionError(
-            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{result.npc:x}"
-        )
-
-    for reg, expected in test.regs.items():
-        actual = result.regs.get(reg)
-        if actual is None:
-            raise AssertionError(f"{test.name}: missing r{reg} in log")
-        expected &= MASK64
-        if actual != expected:
-            raise AssertionError(
-                f"{test.name}: r{reg} expected 0x{expected:016x}, "
-                f"got 0x{actual:016x}"
-            )
+    assert_exit_pc(test.name, result, test.pc)
+    assert_regs(test.name, result, test.regs)
 
 
 def assemble_mmixal_mmo(mmixal, workdir, name, source):
