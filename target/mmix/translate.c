@@ -67,6 +67,30 @@ static TCGv_i64 cpu_npc;
 /* Include the auto-generated decoder. */
 #include "decode-insns.c.inc"
 
+#define TRANS_GEN1(NAME, GEN, A1) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return GEN(ctx, a, A1); \
+    }
+
+#define TRANS_GEN2(NAME, GEN, A1, A2) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return GEN(ctx, a, A1, A2); \
+    }
+
+#define TRANS_GEN3(NAME, GEN, A1, A2, A3) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return GEN(ctx, a, A1, A2, A3); \
+    }
+
+#define TRANS_NOP(NAME) \
+    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
+    { \
+        return true; \
+    }
+
 static void gen_raise_illegal(DisasContext *ctx)
 {
     gen_helper_raise_illegal_instruction(tcg_env);
@@ -175,10 +199,7 @@ static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
     return true;
 }
 
-static bool trans_SWYM(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
+TRANS_NOP(SWYM)
 
 static bool gen_mmix_invalid_sync(DisasContext *ctx, uint32_t mode)
 {
@@ -242,58 +263,29 @@ static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp,
     return true;
 }
 
-#define TRANS_FP_BINARY(NAME, OP) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_fp_binary(ctx, a, OP); \
-    }
-
-#define TRANS_FP_UNARY(NAME, OP) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_fp_unary(ctx, a, OP); \
-    }
-
-#define TRANS_FP_FIX(NAME, OP) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_fp_fix(ctx, a, OP); \
-    }
-
-#define TRANS_FP_FLOAT(NAME, OP, IMMEDIATE) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_fp_float(ctx, a, OP, IMMEDIATE); \
-    }
-
-TRANS_FP_BINARY(FCMP, MMIX_FP_FCMP)
-TRANS_FP_BINARY(FUN, MMIX_FP_FUN)
-TRANS_FP_BINARY(FEQL, MMIX_FP_FEQL)
-TRANS_FP_BINARY(FADD, MMIX_FP_FADD)
-TRANS_FP_BINARY(FSUB, MMIX_FP_FSUB)
-TRANS_FP_BINARY(FMUL, MMIX_FP_FMUL)
-TRANS_FP_BINARY(FDIV, MMIX_FP_FDIV)
-TRANS_FP_BINARY(FREM, MMIX_FP_FREM)
-TRANS_FP_BINARY(FCMPE, MMIX_FP_FCMPE)
-TRANS_FP_BINARY(FUNE, MMIX_FP_FUNE)
-TRANS_FP_BINARY(FEQLE, MMIX_FP_FEQLE)
-TRANS_FP_UNARY(FSQRT, MMIX_FP_FSQRT)
-TRANS_FP_UNARY(FINT, MMIX_FP_FINT)
-TRANS_FP_FIX(FIX, MMIX_FP_FIX)
-TRANS_FP_FIX(FIXU, MMIX_FP_FIXU)
-TRANS_FP_FLOAT(FLOT, MMIX_FP_FLOT, false)
-TRANS_FP_FLOAT(FLOTI, MMIX_FP_FLOT, true)
-TRANS_FP_FLOAT(FLOTU, MMIX_FP_FLOTU, false)
-TRANS_FP_FLOAT(FLOTUI, MMIX_FP_FLOTU, true)
-TRANS_FP_FLOAT(SFLOT, MMIX_FP_SFLOT, false)
-TRANS_FP_FLOAT(SFLOTI, MMIX_FP_SFLOT, true)
-TRANS_FP_FLOAT(SFLOTU, MMIX_FP_SFLOTU, false)
-TRANS_FP_FLOAT(SFLOTUI, MMIX_FP_SFLOTU, true)
-
-#undef TRANS_FP_BINARY
-#undef TRANS_FP_UNARY
-#undef TRANS_FP_FIX
-#undef TRANS_FP_FLOAT
+TRANS_GEN1(FCMP, gen_fp_binary, MMIX_FP_FCMP)
+TRANS_GEN1(FUN, gen_fp_binary, MMIX_FP_FUN)
+TRANS_GEN1(FEQL, gen_fp_binary, MMIX_FP_FEQL)
+TRANS_GEN1(FADD, gen_fp_binary, MMIX_FP_FADD)
+TRANS_GEN1(FSUB, gen_fp_binary, MMIX_FP_FSUB)
+TRANS_GEN1(FMUL, gen_fp_binary, MMIX_FP_FMUL)
+TRANS_GEN1(FDIV, gen_fp_binary, MMIX_FP_FDIV)
+TRANS_GEN1(FREM, gen_fp_binary, MMIX_FP_FREM)
+TRANS_GEN1(FCMPE, gen_fp_binary, MMIX_FP_FCMPE)
+TRANS_GEN1(FUNE, gen_fp_binary, MMIX_FP_FUNE)
+TRANS_GEN1(FEQLE, gen_fp_binary, MMIX_FP_FEQLE)
+TRANS_GEN1(FSQRT, gen_fp_unary, MMIX_FP_FSQRT)
+TRANS_GEN1(FINT, gen_fp_unary, MMIX_FP_FINT)
+TRANS_GEN1(FIX, gen_fp_fix, MMIX_FP_FIX)
+TRANS_GEN1(FIXU, gen_fp_fix, MMIX_FP_FIXU)
+TRANS_GEN2(FLOT, gen_fp_float, MMIX_FP_FLOT, false)
+TRANS_GEN2(FLOTI, gen_fp_float, MMIX_FP_FLOT, true)
+TRANS_GEN2(FLOTU, gen_fp_float, MMIX_FP_FLOTU, false)
+TRANS_GEN2(FLOTUI, gen_fp_float, MMIX_FP_FLOTU, true)
+TRANS_GEN2(SFLOT, gen_fp_float, MMIX_FP_SFLOT, false)
+TRANS_GEN2(SFLOTI, gen_fp_float, MMIX_FP_SFLOT, true)
+TRANS_GEN2(SFLOTU, gen_fp_float, MMIX_FP_SFLOTU, false)
+TRANS_GEN2(SFLOTUI, gen_fp_float, MMIX_FP_SFLOTU, true)
 
 static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUKind kind,
                     bool immediate)
@@ -368,45 +360,14 @@ static bool gen_neg_checked(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_ADD(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_addsub_checked(ctx, a, false, false);
-}
-
-static bool trans_ADDI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_addsub_checked(ctx, a, false, true);
-}
-
-static bool trans_ADDU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_ADD, false);
-}
-
-static bool trans_ADDUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_ADD, true);
-}
-
-static bool trans_SUB(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_addsub_checked(ctx, a, true, false);
-}
-
-static bool trans_SUBI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_addsub_checked(ctx, a, true, true);
-}
-
-static bool trans_SUBU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_SUB, false);
-}
-
-static bool trans_SUBUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_SUB, true);
-}
+TRANS_GEN2(ADD, gen_addsub_checked, false, false)
+TRANS_GEN2(ADDI, gen_addsub_checked, false, true)
+TRANS_GEN2(ADDU, gen_alu, MMIX_ALU_ADD, false)
+TRANS_GEN2(ADDUI, gen_alu, MMIX_ALU_ADD, true)
+TRANS_GEN2(SUB, gen_addsub_checked, true, false)
+TRANS_GEN2(SUBI, gen_addsub_checked, true, true)
+TRANS_GEN2(SUBU, gen_alu, MMIX_ALU_SUB, false)
+TRANS_GEN2(SUBUI, gen_alu, MMIX_ALU_SUB, true)
 
 static bool gen_mul(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
@@ -448,125 +409,30 @@ static bool gen_divu(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_MUL(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_mul(ctx, a, false);
-}
-
-static bool trans_MULI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_mul(ctx, a, true);
-}
-
-static bool trans_MULU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_mulu(ctx, a, false);
-}
-
-static bool trans_MULUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_mulu(ctx, a, true);
-}
-
-static bool trans_DIV(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_div(ctx, a, false);
-}
-
-static bool trans_DIVI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_div(ctx, a, true);
-}
-
-static bool trans_DIVU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_divu(ctx, a, false);
-}
-
-static bool trans_DIVUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_divu(ctx, a, true);
-}
-
-static bool trans_OR(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_OR, false);
-}
-
-static bool trans_ORI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_OR, true);
-}
-
-static bool trans_ORN(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_ORN, false);
-}
-
-static bool trans_ORNI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_ORN, true);
-}
-
-static bool trans_NOR(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_NOR, false);
-}
-
-static bool trans_NORI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_NOR, true);
-}
-
-static bool trans_XOR(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_XOR, false);
-}
-
-static bool trans_XORI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_XOR, true);
-}
-
-static bool trans_AND(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_AND, false);
-}
-
-static bool trans_ANDI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_AND, true);
-}
-
-static bool trans_ANDN(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_ANDN, false);
-}
-
-static bool trans_ANDNI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_ANDN, true);
-}
-
-static bool trans_NAND(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_NAND, false);
-}
-
-static bool trans_NANDI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_NAND, true);
-}
-
-static bool trans_NXOR(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_NXOR, false);
-}
-
-static bool trans_NXORI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_alu(ctx, a, MMIX_ALU_NXOR, true);
-}
+TRANS_GEN1(MUL, gen_mul, false)
+TRANS_GEN1(MULI, gen_mul, true)
+TRANS_GEN1(MULU, gen_mulu, false)
+TRANS_GEN1(MULUI, gen_mulu, true)
+TRANS_GEN1(DIV, gen_div, false)
+TRANS_GEN1(DIVI, gen_div, true)
+TRANS_GEN1(DIVU, gen_divu, false)
+TRANS_GEN1(DIVUI, gen_divu, true)
+TRANS_GEN2(OR, gen_alu, MMIX_ALU_OR, false)
+TRANS_GEN2(ORI, gen_alu, MMIX_ALU_OR, true)
+TRANS_GEN2(ORN, gen_alu, MMIX_ALU_ORN, false)
+TRANS_GEN2(ORNI, gen_alu, MMIX_ALU_ORN, true)
+TRANS_GEN2(NOR, gen_alu, MMIX_ALU_NOR, false)
+TRANS_GEN2(NORI, gen_alu, MMIX_ALU_NOR, true)
+TRANS_GEN2(XOR, gen_alu, MMIX_ALU_XOR, false)
+TRANS_GEN2(XORI, gen_alu, MMIX_ALU_XOR, true)
+TRANS_GEN2(AND, gen_alu, MMIX_ALU_AND, false)
+TRANS_GEN2(ANDI, gen_alu, MMIX_ALU_AND, true)
+TRANS_GEN2(ANDN, gen_alu, MMIX_ALU_ANDN, false)
+TRANS_GEN2(ANDNI, gen_alu, MMIX_ALU_ANDN, true)
+TRANS_GEN2(NAND, gen_alu, MMIX_ALU_NAND, false)
+TRANS_GEN2(NANDI, gen_alu, MMIX_ALU_NAND, true)
+TRANS_GEN2(NXOR, gen_alu, MMIX_ALU_NXOR, false)
+TRANS_GEN2(NXORI, gen_alu, MMIX_ALU_NXOR, true)
 
 static bool gen_scaled_addu(DisasContext *ctx, arg_xyz *a, unsigned shift,
                             bool immediate)
@@ -633,105 +499,26 @@ static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftKind kind,
     return true;
 }
 
-static bool trans_TWO_ADDU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 1, false);
-}
-
-static bool trans_TWO_ADDUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 1, true);
-}
-
-static bool trans_FOUR_ADDU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 2, false);
-}
-
-static bool trans_FOUR_ADDUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 2, true);
-}
-
-static bool trans_EIGHT_ADDU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 3, false);
-}
-
-static bool trans_EIGHT_ADDUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 3, true);
-}
-
-static bool trans_SIXTEEN_ADDU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 4, false);
-}
-
-static bool trans_SIXTEEN_ADDUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_scaled_addu(ctx, a, 4, true);
-}
-
-static bool trans_NEGU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_negu(ctx, a, false);
-}
-
-static bool trans_NEG(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_neg_checked(ctx, a, false);
-}
-
-static bool trans_NEGUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_negu(ctx, a, true);
-}
-
-static bool trans_NEGI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_neg_checked(ctx, a, true);
-}
-
-static bool trans_SL(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SL, false);
-}
-
-static bool trans_SLI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SL, true);
-}
-
-static bool trans_SLU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SLU, false);
-}
-
-static bool trans_SLUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SLU, true);
-}
-
-static bool trans_SR(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SR, false);
-}
-
-static bool trans_SRI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SR, true);
-}
-
-static bool trans_SRU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SRU, false);
-}
-
-static bool trans_SRUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_shift(ctx, a, MMIX_SHIFT_SRU, true);
-}
+TRANS_GEN2(TWO_ADDU, gen_scaled_addu, 1, false)
+TRANS_GEN2(TWO_ADDUI, gen_scaled_addu, 1, true)
+TRANS_GEN2(FOUR_ADDU, gen_scaled_addu, 2, false)
+TRANS_GEN2(FOUR_ADDUI, gen_scaled_addu, 2, true)
+TRANS_GEN2(EIGHT_ADDU, gen_scaled_addu, 3, false)
+TRANS_GEN2(EIGHT_ADDUI, gen_scaled_addu, 3, true)
+TRANS_GEN2(SIXTEEN_ADDU, gen_scaled_addu, 4, false)
+TRANS_GEN2(SIXTEEN_ADDUI, gen_scaled_addu, 4, true)
+TRANS_GEN1(NEGU, gen_negu, false)
+TRANS_GEN1(NEG, gen_neg_checked, false)
+TRANS_GEN1(NEGUI, gen_negu, true)
+TRANS_GEN1(NEGI, gen_neg_checked, true)
+TRANS_GEN2(SL, gen_shift, MMIX_SHIFT_SL, false)
+TRANS_GEN2(SLI, gen_shift, MMIX_SHIFT_SL, true)
+TRANS_GEN2(SLU, gen_shift, MMIX_SHIFT_SLU, false)
+TRANS_GEN2(SLUI, gen_shift, MMIX_SHIFT_SLU, true)
+TRANS_GEN2(SR, gen_shift, MMIX_SHIFT_SR, false)
+TRANS_GEN2(SRI, gen_shift, MMIX_SHIFT_SR, true)
+TRANS_GEN2(SRU, gen_shift, MMIX_SHIFT_SRU, false)
+TRANS_GEN2(SRUI, gen_shift, MMIX_SHIFT_SRU, true)
 
 static uint64_t mmix_wyde_value(const arg_xyz *a, unsigned shift)
 {
@@ -772,85 +559,22 @@ static bool gen_andn_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
     return true;
 }
 
-static bool trans_SETH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_set_wyde(ctx, a, 48);
-}
-
-static bool trans_SETMH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_set_wyde(ctx, a, 32);
-}
-
-static bool trans_SETML(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_set_wyde(ctx, a, 16);
-}
-
-static bool trans_SETL(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_set_wyde(ctx, a, 0);
-}
-
-static bool trans_INCH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_inc_wyde(ctx, a, 48);
-}
-
-static bool trans_INCMH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_inc_wyde(ctx, a, 32);
-}
-
-static bool trans_INCML(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_inc_wyde(ctx, a, 16);
-}
-
-static bool trans_INCL(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_inc_wyde(ctx, a, 0);
-}
-
-static bool trans_ORH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_or_wyde(ctx, a, 48);
-}
-
-static bool trans_ORMH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_or_wyde(ctx, a, 32);
-}
-
-static bool trans_ORML(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_or_wyde(ctx, a, 16);
-}
-
-static bool trans_ORL(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_or_wyde(ctx, a, 0);
-}
-
-static bool trans_ANDNH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_andn_wyde(ctx, a, 48);
-}
-
-static bool trans_ANDNMH(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_andn_wyde(ctx, a, 32);
-}
-
-static bool trans_ANDNML(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_andn_wyde(ctx, a, 16);
-}
-
-static bool trans_ANDNL(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_andn_wyde(ctx, a, 0);
-}
+TRANS_GEN1(SETH, gen_set_wyde, 48)
+TRANS_GEN1(SETMH, gen_set_wyde, 32)
+TRANS_GEN1(SETML, gen_set_wyde, 16)
+TRANS_GEN1(SETL, gen_set_wyde, 0)
+TRANS_GEN1(INCH, gen_inc_wyde, 48)
+TRANS_GEN1(INCMH, gen_inc_wyde, 32)
+TRANS_GEN1(INCML, gen_inc_wyde, 16)
+TRANS_GEN1(INCL, gen_inc_wyde, 0)
+TRANS_GEN1(ORH, gen_or_wyde, 48)
+TRANS_GEN1(ORMH, gen_or_wyde, 32)
+TRANS_GEN1(ORML, gen_or_wyde, 16)
+TRANS_GEN1(ORL, gen_or_wyde, 0)
+TRANS_GEN1(ANDNH, gen_andn_wyde, 48)
+TRANS_GEN1(ANDNMH, gen_andn_wyde, 32)
+TRANS_GEN1(ANDNML, gen_andn_wyde, 16)
+TRANS_GEN1(ANDNL, gen_andn_wyde, 0)
 
 static bool gen_bdif(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
@@ -926,30 +650,22 @@ static bool gen_mxor(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-#define TRANS_BIT_DIFF(NAME, HELPER, IMMEDIATE) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_##HELPER(ctx, a, IMMEDIATE); \
-    }
-
-TRANS_BIT_DIFF(BDIF, bdif, false)
-TRANS_BIT_DIFF(BDIFI, bdif, true)
-TRANS_BIT_DIFF(WDIF, wdif, false)
-TRANS_BIT_DIFF(WDIFI, wdif, true)
-TRANS_BIT_DIFF(TDIF, tdif, false)
-TRANS_BIT_DIFF(TDIFI, tdif, true)
-TRANS_BIT_DIFF(ODIF, odif, false)
-TRANS_BIT_DIFF(ODIFI, odif, true)
-TRANS_BIT_DIFF(MUX, mux, false)
-TRANS_BIT_DIFF(MUXI, mux, true)
-TRANS_BIT_DIFF(SADD, sadd, false)
-TRANS_BIT_DIFF(SADDI, sadd, true)
-TRANS_BIT_DIFF(MOR, mor, false)
-TRANS_BIT_DIFF(MORI, mor, true)
-TRANS_BIT_DIFF(MXOR, mxor, false)
-TRANS_BIT_DIFF(MXORI, mxor, true)
-
-#undef TRANS_BIT_DIFF
+TRANS_GEN1(BDIF, gen_bdif, false)
+TRANS_GEN1(BDIFI, gen_bdif, true)
+TRANS_GEN1(WDIF, gen_wdif, false)
+TRANS_GEN1(WDIFI, gen_wdif, true)
+TRANS_GEN1(TDIF, gen_tdif, false)
+TRANS_GEN1(TDIFI, gen_tdif, true)
+TRANS_GEN1(ODIF, gen_odif, false)
+TRANS_GEN1(ODIFI, gen_odif, true)
+TRANS_GEN1(MUX, gen_mux, false)
+TRANS_GEN1(MUXI, gen_mux, true)
+TRANS_GEN1(SADD, gen_sadd, false)
+TRANS_GEN1(SADDI, gen_sadd, true)
+TRANS_GEN1(MOR, gen_mor, false)
+TRANS_GEN1(MORI, gen_mor, true)
+TRANS_GEN1(MXOR, gen_mxor, false)
+TRANS_GEN1(MXORI, gen_mxor, true)
 
 static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareKind kind,
                     bool immediate)
@@ -972,25 +688,10 @@ static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareKind kind,
     return true;
 }
 
-static bool trans_CMP(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_cmp(ctx, a, MMIX_CMP_SIGNED, false);
-}
-
-static bool trans_CMPI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_cmp(ctx, a, MMIX_CMP_SIGNED, true);
-}
-
-static bool trans_CMPU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_cmp(ctx, a, MMIX_CMP_UNSIGNED, false);
-}
-
-static bool trans_CMPUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_cmp(ctx, a, MMIX_CMP_UNSIGNED, true);
-}
+TRANS_GEN2(CMP, gen_cmp, MMIX_CMP_SIGNED, false)
+TRANS_GEN2(CMPI, gen_cmp, MMIX_CMP_SIGNED, true)
+TRANS_GEN2(CMPU, gen_cmp, MMIX_CMP_UNSIGNED, false)
+TRANS_GEN2(CMPUI, gen_cmp, MMIX_CMP_UNSIGNED, true)
 
 static void gen_predicate(TCGv_i64 pred, TCGv_i64 val,
                           MMIXPredicateKind predicate)
@@ -1057,54 +758,39 @@ static bool gen_zs(DisasContext *ctx, arg_xyz *a, MMIXPredicateKind predicate,
     return gen_cond_result(a, predicate, immediate, true);
 }
 
-#define TRANS_CS(NAME, PREDICATE, IMMEDIATE) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_cs(ctx, a, PREDICATE, IMMEDIATE); \
-    }
+TRANS_GEN2(CSN, gen_cs, MMIX_PRED_NEGATIVE, false)
+TRANS_GEN2(CSNI, gen_cs, MMIX_PRED_NEGATIVE, true)
+TRANS_GEN2(CSZ, gen_cs, MMIX_PRED_ZERO, false)
+TRANS_GEN2(CSZI, gen_cs, MMIX_PRED_ZERO, true)
+TRANS_GEN2(CSP, gen_cs, MMIX_PRED_POSITIVE, false)
+TRANS_GEN2(CSPI, gen_cs, MMIX_PRED_POSITIVE, true)
+TRANS_GEN2(CSOD, gen_cs, MMIX_PRED_ODD, false)
+TRANS_GEN2(CSODI, gen_cs, MMIX_PRED_ODD, true)
+TRANS_GEN2(CSNN, gen_cs, MMIX_PRED_NONNEGATIVE, false)
+TRANS_GEN2(CSNNI, gen_cs, MMIX_PRED_NONNEGATIVE, true)
+TRANS_GEN2(CSNZ, gen_cs, MMIX_PRED_NONZERO, false)
+TRANS_GEN2(CSNZI, gen_cs, MMIX_PRED_NONZERO, true)
+TRANS_GEN2(CSNP, gen_cs, MMIX_PRED_NONPOSITIVE, false)
+TRANS_GEN2(CSNPI, gen_cs, MMIX_PRED_NONPOSITIVE, true)
+TRANS_GEN2(CSEV, gen_cs, MMIX_PRED_EVEN, false)
+TRANS_GEN2(CSEVI, gen_cs, MMIX_PRED_EVEN, true)
 
-#define TRANS_ZS(NAME, PREDICATE, IMMEDIATE) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_zs(ctx, a, PREDICATE, IMMEDIATE); \
-    }
-
-TRANS_CS(CSN, MMIX_PRED_NEGATIVE, false)
-TRANS_CS(CSNI, MMIX_PRED_NEGATIVE, true)
-TRANS_CS(CSZ, MMIX_PRED_ZERO, false)
-TRANS_CS(CSZI, MMIX_PRED_ZERO, true)
-TRANS_CS(CSP, MMIX_PRED_POSITIVE, false)
-TRANS_CS(CSPI, MMIX_PRED_POSITIVE, true)
-TRANS_CS(CSOD, MMIX_PRED_ODD, false)
-TRANS_CS(CSODI, MMIX_PRED_ODD, true)
-TRANS_CS(CSNN, MMIX_PRED_NONNEGATIVE, false)
-TRANS_CS(CSNNI, MMIX_PRED_NONNEGATIVE, true)
-TRANS_CS(CSNZ, MMIX_PRED_NONZERO, false)
-TRANS_CS(CSNZI, MMIX_PRED_NONZERO, true)
-TRANS_CS(CSNP, MMIX_PRED_NONPOSITIVE, false)
-TRANS_CS(CSNPI, MMIX_PRED_NONPOSITIVE, true)
-TRANS_CS(CSEV, MMIX_PRED_EVEN, false)
-TRANS_CS(CSEVI, MMIX_PRED_EVEN, true)
-
-TRANS_ZS(ZSN, MMIX_PRED_NEGATIVE, false)
-TRANS_ZS(ZSNI, MMIX_PRED_NEGATIVE, true)
-TRANS_ZS(ZSZ, MMIX_PRED_ZERO, false)
-TRANS_ZS(ZSZI, MMIX_PRED_ZERO, true)
-TRANS_ZS(ZSP, MMIX_PRED_POSITIVE, false)
-TRANS_ZS(ZSPI, MMIX_PRED_POSITIVE, true)
-TRANS_ZS(ZSOD, MMIX_PRED_ODD, false)
-TRANS_ZS(ZSODI, MMIX_PRED_ODD, true)
-TRANS_ZS(ZSNN, MMIX_PRED_NONNEGATIVE, false)
-TRANS_ZS(ZSNNI, MMIX_PRED_NONNEGATIVE, true)
-TRANS_ZS(ZSNZ, MMIX_PRED_NONZERO, false)
-TRANS_ZS(ZSNZI, MMIX_PRED_NONZERO, true)
-TRANS_ZS(ZSNP, MMIX_PRED_NONPOSITIVE, false)
-TRANS_ZS(ZSNPI, MMIX_PRED_NONPOSITIVE, true)
-TRANS_ZS(ZSEV, MMIX_PRED_EVEN, false)
-TRANS_ZS(ZSEVI, MMIX_PRED_EVEN, true)
-
-#undef TRANS_CS
-#undef TRANS_ZS
+TRANS_GEN2(ZSN, gen_zs, MMIX_PRED_NEGATIVE, false)
+TRANS_GEN2(ZSNI, gen_zs, MMIX_PRED_NEGATIVE, true)
+TRANS_GEN2(ZSZ, gen_zs, MMIX_PRED_ZERO, false)
+TRANS_GEN2(ZSZI, gen_zs, MMIX_PRED_ZERO, true)
+TRANS_GEN2(ZSP, gen_zs, MMIX_PRED_POSITIVE, false)
+TRANS_GEN2(ZSPI, gen_zs, MMIX_PRED_POSITIVE, true)
+TRANS_GEN2(ZSOD, gen_zs, MMIX_PRED_ODD, false)
+TRANS_GEN2(ZSODI, gen_zs, MMIX_PRED_ODD, true)
+TRANS_GEN2(ZSNN, gen_zs, MMIX_PRED_NONNEGATIVE, false)
+TRANS_GEN2(ZSNNI, gen_zs, MMIX_PRED_NONNEGATIVE, true)
+TRANS_GEN2(ZSNZ, gen_zs, MMIX_PRED_NONZERO, false)
+TRANS_GEN2(ZSNZI, gen_zs, MMIX_PRED_NONZERO, true)
+TRANS_GEN2(ZSNP, gen_zs, MMIX_PRED_NONPOSITIVE, false)
+TRANS_GEN2(ZSNPI, gen_zs, MMIX_PRED_NONPOSITIVE, true)
+TRANS_GEN2(ZSEV, gen_zs, MMIX_PRED_EVEN, false)
+TRANS_GEN2(ZSEVI, gen_zs, MMIX_PRED_EVEN, true)
 
 static bool gen_branch(DisasContext *ctx, arg_xyz *a,
                        MMIXPredicateKind predicate, bool backward)
@@ -1187,56 +873,41 @@ static bool trans_POP(DisasContext *ctx, arg_xyz *a)
     return true;
 }
 
-#define TRANS_BRANCH(NAME, PREDICATE, BACKWARD) \
-    static bool trans_##NAME(DisasContext *ctx, arg_xyz *a) \
-    { \
-        return gen_branch(ctx, a, PREDICATE, BACKWARD); \
-    }
+TRANS_GEN2(BN, gen_branch, MMIX_PRED_NEGATIVE, false)
+TRANS_GEN2(BNB, gen_branch, MMIX_PRED_NEGATIVE, true)
+TRANS_GEN2(BZ, gen_branch, MMIX_PRED_ZERO, false)
+TRANS_GEN2(BZB, gen_branch, MMIX_PRED_ZERO, true)
+TRANS_GEN2(BP, gen_branch, MMIX_PRED_POSITIVE, false)
+TRANS_GEN2(BPB, gen_branch, MMIX_PRED_POSITIVE, true)
+TRANS_GEN2(BOD, gen_branch, MMIX_PRED_ODD, false)
+TRANS_GEN2(BODB, gen_branch, MMIX_PRED_ODD, true)
+TRANS_GEN2(BNN, gen_branch, MMIX_PRED_NONNEGATIVE, false)
+TRANS_GEN2(BNNB, gen_branch, MMIX_PRED_NONNEGATIVE, true)
+TRANS_GEN2(BNZ, gen_branch, MMIX_PRED_NONZERO, false)
+TRANS_GEN2(BNZB, gen_branch, MMIX_PRED_NONZERO, true)
+TRANS_GEN2(BNP, gen_branch, MMIX_PRED_NONPOSITIVE, false)
+TRANS_GEN2(BNPB, gen_branch, MMIX_PRED_NONPOSITIVE, true)
+TRANS_GEN2(BEV, gen_branch, MMIX_PRED_EVEN, false)
+TRANS_GEN2(BEVB, gen_branch, MMIX_PRED_EVEN, true)
+TRANS_GEN2(PBN, gen_branch, MMIX_PRED_NEGATIVE, false)
+TRANS_GEN2(PBNB, gen_branch, MMIX_PRED_NEGATIVE, true)
+TRANS_GEN2(PBZ, gen_branch, MMIX_PRED_ZERO, false)
+TRANS_GEN2(PBZB, gen_branch, MMIX_PRED_ZERO, true)
+TRANS_GEN2(PBP, gen_branch, MMIX_PRED_POSITIVE, false)
+TRANS_GEN2(PBPB, gen_branch, MMIX_PRED_POSITIVE, true)
+TRANS_GEN2(PBOD, gen_branch, MMIX_PRED_ODD, false)
+TRANS_GEN2(PBODB, gen_branch, MMIX_PRED_ODD, true)
+TRANS_GEN2(PBNN, gen_branch, MMIX_PRED_NONNEGATIVE, false)
+TRANS_GEN2(PBNNB, gen_branch, MMIX_PRED_NONNEGATIVE, true)
+TRANS_GEN2(PBNZ, gen_branch, MMIX_PRED_NONZERO, false)
+TRANS_GEN2(PBNZB, gen_branch, MMIX_PRED_NONZERO, true)
+TRANS_GEN2(PBNP, gen_branch, MMIX_PRED_NONPOSITIVE, false)
+TRANS_GEN2(PBNPB, gen_branch, MMIX_PRED_NONPOSITIVE, true)
+TRANS_GEN2(PBEV, gen_branch, MMIX_PRED_EVEN, false)
+TRANS_GEN2(PBEVB, gen_branch, MMIX_PRED_EVEN, true)
 
-TRANS_BRANCH(BN, MMIX_PRED_NEGATIVE, false)
-TRANS_BRANCH(BNB, MMIX_PRED_NEGATIVE, true)
-TRANS_BRANCH(BZ, MMIX_PRED_ZERO, false)
-TRANS_BRANCH(BZB, MMIX_PRED_ZERO, true)
-TRANS_BRANCH(BP, MMIX_PRED_POSITIVE, false)
-TRANS_BRANCH(BPB, MMIX_PRED_POSITIVE, true)
-TRANS_BRANCH(BOD, MMIX_PRED_ODD, false)
-TRANS_BRANCH(BODB, MMIX_PRED_ODD, true)
-TRANS_BRANCH(BNN, MMIX_PRED_NONNEGATIVE, false)
-TRANS_BRANCH(BNNB, MMIX_PRED_NONNEGATIVE, true)
-TRANS_BRANCH(BNZ, MMIX_PRED_NONZERO, false)
-TRANS_BRANCH(BNZB, MMIX_PRED_NONZERO, true)
-TRANS_BRANCH(BNP, MMIX_PRED_NONPOSITIVE, false)
-TRANS_BRANCH(BNPB, MMIX_PRED_NONPOSITIVE, true)
-TRANS_BRANCH(BEV, MMIX_PRED_EVEN, false)
-TRANS_BRANCH(BEVB, MMIX_PRED_EVEN, true)
-TRANS_BRANCH(PBN, MMIX_PRED_NEGATIVE, false)
-TRANS_BRANCH(PBNB, MMIX_PRED_NEGATIVE, true)
-TRANS_BRANCH(PBZ, MMIX_PRED_ZERO, false)
-TRANS_BRANCH(PBZB, MMIX_PRED_ZERO, true)
-TRANS_BRANCH(PBP, MMIX_PRED_POSITIVE, false)
-TRANS_BRANCH(PBPB, MMIX_PRED_POSITIVE, true)
-TRANS_BRANCH(PBOD, MMIX_PRED_ODD, false)
-TRANS_BRANCH(PBODB, MMIX_PRED_ODD, true)
-TRANS_BRANCH(PBNN, MMIX_PRED_NONNEGATIVE, false)
-TRANS_BRANCH(PBNNB, MMIX_PRED_NONNEGATIVE, true)
-TRANS_BRANCH(PBNZ, MMIX_PRED_NONZERO, false)
-TRANS_BRANCH(PBNZB, MMIX_PRED_NONZERO, true)
-TRANS_BRANCH(PBNP, MMIX_PRED_NONPOSITIVE, false)
-TRANS_BRANCH(PBNPB, MMIX_PRED_NONPOSITIVE, true)
-TRANS_BRANCH(PBEV, MMIX_PRED_EVEN, false)
-TRANS_BRANCH(PBEVB, MMIX_PRED_EVEN, true)
-
-#undef TRANS_BRANCH
-
-static bool trans_GETA(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_geta(ctx, a, false);
-}
-
-static bool trans_GETAB(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_geta(ctx, a, true);
-}
+TRANS_GEN1(GETA, gen_geta, false)
+TRANS_GEN1(GETAB, gen_geta, true)
 
 static bool trans_GET(DisasContext *ctx, arg_xyz *a)
 {
@@ -1265,55 +936,16 @@ static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_PUT(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_put(ctx, a, false);
-}
-
-static bool trans_PUTI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_put(ctx, a, true);
-}
-
-static bool trans_JMP(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_jmp(ctx, a, false);
-}
-
-static bool trans_JMPB(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_jmp(ctx, a, true);
-}
-
-static bool trans_PUSHJ(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_pushj(ctx, a, false);
-}
-
-static bool trans_PUSHJB(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_pushj(ctx, a, true);
-}
-
-static bool trans_GO(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_go(ctx, a, false);
-}
-
-static bool trans_GOI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_go(ctx, a, true);
-}
-
-static bool trans_PUSHGO(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_pushgo(ctx, a, false);
-}
-
-static bool trans_PUSHGOI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_pushgo(ctx, a, true);
-}
+TRANS_GEN1(PUT, gen_put, false)
+TRANS_GEN1(PUTI, gen_put, true)
+TRANS_GEN1(JMP, gen_jmp, false)
+TRANS_GEN1(JMPB, gen_jmp, true)
+TRANS_GEN1(PUSHJ, gen_pushj, false)
+TRANS_GEN1(PUSHJB, gen_pushj, true)
+TRANS_GEN1(GO, gen_go, false)
+TRANS_GEN1(GOI, gen_go, true)
+TRANS_GEN1(PUSHGO, gen_pushgo, false)
+TRANS_GEN1(PUSHGOI, gen_pushgo, true)
 
 static bool trans_SAVE(DisasContext *ctx, arg_xyz *a)
 {
@@ -1359,95 +991,24 @@ static bool gen_ldht(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_LDB(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_SB, 0);
-}
-
-static bool trans_LDBI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_SB, 0);
-}
-
-static bool trans_LDBU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_UB, 0);
-}
-
-static bool trans_LDBUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_UB, 0);
-}
-
-static bool trans_LDW(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BESW, 1);
-}
-
-static bool trans_LDWI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BESW, 1);
-}
-
-static bool trans_LDWU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BEUW, 1);
-}
-
-static bool trans_LDWUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BEUW, 1);
-}
-
-static bool trans_LDT(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BESL, 3);
-}
-
-static bool trans_LDTI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BESL, 3);
-}
-
-static bool trans_LDTU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BEUL, 3);
-}
-
-static bool trans_LDTUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BEUL, 3);
-}
-
-static bool trans_LDO(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_LDOI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
-}
-
-static bool trans_LDOU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_LDOUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
-}
-
-static bool trans_LDUNC(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_LDUNCI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_load_mem(ctx, a, true, MO_BEUQ, 7);
-}
+TRANS_GEN3(LDB, gen_load_mem, false, MO_SB, 0)
+TRANS_GEN3(LDBI, gen_load_mem, true, MO_SB, 0)
+TRANS_GEN3(LDBU, gen_load_mem, false, MO_UB, 0)
+TRANS_GEN3(LDBUI, gen_load_mem, true, MO_UB, 0)
+TRANS_GEN3(LDW, gen_load_mem, false, MO_BESW, 1)
+TRANS_GEN3(LDWI, gen_load_mem, true, MO_BESW, 1)
+TRANS_GEN3(LDWU, gen_load_mem, false, MO_BEUW, 1)
+TRANS_GEN3(LDWUI, gen_load_mem, true, MO_BEUW, 1)
+TRANS_GEN3(LDT, gen_load_mem, false, MO_BESL, 3)
+TRANS_GEN3(LDTI, gen_load_mem, true, MO_BESL, 3)
+TRANS_GEN3(LDTU, gen_load_mem, false, MO_BEUL, 3)
+TRANS_GEN3(LDTUI, gen_load_mem, true, MO_BEUL, 3)
+TRANS_GEN3(LDO, gen_load_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(LDOI, gen_load_mem, true, MO_BEUQ, 7)
+TRANS_GEN3(LDOU, gen_load_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(LDOUI, gen_load_mem, true, MO_BEUQ, 7)
+TRANS_GEN3(LDUNC, gen_load_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(LDUNCI, gen_load_mem, true, MO_BEUQ, 7)
 
 static bool gen_ldvts(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
@@ -1460,25 +1021,10 @@ static bool gen_ldvts(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_LDVTS(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_ldvts(ctx, a, false);
-}
-
-static bool trans_LDVTSI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_ldvts(ctx, a, true);
-}
-
-static bool trans_LDHT(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_ldht(ctx, a, false);
-}
-
-static bool trans_LDHTI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_ldht(ctx, a, true);
-}
+TRANS_GEN1(LDVTS, gen_ldvts, false)
+TRANS_GEN1(LDVTSI, gen_ldvts, true)
+TRANS_GEN1(LDHT, gen_ldht, false)
+TRANS_GEN1(LDHTI, gen_ldht, true)
 
 static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
@@ -1492,15 +1038,8 @@ static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_LDSF(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_ldsf(ctx, a, false);
-}
-
-static bool trans_LDSFI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_ldsf(ctx, a, true);
-}
+TRANS_GEN1(LDSF, gen_ldsf, false)
+TRANS_GEN1(LDSFI, gen_ldsf, true)
 
 static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
@@ -1524,35 +1063,12 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_CSWAP(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_cswap(ctx, a, false);
-}
-
-static bool trans_CSWAPI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_cswap(ctx, a, true);
-}
-
-static bool trans_PRELD(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_PRELDI(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_PREGO(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_PREGOI(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
+TRANS_GEN1(CSWAP, gen_cswap, false)
+TRANS_GEN1(CSWAPI, gen_cswap, true)
+TRANS_NOP(PRELD)
+TRANS_NOP(PRELDI)
+TRANS_NOP(PREGO)
+TRANS_NOP(PREGOI)
 
 static bool gen_store_value(DisasContext *ctx, arg_xyz *a, bool immediate,
                             MemOp memop, uint64_t align_mask, TCGv_i64 val)
@@ -1589,115 +1105,28 @@ static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_STB(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_UB, 0);
-}
-
-static bool trans_STBI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_UB, 0);
-}
-
-static bool trans_STBU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_UB, 0);
-}
-
-static bool trans_STBUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_UB, 0);
-}
-
-static bool trans_STW(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUW, 1);
-}
-
-static bool trans_STWI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUW, 1);
-}
-
-static bool trans_STWU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUW, 1);
-}
-
-static bool trans_STWUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUW, 1);
-}
-
-static bool trans_STT(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUL, 3);
-}
-
-static bool trans_STTI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUL, 3);
-}
-
-static bool trans_STTU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUL, 3);
-}
-
-static bool trans_STTUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUL, 3);
-}
-
-static bool trans_STO(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_STOI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
-}
-
-static bool trans_STOU(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_STOUI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
-}
-
-static bool trans_STCO(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_const_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_STCOI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_const_mem(ctx, a, true, MO_BEUQ, 7);
-}
-
-static bool trans_STUNC(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, false, MO_BEUQ, 7);
-}
-
-static bool trans_STUNCI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_store_mem(ctx, a, true, MO_BEUQ, 7);
-}
-
-static bool trans_STHT(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_stht(ctx, a, false);
-}
-
-static bool trans_STHTI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_stht(ctx, a, true);
-}
+TRANS_GEN3(STB, gen_store_mem, false, MO_UB, 0)
+TRANS_GEN3(STBI, gen_store_mem, true, MO_UB, 0)
+TRANS_GEN3(STBU, gen_store_mem, false, MO_UB, 0)
+TRANS_GEN3(STBUI, gen_store_mem, true, MO_UB, 0)
+TRANS_GEN3(STW, gen_store_mem, false, MO_BEUW, 1)
+TRANS_GEN3(STWI, gen_store_mem, true, MO_BEUW, 1)
+TRANS_GEN3(STWU, gen_store_mem, false, MO_BEUW, 1)
+TRANS_GEN3(STWUI, gen_store_mem, true, MO_BEUW, 1)
+TRANS_GEN3(STT, gen_store_mem, false, MO_BEUL, 3)
+TRANS_GEN3(STTI, gen_store_mem, true, MO_BEUL, 3)
+TRANS_GEN3(STTU, gen_store_mem, false, MO_BEUL, 3)
+TRANS_GEN3(STTUI, gen_store_mem, true, MO_BEUL, 3)
+TRANS_GEN3(STO, gen_store_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(STOI, gen_store_mem, true, MO_BEUQ, 7)
+TRANS_GEN3(STOU, gen_store_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(STOUI, gen_store_mem, true, MO_BEUQ, 7)
+TRANS_GEN3(STCO, gen_store_const_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(STCOI, gen_store_const_mem, true, MO_BEUQ, 7)
+TRANS_GEN3(STUNC, gen_store_mem, false, MO_BEUQ, 7)
+TRANS_GEN3(STUNCI, gen_store_mem, true, MO_BEUQ, 7)
+TRANS_GEN1(STHT, gen_stht, false)
+TRANS_GEN1(STHTI, gen_stht, true)
 
 static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
@@ -1711,45 +1140,14 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool trans_STSF(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_stsf(ctx, a, false);
-}
-
-static bool trans_STSFI(DisasContext *ctx, arg_xyz *a)
-{
-    return gen_stsf(ctx, a, true);
-}
-
-static bool trans_SYNCD(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_SYNCDI(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_PREST(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_PRESTI(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_SYNCID(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
-
-static bool trans_SYNCIDI(DisasContext *ctx, arg_xyz *a)
-{
-    return true;
-}
+TRANS_GEN1(STSF, gen_stsf, false)
+TRANS_GEN1(STSFI, gen_stsf, true)
+TRANS_NOP(SYNCD)
+TRANS_NOP(SYNCDI)
+TRANS_NOP(PREST)
+TRANS_NOP(PRESTI)
+TRANS_NOP(SYNCID)
+TRANS_NOP(SYNCIDI)
 
 static bool trans_SYNC(DisasContext *ctx, arg_xyz *a)
 {
@@ -1775,6 +1173,11 @@ static bool trans_SYNC(DisasContext *ctx, arg_xyz *a)
         return gen_mmix_invalid_sync(ctx, a->xyz);
     }
 }
+
+#undef TRANS_GEN1
+#undef TRANS_GEN2
+#undef TRANS_GEN3
+#undef TRANS_NOP
 
 static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
 {
