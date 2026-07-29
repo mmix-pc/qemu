@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "fp.h"
 #include "qemu/log.h"
 #include "tcg/tcg-op.h"
 #include "exec/helper-proto.h"
@@ -24,7 +25,7 @@ typedef struct DisasContext {
     uint32_t insn;
 } DisasContext;
 
-typedef enum MMIXALUOp {
+typedef enum MMIXALUKind {
     MMIX_ALU_ADD,
     MMIX_ALU_SUB,
     MMIX_ALU_OR,
@@ -35,43 +36,21 @@ typedef enum MMIXALUOp {
     MMIX_ALU_ANDN,
     MMIX_ALU_NAND,
     MMIX_ALU_NXOR,
-} MMIXALUOp;
+} MMIXALUKind;
 
-typedef enum MMIXCompareOp {
+typedef enum MMIXCompareKind {
     MMIX_CMP_SIGNED,
     MMIX_CMP_UNSIGNED,
-} MMIXCompareOp;
+} MMIXCompareKind;
 
-typedef enum MMIXShiftOp {
+typedef enum MMIXShiftKind {
     MMIX_SHIFT_SL,
     MMIX_SHIFT_SLU,
     MMIX_SHIFT_SR,
     MMIX_SHIFT_SRU,
-} MMIXShiftOp;
+} MMIXShiftKind;
 
-typedef enum MMIXFPOp {
-    MMIX_FP_FCMP,
-    MMIX_FP_FUN,
-    MMIX_FP_FEQL,
-    MMIX_FP_FADD,
-    MMIX_FP_FSUB,
-    MMIX_FP_FMUL,
-    MMIX_FP_FDIV,
-    MMIX_FP_FREM,
-    MMIX_FP_FCMPE,
-    MMIX_FP_FUNE,
-    MMIX_FP_FEQLE,
-    MMIX_FP_FSQRT,
-    MMIX_FP_FINT,
-    MMIX_FP_FIX,
-    MMIX_FP_FIXU,
-    MMIX_FP_FLOT,
-    MMIX_FP_FLOTU,
-    MMIX_FP_SFLOT,
-    MMIX_FP_SFLOTU,
-} MMIXFPOp;
-
-typedef enum MMIXPredicate {
+typedef enum MMIXPredicateKind {
     MMIX_PRED_NEGATIVE,
     MMIX_PRED_ZERO,
     MMIX_PRED_POSITIVE,
@@ -80,7 +59,7 @@ typedef enum MMIXPredicate {
     MMIX_PRED_NONZERO,
     MMIX_PRED_NONPOSITIVE,
     MMIX_PRED_EVEN,
-} MMIXPredicate;
+} MMIXPredicateKind;
 
 static TCGv_i64 cpu_pc;
 static TCGv_i64 cpu_npc;
@@ -217,45 +196,45 @@ static bool gen_mmix_privileged_sync(DisasContext *ctx, uint32_t mode)
     return true;
 }
 
-static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
+static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_fp_binary(val, tcg_env, tcg_constant_i32(op),
+    gen_helper_mmix_fp_binary(val, tcg_env, tcg_constant_i32(fp),
                               tcg_constant_i32(ctx->insn),
                               gen_load_reg(a->y), gen_load_reg(a->z));
     gen_store_reg(a->x, val);
     return true;
 }
 
-static bool gen_fp_unary(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
+static bool gen_fp_unary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_fp_unary(val, tcg_env, tcg_constant_i32(op),
+    gen_helper_mmix_fp_unary(val, tcg_env, tcg_constant_i32(fp),
                              tcg_constant_i32(ctx->insn),
                              tcg_constant_i32(a->y), gen_load_reg(a->z));
     gen_store_reg(a->x, val);
     return true;
 }
 
-static bool gen_fp_fix(DisasContext *ctx, arg_xyz *a, MMIXFPOp op)
+static bool gen_fp_fix(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_fp_fix(val, tcg_env, tcg_constant_i32(op),
+    gen_helper_mmix_fp_fix(val, tcg_env, tcg_constant_i32(fp),
                            tcg_constant_i32(ctx->insn),
                            tcg_constant_i32(a->y), gen_load_reg(a->z));
     gen_store_reg(a->x, val);
     return true;
 }
 
-static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPOp op,
+static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp,
                          bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_fp_float(val, tcg_env, tcg_constant_i32(op),
+    gen_helper_mmix_fp_float(val, tcg_env, tcg_constant_i32(fp),
                              tcg_constant_i32(ctx->insn),
                              tcg_constant_i32(a->y),
                              gen_load_z(a, immediate));
@@ -316,12 +295,12 @@ TRANS_FP_FLOAT(SFLOTUI, MMIX_FP_SFLOTU, true)
 #undef TRANS_FP_FIX
 #undef TRANS_FP_FLOAT
 
-static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUOp op,
+static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUKind kind,
                     bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    switch (op) {
+    switch (kind) {
     case MMIX_ALU_ADD:
         tcg_gen_add_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
         break;
@@ -609,7 +588,7 @@ static bool gen_negu(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftOp op,
+static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftKind kind,
                       bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
@@ -617,11 +596,11 @@ static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftOp op,
     TCGv_i64 safe_count = tcg_temp_new_i64();
     TCGv_i64 lhs = gen_load_reg(a->y);
 
-    if (op != MMIX_SHIFT_SL) {
+    if (kind != MMIX_SHIFT_SL) {
         tcg_gen_andi_i64(safe_count, count, 63);
     }
 
-    switch (op) {
+    switch (kind) {
     case MMIX_SHIFT_SL:
         gen_helper_mmix_sl(val, tcg_env, tcg_constant_i32(ctx->insn),
                            lhs, count);
@@ -972,7 +951,7 @@ TRANS_BIT_DIFF(MXORI, mxor, true)
 
 #undef TRANS_BIT_DIFF
 
-static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareOp op,
+static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareKind kind,
                     bool immediate)
 {
     TCGv_i64 gt = tcg_temp_new_i64();
@@ -981,7 +960,7 @@ static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareOp op,
     TCGv_i64 lhs = gen_load_reg(a->y);
     TCGv_i64 rhs = gen_load_z(a, immediate);
 
-    if (op == MMIX_CMP_SIGNED) {
+    if (kind == MMIX_CMP_SIGNED) {
         tcg_gen_setcond_i64(TCG_COND_GT, gt, lhs, rhs);
         tcg_gen_setcond_i64(TCG_COND_LT, lt, lhs, rhs);
     } else {
@@ -1013,7 +992,8 @@ static bool trans_CMPUI(DisasContext *ctx, arg_xyz *a)
     return gen_cmp(ctx, a, MMIX_CMP_UNSIGNED, true);
 }
 
-static void gen_predicate(TCGv_i64 pred, TCGv_i64 val, MMIXPredicate predicate)
+static void gen_predicate(TCGv_i64 pred, TCGv_i64 val,
+                          MMIXPredicateKind predicate)
 {
     TCGv_i64 tmp;
 
@@ -1051,8 +1031,8 @@ static void gen_predicate(TCGv_i64 pred, TCGv_i64 val, MMIXPredicate predicate)
     }
 }
 
-static bool gen_cond_result(arg_xyz *a, MMIXPredicate predicate, bool immediate,
-                            bool zero_false)
+static bool gen_cond_result(arg_xyz *a, MMIXPredicateKind predicate,
+                            bool immediate, bool zero_false)
 {
     TCGv_i64 pred = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
@@ -1065,13 +1045,13 @@ static bool gen_cond_result(arg_xyz *a, MMIXPredicate predicate, bool immediate,
     return true;
 }
 
-static bool gen_cs(DisasContext *ctx, arg_xyz *a, MMIXPredicate predicate,
+static bool gen_cs(DisasContext *ctx, arg_xyz *a, MMIXPredicateKind predicate,
                    bool immediate)
 {
     return gen_cond_result(a, predicate, immediate, false);
 }
 
-static bool gen_zs(DisasContext *ctx, arg_xyz *a, MMIXPredicate predicate,
+static bool gen_zs(DisasContext *ctx, arg_xyz *a, MMIXPredicateKind predicate,
                    bool immediate)
 {
     return gen_cond_result(a, predicate, immediate, true);
@@ -1126,8 +1106,8 @@ TRANS_ZS(ZSEVI, MMIX_PRED_EVEN, true)
 #undef TRANS_CS
 #undef TRANS_ZS
 
-static bool gen_branch(DisasContext *ctx, arg_xyz *a, MMIXPredicate predicate,
-                       bool backward)
+static bool gen_branch(DisasContext *ctx, arg_xyz *a,
+                       MMIXPredicateKind predicate, bool backward)
 {
     TCGLabel *not_taken = gen_new_label();
     TCGv_i64 pred = tcg_temp_new_i64();

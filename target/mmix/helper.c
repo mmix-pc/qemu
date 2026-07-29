@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "fp.h"
 #include "accel/tcg/cpu-loop.h"
 #include "accel/tcg/cpu-ldst.h"
 #include "exec/log.h"
@@ -34,28 +35,6 @@ typedef enum MMIXHostedTrap {
 typedef enum MMIXHostedHandle {
     MMIX_HOSTED_HANDLE_STDOUT = 1,
 } MMIXHostedHandle;
-
-typedef enum MMIXFPOp {
-    MMIX_FP_FCMP,
-    MMIX_FP_FUN,
-    MMIX_FP_FEQL,
-    MMIX_FP_FADD,
-    MMIX_FP_FSUB,
-    MMIX_FP_FMUL,
-    MMIX_FP_FDIV,
-    MMIX_FP_FREM,
-    MMIX_FP_FCMPE,
-    MMIX_FP_FUNE,
-    MMIX_FP_FEQLE,
-    MMIX_FP_FSQRT,
-    MMIX_FP_FINT,
-    MMIX_FP_FIX,
-    MMIX_FP_FIXU,
-    MMIX_FP_FLOT,
-    MMIX_FP_FLOTU,
-    MMIX_FP_SFLOT,
-    MMIX_FP_SFLOTU,
-} MMIXFPOp;
 
 static unsigned mmix_cpu_get_rg(CPUMMIXState *env)
 {
@@ -970,13 +949,14 @@ static uint64_t mmix_unary_nan_result(CPUMMIXState *env, uint32_t insn,
     return z;
 }
 
-static uint64_t mmix_fp_compare(CPUMMIXState *env, MMIXFPOp op, uint32_t insn,
+static uint64_t mmix_fp_compare(CPUMMIXState *env, MMIXFPKind fp,
+                                uint32_t insn,
                                 uint64_t y, uint64_t z)
 {
     float_status status;
     FloatRelation rel;
 
-    switch (op) {
+    switch (fp) {
     case MMIX_FP_FUN:
         return mmix_fp_is_nan(y) || mmix_fp_is_nan(z);
     case MMIX_FP_FEQL:
@@ -1033,7 +1013,7 @@ static bool mmix_fp_epsilon_radius(long double epsilon, uint64_t val,
     return true;
 }
 
-static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
+static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPKind fp,
                                         uint32_t insn, uint64_t y,
                                         uint64_t z)
 {
@@ -1043,14 +1023,14 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
 
     if (mmix_fp_is_nan(y) || mmix_fp_is_nan(z) || mmix_fp_is_nan(e) ||
         (e >> 63)) {
-        if (op == MMIX_FP_FUNE) {
+        if (fp == MMIX_FP_FUNE) {
             return 1;
         }
         mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
         return 0;
     }
 
-    if (op == MMIX_FP_FUNE) {
+    if (fp == MMIX_FP_FUNE) {
         return 0;
     }
 
@@ -1068,7 +1048,7 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
         } else {
             diff = 0.0L;
         }
-        if (op == MMIX_FP_FEQLE) {
+        if (fp == MMIX_FP_FEQLE) {
             return diff == 0.0L;
         }
         if (diff == 0.0L) {
@@ -1084,7 +1064,7 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
     }
 
     diff = fabsl(yd - zd);
-    if (op == MMIX_FP_FEQLE) {
+    if (fp == MMIX_FP_FEQLE) {
         return diff <= yradius && diff <= zradius;
     }
     if (yd < zd && yd + yradius < zd && y < z && yd < zd - zradius) {
@@ -1096,21 +1076,22 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPOp op,
     return 0;
 }
 
-uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint32_t insn,
-                               uint64_t y, uint64_t z)
+uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t selector,
+                               uint32_t insn, uint64_t y, uint64_t z)
 {
+    MMIXFPKind fp = (MMIXFPKind)selector;
     float_status status;
     float64 result;
 
-    switch (op) {
+    switch (fp) {
     case MMIX_FP_FCMP:
     case MMIX_FP_FUN:
     case MMIX_FP_FEQL:
-        return mmix_fp_compare(env, op, insn, y, z);
+        return mmix_fp_compare(env, fp, insn, y, z);
     case MMIX_FP_FCMPE:
     case MMIX_FP_FUNE:
     case MMIX_FP_FEQLE:
-        return mmix_fp_epsilon_compare(env, op, insn, y, z);
+        return mmix_fp_epsilon_compare(env, fp, insn, y, z);
     default:
         break;
     }
@@ -1120,7 +1101,7 @@ uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint32_t insn,
     }
 
     mmix_softfloat_status(&status, mmix_round_mode_from_ra(env));
-    switch (op) {
+    switch (fp) {
     case MMIX_FP_FADD:
         result = float64_add(y, z, &status);
         break;
@@ -1144,9 +1125,10 @@ uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t op, uint32_t insn,
     return result;
 }
 
-uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t insn,
-                              uint32_t y, uint64_t z)
+uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t selector,
+                              uint32_t insn, uint32_t y, uint64_t z)
 {
+    MMIXFPKind fp = (MMIXFPKind)selector;
     FloatRoundMode mode;
     float_status status;
     float64 result;
@@ -1159,7 +1141,7 @@ uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t insn,
     }
 
     mmix_softfloat_status(&status, mode);
-    switch (op) {
+    switch (fp) {
     case MMIX_FP_FSQRT:
         result = float64_sqrt(z, &status);
         break;
@@ -1174,9 +1156,10 @@ uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t op, uint32_t insn,
     return result;
 }
 
-uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t insn,
-                            uint32_t y, uint64_t z)
+uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t selector,
+                            uint32_t insn, uint32_t y, uint64_t z)
 {
+    MMIXFPKind fp = (MMIXFPKind)selector;
     FloatRoundMode mode;
     float_status status;
     FloatExceptionFlags flags;
@@ -1193,7 +1176,7 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t insn,
     mmix_softfloat_status(&status, mode);
     result = float64_to_int64_modulo(z, mode, &status);
     flags = get_float_exception_flags(&status);
-    if (op == MMIX_FP_FIX) {
+    if (fp == MMIX_FP_FIX) {
         long double d = mmix_fp_to_ld(z);
 
         if (d < -0x1p63L || d >= 0x1p63L) {
@@ -1205,9 +1188,10 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t op, uint32_t insn,
     return result;
 }
 
-uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t op, uint32_t insn,
-                              uint32_t y, uint64_t z)
+uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t selector,
+                              uint32_t insn, uint32_t y, uint64_t z)
 {
+    MMIXFPKind fp = (MMIXFPKind)selector;
     FloatRoundMode mode;
     float_status status;
     float64 result;
@@ -1217,7 +1201,7 @@ uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t op, uint32_t insn,
     }
     mmix_softfloat_status(&status, mode);
 
-    switch (op) {
+    switch (fp) {
     case MMIX_FP_FLOT:
         result = int64_to_float64(z, &status);
         break;

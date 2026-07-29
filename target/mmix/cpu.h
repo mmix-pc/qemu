@@ -7,6 +7,12 @@
 #ifndef MMIX_CPU_H
 #define MMIX_CPU_H
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "qemu/typedefs.h"
+
 #include "cpu-qom.h"
 #include "exec/cpu-common.h"
 #include "exec/cpu-interrupt.h"
@@ -125,9 +131,9 @@ enum {
 
 typedef struct CPUArchState {
     /*
-     * M2 keeps a direct architectural register view. The full local/global
-     * register-stack mapping will be implemented when instruction semantics
-     * need it.
+     * Architectural registers are split by rG: global registers are backed
+     * directly here, while local registers are addressed through the
+     * local-register ring below.
      */
     uint64_t regs[MMIX_REGS];
     uint64_t sregs[MMIX_SREGS];
