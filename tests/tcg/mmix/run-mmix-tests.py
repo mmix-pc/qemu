@@ -20,6 +20,7 @@ from lib.asserts import (
     assert_regs,
     assert_serial_output,
 )
+from lib.mmix_asm import branch, halt, insn, jump, set_octa, wyde
 from lib.qemu import read_log, run_kernel
 
 MASK64 = (1 << 64) - 1
@@ -66,35 +67,6 @@ MMIX_TEST_DIR = pathlib.Path(__file__).resolve().parent
 MMIXAL_DATA_DIR = MMIX_TEST_DIR / "data" / "mmixal"
 MMIXAL_PRIME_TABLE_SOURCE = MMIXAL_DATA_DIR / "prime_table.mms"
 MMIXAL_PRIME_TABLE_OUTPUT = MMIXAL_DATA_DIR / "prime_table.out"
-
-
-def insn(op, x=0, y=0, z=0):
-    return bytes((op & 0xff, x & 0xff, y & 0xff, z & 0xff))
-
-
-def branch(op, x, yz):
-    return insn(op, x, (yz >> 8) & 0xff, yz & 0xff)
-
-
-def jump(op, xyz):
-    return insn(op, (xyz >> 16) & 0xff, (xyz >> 8) & 0xff, xyz & 0xff)
-
-
-def wyde(op, x, yz):
-    return insn(op, x, (yz >> 8) & 0xff, yz & 0xff)
-
-
-def halt():
-    return insn(0x00, 0, 0, 0)
-
-
-def set_octa(reg, value):
-    return [
-        wyde(0xe0, reg, (value >> 48) & 0xffff),
-        wyde(0xe5, reg, (value >> 32) & 0xffff),
-        wyde(0xe6, reg, (value >> 16) & 0xffff),
-        wyde(0xe7, reg, value & 0xffff),
-    ]
 
 
 def mmo_lop(lop, yz, y=None, z=None):
