@@ -63,8 +63,9 @@ MMIX_MMO_LOP_POST = 0x0A
 MMIX_MMO_LOP_STAB = 0x0B
 MMIX_MMO_LOP_END = 0x0C
 MMIX_TEST_DIR = pathlib.Path(__file__).resolve().parent
-MMIXAL_PRIME_TABLE_SOURCE = MMIX_TEST_DIR / "prime_table.mms"
-MMIXAL_PRIME_TABLE_OUTPUT = MMIX_TEST_DIR / "prime_table.out"
+MMIXAL_DATA_DIR = MMIX_TEST_DIR / "data" / "mmixal"
+MMIXAL_PRIME_TABLE_SOURCE = MMIXAL_DATA_DIR / "prime_table.mms"
+MMIXAL_PRIME_TABLE_OUTPUT = MMIXAL_DATA_DIR / "prime_table.out"
 
 
 def insn(op, x=0, y=0, z=0):
