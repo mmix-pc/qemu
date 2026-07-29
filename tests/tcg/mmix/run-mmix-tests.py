@@ -7,11 +7,12 @@
 import argparse
 import dataclasses
 import pathlib
-import re
 import shutil
 import struct
 import subprocess
 import sys
+
+from lib.qemu import read_log, run_kernel
 
 MASK64 = (1 << 64) - 1
 INITIAL_STACK = 0x00010000
@@ -3503,21 +3504,6 @@ MMO_TESTS = [
 ]
 
 
-def parse_log(log_text):
-    if "MMIX test exit" not in log_text:
-        raise AssertionError("missing MMIX test exit line")
-
-    pc_match = re.search(r"pc=0x([0-9a-fA-F]+)\s+npc=0x([0-9a-fA-F]+)", log_text)
-    if pc_match is None:
-        raise AssertionError("missing pc/npc line")
-
-    regs = {}
-    for reg, value in re.findall(r"\br(\d+)\s*=0x([0-9a-fA-F]+)", log_text):
-        regs[int(reg)] = int(value, 16)
-
-    return int(pc_match.group(1), 16), int(pc_match.group(2), 16), regs
-
-
 def run_one(qemu, workdir, test):
     image = workdir / f"{test.name}.bin"
     log = workdir / f"{test.name}.log"
@@ -3526,35 +3512,20 @@ def run_one(qemu, workdir, test):
     if log.exists():
         log.unlink()
 
-    cmd = [
-        str(qemu),
-        "-machine",
-        "virt",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        "none",
-        "-kernel",
-        str(image),
-        "-d",
-        "int",
-        "-D",
-        str(log),
-    ]
-    subprocess.run(cmd, check=True, timeout=10)
+    run_kernel(qemu, image, trace="int", log=log, check=True, timeout=10)
 
-    pc, npc, regs = parse_log(log.read_text(encoding="utf-8"))
-    if pc != test.pc:
-        raise AssertionError(f"{test.name}: pc expected 0x{test.pc:x}, got 0x{pc:x}")
-    if npc != test.pc + 4:
+    result = read_log(log)
+    if result.pc != test.pc:
         raise AssertionError(
-            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{npc:x}"
+            f"{test.name}: pc expected 0x{test.pc:x}, got 0x{result.pc:x}"
+        )
+    if result.npc != test.pc + 4:
+        raise AssertionError(
+            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{result.npc:x}"
         )
 
     for reg, expected in test.regs.items():
-        actual = regs.get(reg)
+        actual = result.regs.get(reg)
         if actual is None:
             raise AssertionError(f"{test.name}: missing r{reg} in log")
         expected &= MASK64
@@ -3573,25 +3544,8 @@ def run_expected_failure(qemu, workdir, test):
     if log.exists():
         log.unlink()
 
-    cmd = [
-        str(qemu),
-        "-machine",
-        "virt",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        "none",
-        "-kernel",
-        str(image),
-        "-d",
-        "unimp,int",
-        "-D",
-        str(log),
-    ]
     try:
-        subprocess.run(cmd, check=False, timeout=2)
+        run_kernel(qemu, image, trace="unimp,int", log=log, check=False, timeout=2)
     except subprocess.TimeoutExpired:
         pass
 
@@ -3619,31 +3573,24 @@ def run_serial_test(qemu, workdir, test):
         if path.exists():
             path.unlink()
 
-    cmd = [
-        str(qemu),
-        "-machine",
-        "virt",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        f"file:{serial}",
-        "-kernel",
-        str(image),
-        "-d",
-        "int",
-        "-D",
-        str(log),
-    ]
-    subprocess.run(cmd, check=True, timeout=10)
+    run_kernel(
+        qemu,
+        image,
+        serial=f"file:{serial}",
+        trace="int",
+        log=log,
+        check=True,
+        timeout=10,
+    )
 
-    pc, npc, _ = parse_log(log.read_text(encoding="utf-8"))
-    if pc != test.pc:
-        raise AssertionError(f"{test.name}: pc expected 0x{test.pc:x}, got 0x{pc:x}")
-    if npc != test.pc + 4:
+    result = read_log(log)
+    if result.pc != test.pc:
         raise AssertionError(
-            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{npc:x}"
+            f"{test.name}: pc expected 0x{test.pc:x}, got 0x{result.pc:x}"
+        )
+    if result.npc != test.pc + 4:
+        raise AssertionError(
+            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{result.npc:x}"
         )
 
     actual = serial.read_bytes()
@@ -3658,25 +3605,12 @@ def run_loader_failure(qemu, workdir, test):
 
     image.write_bytes(test.image)
 
-    cmd = [
-        str(qemu),
-        "-machine",
-        "virt",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        "none",
-        "-kernel",
-        str(image),
-    ]
-    result = subprocess.run(
-        cmd,
+    result = run_kernel(
+        qemu,
+        image,
         check=False,
         timeout=10,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if result.returncode == 0:
         raise AssertionError(f"{test.name}: expected loader failure")
@@ -3698,35 +3632,20 @@ def run_mmo_test(qemu, workdir, test):
     if log.exists():
         log.unlink()
 
-    cmd = [
-        str(qemu),
-        "-machine",
-        "virt",
-        "-display",
-        "none",
-        "-monitor",
-        "none",
-        "-serial",
-        "none",
-        "-kernel",
-        str(image),
-        "-d",
-        "int",
-        "-D",
-        str(log),
-    ]
-    subprocess.run(cmd, check=True, timeout=10)
+    run_kernel(qemu, image, trace="int", log=log, check=True, timeout=10)
 
-    pc, npc, regs = parse_log(log.read_text(encoding="utf-8"))
-    if pc != test.pc:
-        raise AssertionError(f"{test.name}: pc expected 0x{test.pc:x}, got 0x{pc:x}")
-    if npc != test.pc + 4:
+    result = read_log(log)
+    if result.pc != test.pc:
         raise AssertionError(
-            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{npc:x}"
+            f"{test.name}: pc expected 0x{test.pc:x}, got 0x{result.pc:x}"
+        )
+    if result.npc != test.pc + 4:
+        raise AssertionError(
+            f"{test.name}: npc expected 0x{test.pc + 4:x}, got 0x{result.npc:x}"
         )
 
     for reg, expected in test.regs.items():
-        actual = regs.get(reg)
+        actual = result.regs.get(reg)
         if actual is None:
             raise AssertionError(f"{test.name}: missing r{reg} in log")
         expected &= MASK64
