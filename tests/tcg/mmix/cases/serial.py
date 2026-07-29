@@ -24,7 +24,7 @@ SERIAL_TESTS = [
                 mmo_file(1, "mmo-serial.mms"),
                 mmo_line(1),
                 serial_tx_program(),
-                mmo_post(255, {255: 0}),
+                mmo_post(R255, {R255: 0}),
                 mmo_stab_end(),
             ]
         ),

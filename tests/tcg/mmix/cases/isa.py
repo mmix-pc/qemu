@@ -9,176 +9,176 @@ ISA_TESTS = [
         "alu-logical",
         b"".join(
             [
-                insn(0x21, 1, 0, 5),      # ADDI r1,r0,5
-                insn(0x21, 2, 0, 7),      # ADDI r2,r0,7
-                insn(0x20, 3, 1, 2),      # ADD r3,r1,r2
-                insn(0x25, 4, 3, 2),      # SUBI r4,r3,2
-                insn(0xc1, 5, 4, 0x80),   # ORI r5,r4,0x80
-                insn(0xc7, 6, 5, 0xff),   # XORI r6,r5,0xff
-                insn(0xc9, 7, 6, 0x0f),   # ANDI r7,r6,0x0f
+                insn(ADDI, R1, R0, 5),
+                insn(ADDI, R2, R0, 7),
+                insn(ADD, R3, R1, R2),
+                insn(SUBI, R4, R3, 2),
+                insn(ORI, R5, R4, 0x80),
+                insn(XORI, R6, R5, 0xff),
+                insn(ANDI, R7, R6, 0x0f),
                 halt(),
             ]
         ),
         pc=0x1c,
-        regs={1: 5, 2: 7, 3: 0x0c, 4: 0x0a, 5: 0x8a, 6: 0x75, 7: 5},
+        regs={R1: 5, R2: 7, R3: 0x0c, R4: 0x0a, R5: 0x8a, R6: 0x75, R7: 5},
     ),
     MMIXTest(
         "compare",
         b"".join(
             [
-                insn(0x21, 1, 0, 5),      # ADDI r1,r0,5
-                insn(0x21, 2, 0, 7),      # ADDI r2,r0,7
-                insn(0x30, 3, 1, 2),      # CMP r3,r1,r2
-                insn(0x30, 4, 2, 2),      # CMP r4,r2,r2
-                insn(0x30, 5, 2, 1),      # CMP r5,r2,r1
-                insn(0x25, 6, 0, 1),      # SUBI r6,r0,1
-                insn(0x32, 7, 6, 1),      # CMPU r7,r6,r1
+                insn(ADDI, R1, R0, 5),
+                insn(ADDI, R2, R0, 7),
+                insn(CMP, R3, R1, R2),
+                insn(CMP, R4, R2, R2),
+                insn(CMP, R5, R2, R1),
+                insn(SUBI, R6, R0, 1),
+                insn(CMPU, R7, R6, R1),
                 halt(),
             ]
         ),
         pc=0x1c,
-        regs={3: MASK64, 4: 0, 5: 1, 6: MASK64, 7: 1},
+        regs={R3: MASK64, R4: 0, R5: 1, R6: MASK64, R7: 1},
     ),
     MMIXTest(
         "compare-immediate-boundaries",
         b"".join(
             [
-                wyde(0xe0, 1, 0xffff),    # SETH r1,0xffff
-                wyde(0xe5, 1, 0xffff),    # INCMH r1,0xffff
-                wyde(0xe6, 1, 0xffff),    # INCML r1,0xffff
-                wyde(0xe7, 1, 0xffff),    # INCL r1,0xffff
-                wyde(0xe0, 2, 0x8000),    # SETH r2,0x8000
-                wyde(0xe0, 3, 0x7fff),    # SETH r3,0x7fff
-                wyde(0xe5, 3, 0xffff),    # INCMH r3,0xffff
-                wyde(0xe6, 3, 0xffff),    # INCML r3,0xffff
-                wyde(0xe7, 3, 0xffff),    # INCL r3,0xffff
-                insn(0x31, 4, 0, 0),      # CMPI r4,r0,0
-                insn(0x31, 5, 1, 0),      # CMPI r5,r1,0
-                insn(0x31, 6, 3, 0),      # CMPI r6,r3,0
-                insn(0x30, 7, 2, 3),      # CMP r7,r2,r3
-                insn(0x32, 8, 2, 3),      # CMPU r8,r2,r3
-                insn(0x33, 9, 0, 1),      # CMPUI r9,r0,1
-                insn(0x33, 10, 1, 0xff),  # CMPUI r10,r1,0xff
-                insn(0x33, 11, 0, 0),     # CMPUI r11,r0,0
+                wyde(SETH, R1, 0xffff),
+                wyde(INCMH, R1, 0xffff),
+                wyde(INCML, R1, 0xffff),
+                wyde(INCL, R1, 0xffff),
+                wyde(SETH, R2, 0x8000),
+                wyde(SETH, R3, 0x7fff),
+                wyde(INCMH, R3, 0xffff),
+                wyde(INCML, R3, 0xffff),
+                wyde(INCL, R3, 0xffff),
+                insn(CMPI, R4, R0, 0),
+                insn(CMPI, R5, R1, 0),
+                insn(CMPI, R6, R3, 0),
+                insn(CMP, R7, R2, R3),
+                insn(CMPU, R8, R2, R3),
+                insn(CMPUI, R9, R0, 1),
+                insn(CMPUI, R10, R1, 0xff),
+                insn(CMPUI, R11, R0, 0),
                 halt(),
             ]
         ),
         pc=0x44,
         regs={
-            1: MASK64,
-            2: 0x8000000000000000,
-            3: 0x7fffffffffffffff,
-            4: 0,
-            5: MASK64,
-            6: 1,
-            7: MASK64,
-            8: 1,
-            9: MASK64,
-            10: 1,
-            11: 0,
+            R1: MASK64,
+            R2: 0x8000000000000000,
+            R3: 0x7fffffffffffffff,
+            R4: 0,
+            R5: MASK64,
+            R6: 1,
+            R7: MASK64,
+            R8: 1,
+            R9: MASK64,
+            R10: 1,
+            R11: 0,
         },
     ),
     MMIXTest(
         "branch-taken",
         b"".join(
             [
-                insn(0x21, 1, 0, 0),      # ADDI r1,r0,0
-                branch(0x42, 1, 2),       # BZ r1,+2
-                insn(0x21, 2, 0, 9),      # skipped
-                insn(0x21, 2, 0, 5),      # ADDI r2,r0,5
+                insn(ADDI, R1, R0, 0),
+                branch(BZ, R1, 2),
+                insn(ADDI, R2, R0, 9),      # skipped
+                insn(ADDI, R2, R0, 5),
                 halt(),
             ]
         ),
         pc=0x10,
-        regs={2: 5},
+        regs={R2: 5},
     ),
     MMIXTest(
         "branch-not-taken",
         b"".join(
             [
-                insn(0x21, 1, 0, 1),      # ADDI r1,r0,1
-                branch(0x42, 1, 2),       # BZ r1,+2
-                insn(0x21, 2, 0, 9),      # ADDI r2,r0,9
+                insn(ADDI, R1, R0, 1),
+                branch(BZ, R1, 2),
+                insn(ADDI, R2, R0, 9),
                 halt(),
             ]
         ),
         pc=0x0c,
-        regs={2: 9},
+        regs={R2: 9},
     ),
     MMIXTest(
         "branch-backward",
         b"".join(
             [
-                insn(0x21, 1, 0, 0),      # ADDI r1,r0,0
-                insn(0x21, 2, 0, 3),      # ADDI r2,r0,3
-                insn(0x21, 1, 1, 1),      # ADDI r1,r1,1
-                insn(0x25, 2, 2, 1),      # SUBI r2,r2,1
-                branch(0x4b, 2, 0xfffe),  # BNZB r2,-2
+                insn(ADDI, R1, R0, 0),
+                insn(ADDI, R2, R0, 3),
+                insn(ADDI, R1, R1, 1),
+                insn(SUBI, R2, R2, 1),
+                branch(BNZB, R2, 0xfffe),
                 halt(),
             ]
         ),
         pc=0x14,
-        regs={1: 3, 2: 0},
+        regs={R1: 3, R2: 0},
     ),
     MMIXTest(
         "branch-existing-variants",
         b"".join(
             [
-                branch(0x42, 0, 3),       # BZ r0,+3
-                wyde(0xe3, 2, 1),         # target for BZB
+                branch(BZ, R0, 3),
+                wyde(SETL, R2, 1),  # target
                 halt(),
-                branch(0x43, 0, 0xfffe),  # BZB r0,-2
+                branch(BZB, R0, 0xfffe),
             ]
         ),
         pc=0x08,
-        regs={2: 1},
+        regs={R2: 1},
     ),
     MMIXTest(
         "branch-bnz-forward",
         b"".join(
             [
-                wyde(0xe3, 1, 1),         # SETL r1,1
-                branch(0x4a, 1, 2),       # BNZ r1,+2
-                wyde(0xe3, 2, 9),         # skipped
-                wyde(0xe3, 2, 5),         # SETL r2,5
+                wyde(SETL, R1, 1),
+                branch(BNZ, R1, 2),
+                wyde(SETL, R2, 9),         # skipped
+                wyde(SETL, R2, 5),
                 halt(),
             ]
         ),
         pc=0x10,
-        regs={2: 5},
+        regs={R2: 5},
     ),
     MMIXTest(
         "ordinary-branches-true",
         b"".join(
             [
-                insn(0x25, 1, 0, 1),      # SUBI r1,r0,1
-                wyde(0xe3, 3, 5),         # SETL r3,5
-                wyde(0xe3, 4, 4),         # SETL r4,4
-                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
-                branch(0x40, 1, 2),       # BN r1,+2
-                wyde(0xe3, 10, 0xaa),     # skipped
-                wyde(0xe3, 10, 0x55),
-                branch(0x42, 0, 2),       # BZ r0,+2
-                wyde(0xe3, 11, 0xaa),     # skipped
-                wyde(0xe3, 11, 0x55),
-                branch(0x44, 3, 2),       # BP r3,+2
-                wyde(0xe3, 12, 0xaa),     # skipped
-                wyde(0xe3, 12, 0x55),
-                branch(0x46, 3, 2),       # BOD r3,+2
-                wyde(0xe3, 13, 0xaa),     # skipped
-                wyde(0xe3, 13, 0x55),
-                branch(0x48, 0, 2),       # BNN r0,+2
-                wyde(0xe3, 14, 0xaa),     # skipped
-                wyde(0xe3, 14, 0x55),
-                branch(0x4a, 3, 2),       # BNZ r3,+2
-                wyde(0xe3, 15, 0xaa),     # skipped
-                wyde(0xe3, 15, 0x55),
-                branch(0x4c, 1, 2),       # BNP r1,+2
-                wyde(0xe3, 16, 0xaa),     # skipped
-                wyde(0xe3, 16, 0x55),
-                branch(0x4e, 4, 2),       # BEV r4,+2
-                wyde(0xe3, 17, 0xaa),     # skipped
-                wyde(0xe3, 17, 0x55),
+                insn(SUBI, R1, R0, 1),
+                wyde(SETL, R3, 5),
+                wyde(SETL, R4, 4),
+                wyde(SETL, R5, 0x55),
+                branch(BN, R1, 2),
+                wyde(SETL, R10, 0xaa),     # skipped
+                wyde(SETL, R10, 0x55),
+                branch(BZ, R0, 2),
+                wyde(SETL, R11, 0xaa),     # skipped
+                wyde(SETL, R11, 0x55),
+                branch(BP, R3, 2),
+                wyde(SETL, R12, 0xaa),     # skipped
+                wyde(SETL, R12, 0x55),
+                branch(BOD, R3, 2),
+                wyde(SETL, R13, 0xaa),     # skipped
+                wyde(SETL, R13, 0x55),
+                branch(BNN, R0, 2),
+                wyde(SETL, R14, 0xaa),     # skipped
+                wyde(SETL, R14, 0x55),
+                branch(BNZ, R3, 2),
+                wyde(SETL, R15, 0xaa),     # skipped
+                wyde(SETL, R15, 0x55),
+                branch(BNP, R1, 2),
+                wyde(SETL, R16, 0xaa),     # skipped
+                wyde(SETL, R16, 0x55),
+                branch(BEV, R4, 2),
+                wyde(SETL, R17, 0xaa),     # skipped
+                wyde(SETL, R17, 0x55),
                 halt(),
             ]
         ),
@@ -189,26 +189,26 @@ ISA_TESTS = [
         "ordinary-branches-false",
         b"".join(
             [
-                insn(0x25, 1, 0, 1),      # SUBI r1,r0,1
-                wyde(0xe3, 3, 5),         # SETL r3,5
-                wyde(0xe3, 4, 4),         # SETL r4,4
-                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
-                branch(0x40, 3, 2),       # BN false
-                wyde(0xe3, 10, 0x55),
-                branch(0x42, 3, 2),       # BZ false
-                wyde(0xe3, 11, 0x55),
-                branch(0x44, 1, 2),       # BP false
-                wyde(0xe3, 12, 0x55),
-                branch(0x46, 4, 2),       # BOD false
-                wyde(0xe3, 13, 0x55),
-                branch(0x48, 1, 2),       # BNN false
-                wyde(0xe3, 14, 0x55),
-                branch(0x4a, 0, 2),       # BNZ false
-                wyde(0xe3, 15, 0x55),
-                branch(0x4c, 3, 2),       # BNP false
-                wyde(0xe3, 16, 0x55),
-                branch(0x4e, 3, 2),       # BEV false
-                wyde(0xe3, 17, 0x55),
+                insn(SUBI, R1, R0, 1),
+                wyde(SETL, R3, 5),
+                wyde(SETL, R4, 4),
+                wyde(SETL, R5, 0x55),
+                branch(BN, R3, 2),
+                wyde(SETL, R10, 0x55),
+                branch(BZ, R3, 2),
+                wyde(SETL, R11, 0x55),
+                branch(BP, R1, 2),
+                wyde(SETL, R12, 0x55),
+                branch(BOD, R4, 2),
+                wyde(SETL, R13, 0x55),
+                branch(BNN, R1, 2),
+                wyde(SETL, R14, 0x55),
+                branch(BNZ, R0, 2),
+                wyde(SETL, R15, 0x55),
+                branch(BNP, R3, 2),
+                wyde(SETL, R16, 0x55),
+                branch(BEV, R3, 2),
+                wyde(SETL, R17, 0x55),
                 halt(),
             ]
         ),
@@ -219,34 +219,34 @@ ISA_TESTS = [
         "probable-branches-true",
         b"".join(
             [
-                insn(0x25, 1, 0, 1),      # SUBI r1,r0,1
-                wyde(0xe3, 3, 5),         # SETL r3,5
-                wyde(0xe3, 4, 4),         # SETL r4,4
-                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
-                branch(0x50, 1, 2),       # PBN r1,+2
-                wyde(0xe3, 10, 0xaa),     # skipped
-                wyde(0xe3, 10, 0x55),
-                branch(0x52, 0, 2),       # PBZ r0,+2
-                wyde(0xe3, 11, 0xaa),     # skipped
-                wyde(0xe3, 11, 0x55),
-                branch(0x54, 3, 2),       # PBP r3,+2
-                wyde(0xe3, 12, 0xaa),     # skipped
-                wyde(0xe3, 12, 0x55),
-                branch(0x56, 3, 2),       # PBOD r3,+2
-                wyde(0xe3, 13, 0xaa),     # skipped
-                wyde(0xe3, 13, 0x55),
-                branch(0x58, 0, 2),       # PBNN r0,+2
-                wyde(0xe3, 14, 0xaa),     # skipped
-                wyde(0xe3, 14, 0x55),
-                branch(0x5a, 3, 2),       # PBNZ r3,+2
-                wyde(0xe3, 15, 0xaa),     # skipped
-                wyde(0xe3, 15, 0x55),
-                branch(0x5c, 1, 2),       # PBNP r1,+2
-                wyde(0xe3, 16, 0xaa),     # skipped
-                wyde(0xe3, 16, 0x55),
-                branch(0x5e, 4, 2),       # PBEV r4,+2
-                wyde(0xe3, 17, 0xaa),     # skipped
-                wyde(0xe3, 17, 0x55),
+                insn(SUBI, R1, R0, 1),
+                wyde(SETL, R3, 5),
+                wyde(SETL, R4, 4),
+                wyde(SETL, R5, 0x55),
+                branch(PBN, R1, 2),
+                wyde(SETL, R10, 0xaa),     # skipped
+                wyde(SETL, R10, 0x55),
+                branch(PBZ, R0, 2),
+                wyde(SETL, R11, 0xaa),     # skipped
+                wyde(SETL, R11, 0x55),
+                branch(PBP, R3, 2),
+                wyde(SETL, R12, 0xaa),     # skipped
+                wyde(SETL, R12, 0x55),
+                branch(PBOD, R3, 2),
+                wyde(SETL, R13, 0xaa),     # skipped
+                wyde(SETL, R13, 0x55),
+                branch(PBNN, R0, 2),
+                wyde(SETL, R14, 0xaa),     # skipped
+                wyde(SETL, R14, 0x55),
+                branch(PBNZ, R3, 2),
+                wyde(SETL, R15, 0xaa),     # skipped
+                wyde(SETL, R15, 0x55),
+                branch(PBNP, R1, 2),
+                wyde(SETL, R16, 0xaa),     # skipped
+                wyde(SETL, R16, 0x55),
+                branch(PBEV, R4, 2),
+                wyde(SETL, R17, 0xaa),     # skipped
+                wyde(SETL, R17, 0x55),
                 halt(),
             ]
         ),
@@ -257,164 +257,164 @@ ISA_TESTS = [
         "probable-branches-false-backward",
         b"".join(
             [
-                wyde(0xe3, 1, 1),         # SETL r1,1
-                branch(0x5a, 0, 2),       # PBNZ false
-                wyde(0xe3, 2, 7),         # SETL r2,7
-                branch(0x52, 0, 3),       # PBZ r0,+3
-                wyde(0xe3, 3, 9),         # skipped
+                wyde(SETL, R1, 1),
+                branch(PBNZ, R0, 2),
+                wyde(SETL, R2, 7),
+                branch(PBZ, R0, 3),
+                wyde(SETL, R3, 9),         # skipped
                 halt(),
-                branch(0x5b, 1, 0xffff),  # PBNZB r1,-1
+                branch(PBNZB, R1, 0xffff),
             ]
         ),
         pc=0x14,
-        regs={2: 7, 3: 0},
+        regs={R2: 7, R3: 0},
     ),
     MMIXTest(
         "address-geta",
         b"".join(
             [
-                branch(0xf4, 1, 2),       # GETA r1,+2
-                branch(0xf5, 2, 0xffff),  # GETAB r2,-1
+                branch(GETA, R1, 2),
+                branch(GETAB, R2, 0xffff),
                 halt(),
             ]
         ),
         pc=0x08,
-        regs={1: 0x08, 2: 0},
+        regs={R1: 0x08, R2: 0},
     ),
     MMIXTest(
         "jump-forward-backward",
         b"".join(
             [
-                jump(0xf0, 3),            # JMP +3
-                wyde(0xe3, 1, 9),         # skipped
+                jump(JMP, 3),
+                wyde(SETL, R1, 9),         # skipped
                 halt(),
-                wyde(0xe3, 1, 5),         # SETL r1,5
-                jump(0xf1, 0xfffffe),     # JMPB -2
+                wyde(SETL, R1, 5),
+                jump(JMPB, 0xfffffe),
             ]
         ),
         pc=0x08,
-        regs={1: 5},
+        regs={R1: 5},
     ),
     MMIXTest(
         "go-register-immediate",
         b"".join(
             [
-                wyde(0xe3, 1, 17),        # SETL r1,17
-                insn(0x9e, 2, 1, 0),      # GO r2,r1,r0
-                wyde(0xe3, 3, 9),         # skipped
+                wyde(SETL, R1, 17),
+                insn(GO, R2, R1, R0),
+                wyde(SETL, R3, 9),         # skipped
                 halt(),                   # skipped
-                wyde(0xe3, 3, 5),         # SETL r3,5
-                insn(0x9f, 4, 1, 13),     # GOI r4,r1,13
-                wyde(0xe3, 5, 9),         # skipped
+                wyde(SETL, R3, 5),
+                insn(GOI, R4, R1, 13),
+                wyde(SETL, R5, 9),         # skipped
                 halt(),
             ]
         ),
         pc=0x1c,
-        regs={2: 0x08, 3: 5, 4: 0x18, 5: 0},
+        regs={R2: 0x08, R3: 5, R4: 0x18, R5: 0},
     ),
     MMIXTest(
         "pushj-pop-single-result",
         b"".join(
             [
-                branch(0xf2, 0, 4),       # PUSHJ 0,sub
+                branch(PUSHJ, R0, 4),  # subroutine target
                 halt(),
-                insn(0xfd, 0, 0, 0),
-                insn(0xfd, 0, 0, 0),
-                wyde(0xe3, 0, 42),        # sub: SETL r0,42
-                insn(0xf8, 1, 0, 0),      # POP 1,0
+                insn(SWYM, 0, 0, 0),
+                insn(SWYM, 0, 0, 0),
+                wyde(SETL, R0, 42),  # sub
+                insn(POP, 1, 0, 0),
             ]
         ),
         pc=0x04,
-        regs={0: 42},
+        regs={R0: 42},
     ),
     MMIXTest(
         "pushjb-pop-single-result",
         b"".join(
             [
-                jump(0xf0, 3),            # JMP caller
-                wyde(0xe3, 0, 9),         # sub: SETL r0,9
-                insn(0xf8, 1, 0, 0),      # POP 1,0
-                branch(0xf3, 0, 0xfffe),  # caller: PUSHJB 0,sub
+                jump(JMP, 3),
+                wyde(SETL, R0, 9),  # sub
+                insn(POP, 1, 0, 0),
+                branch(PUSHJB, R0, 0xfffe),  # caller
                 halt(),
             ]
         ),
         pc=0x10,
-        regs={0: 9},
+        regs={R0: 9},
     ),
     MMIXTest(
         "pushgo-pop-single-result",
         b"".join(
             [
-                wyde(0xe3, 1, 0x10),      # SETL r1,sub
-                insn(0xbe, 0, 1, 0),      # PUSHGO 0,r1,r0
+                wyde(SETL, R1, 0x10),  # subroutine target
+                insn(PUSHGO, R0, R1, R0),
                 halt(),
-                insn(0xfd, 0, 0, 0),
-                wyde(0xe3, 0, 33),        # sub: SETL r0,33
-                insn(0xf8, 1, 0, 0),      # POP 1,0
+                insn(SWYM, 0, 0, 0),
+                wyde(SETL, R0, 33),  # sub
+                insn(POP, 1, 0, 0),
             ]
         ),
         pc=0x08,
-        regs={0: 33},
+        regs={R0: 33},
     ),
     MMIXTest(
         "pushgoi-pop-single-result",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0c),      # SETL r1,sub - 4
-                insn(0xbf, 0, 1, 4),      # PUSHGOI 0,r1,4
+                wyde(SETL, R1, 0x0c),  # subroutine target
+                insn(PUSHGOI, R0, R1, 4),
                 halt(),
-                insn(0xfd, 0, 0, 0),
-                wyde(0xe3, 0, 44),        # sub: SETL r0,44
-                insn(0xf8, 1, 0, 0),      # POP 1,0
+                insn(SWYM, 0, 0, 0),
+                wyde(SETL, R0, 44),  # sub
+                insn(POP, 1, 0, 0),
             ]
         ),
         pc=0x08,
-        regs={0: 44},
+        regs={R0: 44},
     ),
     MMIXTest(
         "pop-multiple-results",
         b"".join(
             [
-                branch(0xf2, 0, 4),       # PUSHJ 0,sub
+                branch(PUSHJ, R0, 4),  # subroutine target
                 halt(),
-                insn(0xfd, 0, 0, 0),
-                insn(0xfd, 0, 0, 0),
-                wyde(0xe3, 0, 0xaa),      # sub: SETL r0,0xaa
-                wyde(0xe3, 1, 0xbb),      # SETL r1,0xbb
-                insn(0xf8, 2, 0, 0),      # POP 2,0
+                insn(SWYM, 0, 0, 0),
+                insn(SWYM, 0, 0, 0),
+                wyde(SETL, R0, 0xaa),  # sub
+                wyde(SETL, R1, 0xbb),
+                insn(POP, 2, 0, 0),
             ]
         ),
         pc=0x04,
-        regs={0: 0xbb, 1: 0xaa},
+        regs={R0: 0xbb, R1: 0xaa},
     ),
     MMIXTest(
         "nested-pushj-pop",
         b"".join(
             [
-                branch(0xf2, 0, 4),       # PUSHJ 0,sub1
+                branch(PUSHJ, R0, 4),  # subroutine target
                 halt(),
-                insn(0xfd, 0, 0, 0),
-                insn(0xfd, 0, 0, 0),
-                insn(0xfe, 40, 0, 4),     # sub1: GET r40,rJ
-                branch(0xf2, 0, 4),       # PUSHJ 0,sub2
-                insn(0x21, 0, 0, 1),      # ADDI r0,r0,1
-                insn(0xf6, 4, 0, 40),     # PUT rJ,r40
-                insn(0xf8, 1, 0, 0),      # POP 1,0
-                wyde(0xe3, 0, 7),         # sub2: SETL r0,7
-                insn(0xf8, 1, 0, 0),      # POP 1,0
+                insn(SWYM, 0, 0, 0),
+                insn(SWYM, 0, 0, 0),
+                insn(GET, R40, 0, SR_J),  # sub1
+                branch(PUSHJ, R0, 4),  # subroutine target
+                insn(ADDI, R0, R0, 1),
+                insn(PUT, SR_J, 0, R40),
+                insn(POP, 1, 0, 0),
+                wyde(SETL, R0, 7),  # sub2
+                insn(POP, 1, 0, 0),
             ]
         ),
         pc=0x04,
-        regs={0: 8},
+        regs={R0: 8},
     ),
     MMIXTest(
         "register-stack-spill-fill",
         REGISTER_STACK_SPILL_FILL[0],
         pc=REGISTER_STACK_SPILL_FILL[1],
         regs={
-            50: INITIAL_STACK,
-            51: INITIAL_STACK,
-            60: REGISTER_STACK_SPILL_FILL[2],
+            R50: INITIAL_STACK,
+            R51: INITIAL_STACK,
+            R60: REGISTER_STACK_SPILL_FILL[2],
         },
     ),
     MMIXTest(
@@ -422,11 +422,11 @@ ISA_TESTS = [
         SAVE_STATE_AFTER_SAVE[0],
         pc=SAVE_STATE_AFTER_SAVE[1],
         regs={
-            32: INITIAL_STACK + 0x778,
-            33: 0,
-            34: INITIAL_STACK + 0x780,
-            35: INITIAL_STACK + 0x780,
-            36: INITIAL_STACK + 0x778,
+            R32: INITIAL_STACK + 0x778,
+            R33: 0,
+            R34: INITIAL_STACK + 0x780,
+            R35: INITIAL_STACK + 0x780,
+            R36: INITIAL_STACK + 0x778,
         },
     ),
     MMIXTest(
@@ -434,20 +434,20 @@ ISA_TESTS = [
         SAVE_UNSAVE_ROUNDTRIP[0],
         pc=SAVE_UNSAVE_ROUNDTRIP[1],
         regs={
-            50: 0x11,
-            51: 0x22,
-            52: 0x33,
-            53: 0x1234,
-            54: 0x5a,
-            55: 0x6b,
-            56: 0x3ffff,
-            57: 3,
-            58: INITIAL_STACK,
-            59: INITIAL_STACK,
-            60: 0x1111222233334444,
-            61: 0x5555666677778888,
-            62: 0,
-            63: 0,
+            R50: 0x11,
+            R51: 0x22,
+            R52: 0x33,
+            R53: 0x1234,
+            R54: 0x5a,
+            R55: 0x6b,
+            R56: 0x3ffff,
+            R57: 3,
+            R58: INITIAL_STACK,
+            R59: INITIAL_STACK,
+            R60: 0x1111222233334444,
+            R61: 0x5555666677778888,
+            R62: 0,
+            R63: 0,
         },
     ),
     MMIXTest(
@@ -455,755 +455,755 @@ ISA_TESTS = [
         REGISTER_STACK_SAVE_UNSAVE[0],
         pc=REGISTER_STACK_SAVE_UNSAVE[1],
         regs={
-            50: INITIAL_STACK,
-            51: INITIAL_STACK,
-            60: REGISTER_STACK_SAVE_UNSAVE[2],
+            R50: INITIAL_STACK,
+            R51: INITIAL_STACK,
+            R60: REGISTER_STACK_SAVE_UNSAVE[2],
         },
     ),
     MMIXTest(
         "load-store",
         b"".join(
             [
-                insn(0x21, 1, 0, 0x40),   # ADDI r1,r0,0x40
-                insn(0x21, 2, 0, 0x5a),   # ADDI r2,r0,0x5a
-                insn(0xac, 2, 1, 0),      # STO r2,r1,r0
-                insn(0x8c, 3, 1, 0),      # LDO r3,r1,r0
+                insn(ADDI, R1, R0, 0x40),
+                insn(ADDI, R2, R0, 0x5a),
+                insn(STO, R2, R1, R0),
+                insn(LDO, R3, R1, R0),
                 halt(),
             ]
         ),
         pc=0x10,
-        regs={1: 0x40, 2: 0x5a, 3: 0x5a},
+        regs={R1: 0x40, R2: 0x5a, R3: 0x5a},
     ),
     MMIXTest(
         "data-segment-runtime-load-store",
         b"".join(
             [
-                *set_octa(1, MMIX_DATA_SEGMENT_BASE + 0x100),
-                *set_octa(2, 0x1122334455667788),
-                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
-                insn(0x8e, 3, 1, 0),      # LDOU r3,r1,r0
+                *set_octa(R1, MMIX_DATA_SEGMENT_BASE + 0x100),
+                *set_octa(R2, 0x1122334455667788),
+                insn(STOU, R2, R1, R0),
+                insn(LDOU, R3, R1, R0),
                 halt(),
             ]
         ),
         pc=0x28,
-        regs={2: 0x1122334455667788, 3: 0x1122334455667788},
+        regs={R2: 0x1122334455667788, R3: 0x1122334455667788},
     ),
     MMIXTest(
         "unsupported-high-segment-runtime-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x80),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                *set_octa(3, 0x4000000000000000),
-                insn(0x8e, 4, 3, 0),      # LDOU r4,r3,r0
-                wyde(0xe3, 5, 0x00ff),    # skipped after dynamic trap
+                wyde(SETL, R1, 0x80),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                *set_octa(R3, 0x4000000000000000),
+                insn(LDOU, R4, R3, R0),
+                wyde(SETL, R5, 0x00ff),    # skipped after dynamic trap
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x90,
-        regs={4: 0, 5: 0, 40: RQ_PROGRAM_R, 41: RQ_PROGRAM_R, 42: 0x30, 43: 0},
+        regs={R4: 0, R5: 0, R40: RQ_PROGRAM_R, R41: RQ_PROGRAM_R, R42: 0x30, R43: 0},
     ),
     MMIXTest(
         "virtual-translation-page0-rwx",
         b"".join(
             [
-                *set_octa(1, VM_PAGE_TABLE),
-                wyde(0xe3, 2, 7),         # SETL r2,RWX PTE for page 0
-                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
-                *set_octa(3, VM_RV_PAGE0),
-                insn(0xf6, 18, 0, 3),     # PUT rV,r3
-                wyde(0xe3, 4, 0x0300),    # SETL r4,0x300
-                *set_octa(5, 0x1122334455667788),
-                insn(0xae, 5, 4, 0),      # STOU r5,r4,r0
-                insn(0x8e, 6, 4, 0),      # LDOU r6,r4,r0
+                *set_octa(R1, VM_PAGE_TABLE),
+                wyde(SETL, R2, 7),
+                insn(STOU, R2, R1, R0),
+                *set_octa(R3, VM_RV_PAGE0),
+                insn(PUT, SR_V, 0, R3),
+                wyde(SETL, R4, 0x0300),
+                *set_octa(R5, 0x1122334455667788),
+                insn(STOU, R5, R4, R0),
+                insn(LDOU, R6, R4, R0),
                 halt(),
             ]
         ),
         pc=0x48,
-        regs={6: 0x1122334455667788},
+        regs={R6: 0x1122334455667788},
     ),
     MMIXTest(
         "virtual-translation-store-protection",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x80),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(10, VM_PAGE_TABLE),
-                wyde(0xe3, 11, 5),        # SETL r11,RX PTE for page 0
-                insn(0xae, 11, 10, 0),    # STOU r11,r10,r0
-                *set_octa(12, VM_RV_PAGE0),
-                insn(0xf6, 18, 0, 12),    # PUT rV,r12
-                wyde(0xe3, 13, 0x00aa),   # SETL r13,0xaa
-                wyde(0xe3, 14, 0x0300),   # SETL r14,0x300
-                insn(0xae, 13, 14, 0),    # STOU r13,r14,r0
-                wyde(0xe3, 15, 0x00ff),   # skipped
+                wyde(SETL, R1, 0x80),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R10, VM_PAGE_TABLE),
+                wyde(SETL, R11, 5),
+                insn(STOU, R11, R10, R0),
+                *set_octa(R12, VM_RV_PAGE0),
+                insn(PUT, SR_V, 0, R12),
+                wyde(SETL, R13, 0x00aa),
+                wyde(SETL, R14, 0x0300),
+                insn(STOU, R13, R14, R0),
+                wyde(SETL, R15, 0x00ff),   # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x90,
-        regs={40: RQ_PROGRAM_W, 41: RQ_PROGRAM_W, 42: 0x40, 43: 0},
+        regs={R40: RQ_PROGRAM_W, R41: RQ_PROGRAM_W, R42: 0x40, R43: 0},
     ),
     MMIXTest(
         "virtual-translation-nonidentity-load",
         b"".join(
             [
-                *set_octa(1, VM_PAGE_TABLE_ROOT2),
-                wyde(0xe3, 2, 7),         # SETL r2,RWX PTE for page 0
-                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
-                *set_octa(3, 0x0000000000006007),
-                insn(0xaf, 3, 1, 8),      # STOUI r3,r1,8
-                *set_octa(4, 0x0000000000006000),
-                *set_octa(5, 0x0102030405060708),
-                insn(0xae, 5, 4, 0),      # STOU r5,r4,r0
-                *set_octa(6, VM_RV_ROOT2),
-                insn(0xf6, 18, 0, 6),     # PUT rV,r6
-                *set_octa(7, 0x0000000000002000),
-                insn(0x8e, 8, 7, 0),      # LDOU r8,r7,r0
+                *set_octa(R1, VM_PAGE_TABLE_ROOT2),
+                wyde(SETL, R2, 7),
+                insn(STOU, R2, R1, R0),
+                *set_octa(R3, 0x0000000000006007),
+                insn(STOUI, R3, R1, 8),
+                *set_octa(R4, 0x0000000000006000),
+                *set_octa(R5, 0x0102030405060708),
+                insn(STOU, R5, R4, R0),
+                *set_octa(R6, VM_RV_ROOT2),
+                insn(PUT, SR_V, 0, R6),
+                *set_octa(R7, 0x0000000000002000),
+                insn(LDOU, R8, R7, R0),
                 halt(),
             ]
         ),
         pc=0x78,
-        regs={8: 0x0102030405060708},
+        regs={R8: 0x0102030405060708},
     ),
     MMIXTest(
         "virtual-translation-read-protection",
         program_with_handler(
             [
-                *set_octa(1, NEGATIVE_HANDLER),
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, VM_PAGE_TABLE),
-                wyde(0xe3, 3, 3),         # SETL r3,WX PTE for page 0
-                insn(0xae, 3, 2, 0),      # STOU r3,r2,r0
-                *set_octa(4, VM_RV_PAGE0),
-                insn(0xf6, 18, 0, 4),     # PUT rV,r4
-                wyde(0xe3, 5, 0x0300),    # SETL r5,0x300
-                insn(0x8e, 6, 5, 0),      # LDOU r6,r5,r0
-                wyde(0xe3, 7, 0x00ff),    # skipped
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, VM_PAGE_TABLE),
+                wyde(SETL, R3, 3),
+                insn(STOU, R3, R2, R0),
+                *set_octa(R4, VM_RV_PAGE0),
+                insn(PUT, SR_V, 0, R4),
+                wyde(SETL, R5, 0x0300),
+                insn(LDOU, R6, R5, R0),
+                wyde(SETL, R7, 0x00ff),    # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
                 halt(),
             ],
         ),
         pc=0x800000000000008c,
-        regs={6: 0, 7: 0, 40: RQ_PROGRAM_R, 41: RQ_PROGRAM_R, 42: 0x48},
+        regs={R6: 0, R7: 0, R40: RQ_PROGRAM_R, R41: RQ_PROGRAM_R, R42: 0x48},
     ),
     MMIXTest(
         "virtual-translation-execute-protection",
         program_with_handler(
             [
-                *set_octa(1, NEGATIVE_HANDLER),
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, VM_PAGE_TABLE),
-                wyde(0xe3, 3, 6),         # SETL r3,RW PTE for page 0
-                insn(0xae, 3, 2, 0),      # STOU r3,r2,r0
-                *set_octa(4, VM_RV_PAGE0),
-                insn(0xf6, 18, 0, 4),     # PUT rV,r4
-                wyde(0xe3, 5, 0x00ff),    # skipped
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, VM_PAGE_TABLE),
+                wyde(SETL, R3, 6),
+                insn(STOU, R3, R2, R0),
+                *set_octa(R4, VM_RV_PAGE0),
+                insn(PUT, SR_V, 0, R4),
+                wyde(SETL, R5, 0x00ff),    # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
                 halt(),
             ],
         ),
         pc=0x800000000000008c,
-        regs={5: 0, 40: RQ_PROGRAM_X, 41: RQ_PROGRAM_X, 42: 0x44},
+        regs={R5: 0, R40: RQ_PROGRAM_X, R41: RQ_PROGRAM_X, R42: 0x44},
     ),
     MMIXTest(
         "virtual-translation-asn-mismatch",
         program_with_handler(
             [
-                *set_octa(1, NEGATIVE_HANDLER),
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, VM_PAGE_TABLE_ROOT2),
-                wyde(0xe3, 3, 7),         # SETL r3,RWX PTE for page 0
-                insn(0xae, 3, 2, 0),      # STOU r3,r2,r0
-                *set_octa(4, 0x000000000000600f),
-                insn(0xaf, 4, 2, 8),      # STOUI r4,r2,8
-                *set_octa(5, VM_RV_ROOT2),
-                insn(0xf6, 18, 0, 5),     # PUT rV,r5
-                *set_octa(6, 0x0000000000002000),
-                insn(0x8e, 7, 6, 0),      # LDOU r7,r6,r0
-                wyde(0xe3, 8, 0x00ff),    # skipped
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, VM_PAGE_TABLE_ROOT2),
+                wyde(SETL, R3, 7),
+                insn(STOU, R3, R2, R0),
+                *set_octa(R4, 0x000000000000600f),
+                insn(STOUI, R4, R2, 8),
+                *set_octa(R5, VM_RV_ROOT2),
+                insn(PUT, SR_V, 0, R5),
+                *set_octa(R6, 0x0000000000002000),
+                insn(LDOU, R7, R6, R0),
+                wyde(SETL, R8, 0x00ff),    # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
                 halt(),
             ],
         ),
         pc=0x800000000000008c,
-        regs={7: 0, 8: 0, 40: RQ_PROGRAM_R, 41: RQ_PROGRAM_R, 42: 0x68},
+        regs={R7: 0, R8: 0, R40: RQ_PROGRAM_R, R41: RQ_PROGRAM_R, R42: 0x68},
     ),
     MMIXTest(
         "virtual-translation-invalid-rv",
         program_with_handler(
             [
-                *set_octa(1, NEGATIVE_HANDLER),
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, 0x11110c0000002000),
-                insn(0xf6, 18, 0, 2),     # PUT rV,r2
-                wyde(0xe3, 3, 0x00ff),    # skipped
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, 0x11110c0000002000),
+                insn(PUT, SR_V, 0, R2),
+                wyde(SETL, R3, 0x00ff),    # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
                 halt(),
             ],
         ),
         pc=0x800000000000008c,
-        regs={3: 0, 40: RQ_PROGRAM_X, 41: RQ_PROGRAM_X, 42: 0x2c},
+        regs={R3: 0, R40: RQ_PROGRAM_X, R41: RQ_PROGRAM_X, R42: 0x2c},
     ),
     MMIXTest(
         "negative-address-load-user-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x80),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                *set_octa(3, 0x8000000000000300),
-                insn(0x8e, 4, 3, 0),      # LDOU r4,r3,r0
-                wyde(0xe3, 5, 0x00ff),    # skipped
+                wyde(SETL, R1, 0x80),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                *set_octa(R3, 0x8000000000000300),
+                insn(LDOU, R4, R3, R0),
+                wyde(SETL, R5, 0x00ff),    # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x90,
-        regs={4: 0, 5: 0, 40: RQ_PROGRAM_N, 41: RQ_PROGRAM_N, 42: 0x30, 43: 0},
+        regs={R4: 0, R5: 0, R40: RQ_PROGRAM_N, R41: RQ_PROGRAM_N, R42: 0x30, R43: 0},
     ),
     MMIXTest(
         "negative-address-store-user-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x80),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                *set_octa(3, 0x8000000000000300),
-                wyde(0xe3, 4, 0x00aa),    # SETL r4,0xaa
-                insn(0xae, 4, 3, 0),      # STOU r4,r3,r0
-                wyde(0xe3, 5, 0x00ff),    # skipped
+                wyde(SETL, R1, 0x80),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                *set_octa(R3, 0x8000000000000300),
+                wyde(SETL, R4, 0x00aa),
+                insn(STOU, R4, R3, R0),
+                wyde(SETL, R5, 0x00ff),    # skipped
             ],
             0x80,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x90,
-        regs={5: 0, 40: RQ_PROGRAM_N, 41: RQ_PROGRAM_N, 42: 0x34, 43: 0},
+        regs={R5: 0, R40: RQ_PROGRAM_N, R41: RQ_PROGRAM_N, R42: 0x34, R43: 0},
     ),
     MMIXTest(
         "negative-address-fetch-direct",
         program_with_handler(
             [
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                *set_octa(3, 0x8000000000000300),
-                insn(0x9e, 4, 3, 0),      # GO r4,r3,r0
-                wyde(0xe3, 5, 0x00ff),    # skipped
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                *set_octa(R3, 0x8000000000000300),
+                insn(GO, R4, R3, R0),
+                wyde(SETL, R5, 0x00ff),    # skipped
             ],
             0x300,
             [
-                wyde(0xe3, 5, 0x0055),    # SETL r5,0x55
+                wyde(SETL, R5, 0x0055),
                 halt(),
             ],
         ),
         pc=0x8000000000000304,
-        regs={4: 0x28, 5: 0x55},
+        regs={R4: 0x28, R5: 0x55},
     ),
     MMIXTest(
         "memory-octa-variants",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0200),    # SETL r1,0x200
-                wyde(0xe3, 2, 8),         # SETL r2,8
-                wyde(0xe0, 3, 0x1122),    # SETH r3,0x1122
-                wyde(0xe5, 3, 0x3344),    # INCMH r3,0x3344
-                wyde(0xe6, 3, 0x5566),    # INCML r3,0x5566
-                wyde(0xe7, 3, 0x7788),    # INCL r3,0x7788
-                insn(0xac, 3, 1, 2),      # STO r3,r1,r2
-                insn(0x8c, 4, 1, 2),      # LDO r4,r1,r2
-                insn(0xad, 3, 1, 16),     # STOI r3,r1,16
-                insn(0x8d, 5, 1, 16),     # LDOI r5,r1,16
-                insn(0xae, 3, 1, 2),      # STOU r3,r1,r2
-                insn(0x8e, 6, 1, 2),      # LDOU r6,r1,r2
-                insn(0xaf, 3, 1, 24),     # STOUI r3,r1,24
-                insn(0x8f, 7, 1, 24),     # LDOUI r7,r1,24
+                wyde(SETL, R1, 0x0200),
+                wyde(SETL, R2, 8),
+                wyde(SETH, R3, 0x1122),
+                wyde(INCMH, R3, 0x3344),
+                wyde(INCML, R3, 0x5566),
+                wyde(INCL, R3, 0x7788),
+                insn(STO, R3, R1, R2),
+                insn(LDO, R4, R1, R2),
+                insn(STOI, R3, R1, 16),
+                insn(LDOI, R5, R1, 16),
+                insn(STOU, R3, R1, R2),
+                insn(LDOU, R6, R1, R2),
+                insn(STOUI, R3, R1, 24),
+                insn(LDOUI, R7, R1, 24),
                 halt(),
             ]
         ),
         pc=0x38,
         regs={
-            3: 0x1122334455667788,
-            4: 0x1122334455667788,
-            5: 0x1122334455667788,
-            6: 0x1122334455667788,
-            7: 0x1122334455667788,
+            R3: 0x1122334455667788,
+            R4: 0x1122334455667788,
+            R5: 0x1122334455667788,
+            R6: 0x1122334455667788,
+            R7: 0x1122334455667788,
         },
     ),
     MMIXTest(
         "memory-store-constant-octa",
         b"".join(
             [
-                wyde(0xe3, 1, 0x02a0),    # SETL r1,0x2a0
-                wyde(0xe3, 2, 8),         # SETL r2,8
-                insn(0xb4, 0x5a, 1, 2),   # STCO 0x5a,r1,r2
-                insn(0x8e, 3, 1, 2),      # LDOU r3,r1,r2
-                insn(0xb5, 0xa5, 1, 16),  # STCOI 0xa5,r1,16
-                insn(0x8f, 4, 1, 16),     # LDOUI r4,r1,16
+                wyde(SETL, R1, 0x02a0),
+                wyde(SETL, R2, 8),
+                insn(STCO, 0x5a, R1, R2),
+                insn(LDOU, R3, R1, R2),
+                insn(STCOI, 0xa5, R1, 16),
+                insn(LDOUI, R4, R1, 16),
                 halt(),
             ]
         ),
         pc=0x18,
-        regs={3: 0x5a, 4: 0xa5},
+        regs={R3: 0x5a, R4: 0xa5},
     ),
     MMIXTest(
         "memory-load-extension",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0220),    # SETL r1,0x220
-                wyde(0xe3, 2, 1),         # SETL r2,1
-                wyde(0xe3, 3, 2),         # SETL r3,2
-                wyde(0xe3, 4, 4),         # SETL r4,4
-                wyde(0xe3, 10, 0x80),     # SETL r10,0x80
-                insn(0xa3, 10, 1, 1),     # STBUI r10,r1,1
-                insn(0x80, 11, 1, 2),     # LDB r11,r1,r2
-                insn(0x81, 12, 1, 1),     # LDBI r12,r1,1
-                insn(0x82, 13, 1, 2),     # LDBU r13,r1,r2
-                insn(0x83, 14, 1, 1),     # LDBUI r14,r1,1
-                wyde(0xe3, 15, 0x8001),   # SETL r15,0x8001
-                insn(0xa4, 15, 1, 3),     # STW r15,r1,r3
-                insn(0x84, 16, 1, 3),     # LDW r16,r1,r3
-                insn(0x85, 17, 1, 2),     # LDWI r17,r1,2
-                insn(0x86, 18, 1, 3),     # LDWU r18,r1,r3
-                insn(0x87, 19, 1, 2),     # LDWUI r19,r1,2
-                wyde(0xe2, 20, 0x8000),   # SETML r20,0x8000
-                wyde(0xe7, 20, 1),        # INCL r20,1
-                insn(0xa9, 20, 1, 4),     # STTI r20,r1,4
-                insn(0x88, 21, 1, 4),     # LDT r21,r1,r4
-                insn(0x89, 22, 1, 4),     # LDTI r22,r1,4
-                insn(0x8a, 23, 1, 4),     # LDTU r23,r1,r4
-                insn(0x8b, 24, 1, 4),     # LDTUI r24,r1,4
+                wyde(SETL, R1, 0x0220),
+                wyde(SETL, R2, 1),
+                wyde(SETL, R3, 2),
+                wyde(SETL, R4, 4),
+                wyde(SETL, R10, 0x80),
+                insn(STBUI, R10, R1, 1),
+                insn(LDB, R11, R1, R2),
+                insn(LDBI, R12, R1, 1),
+                insn(LDBU, R13, R1, R2),
+                insn(LDBUI, R14, R1, 1),
+                wyde(SETL, R15, 0x8001),
+                insn(STW, R15, R1, R3),
+                insn(LDW, R16, R1, R3),
+                insn(LDWI, R17, R1, 2),
+                insn(LDWU, R18, R1, R3),
+                insn(LDWUI, R19, R1, 2),
+                wyde(SETML, R20, 0x8000),
+                wyde(INCL, R20, 1),
+                insn(STTI, R20, R1, 4),
+                insn(LDT, R21, R1, R4),
+                insn(LDTI, R22, R1, 4),
+                insn(LDTU, R23, R1, R4),
+                insn(LDTUI, R24, R1, 4),
                 halt(),
             ]
         ),
         pc=0x5c,
         regs={
-            11: 0xffffffffffffff80,
-            12: 0xffffffffffffff80,
-            13: 0x80,
-            14: 0x80,
-            16: 0xffffffffffff8001,
-            17: 0xffffffffffff8001,
-            18: 0x8001,
-            19: 0x8001,
-            20: 0x80000001,
-            21: 0xffffffff80000001,
-            22: 0xffffffff80000001,
-            23: 0x80000001,
-            24: 0x80000001,
+            R11: 0xffffffffffffff80,
+            R12: 0xffffffffffffff80,
+            R13: 0x80,
+            R14: 0x80,
+            R16: 0xffffffffffff8001,
+            R17: 0xffffffffffff8001,
+            R18: 0x8001,
+            R19: 0x8001,
+            R20: 0x80000001,
+            R21: 0xffffffff80000001,
+            R22: 0xffffffff80000001,
+            R23: 0x80000001,
+            R24: 0x80000001,
         },
     ),
     MMIXTest(
         "memory-store-widths",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0240),    # SETL r1,0x240
-                wyde(0xe3, 2, 0x2a),      # SETL r2,0x2a
-                insn(0xa0, 2, 1, 0),      # STB r2,r1,r0
-                insn(0x82, 20, 1, 0),     # LDBU r20,r1,r0
-                wyde(0xe3, 3, 0x3b),      # SETL r3,0x3b
-                insn(0xa1, 3, 1, 1),      # STBI r3,r1,1
-                insn(0x83, 21, 1, 1),     # LDBUI r21,r1,1
-                wyde(0xe3, 4, 0xcc),      # SETL r4,0xcc
-                insn(0xa2, 4, 1, 2),      # STBU r4,r1,r2
-                insn(0x82, 22, 1, 2),     # LDBU r22,r1,r2
-                wyde(0xe3, 5, 0xdd),      # SETL r5,0xdd
-                insn(0xa3, 5, 1, 3),      # STBUI r5,r1,3
-                insn(0x83, 23, 1, 3),     # LDBUI r23,r1,3
-                wyde(0xe3, 6, 0x1234),    # SETL r6,0x1234
-                insn(0xa4, 6, 1, 0),      # STW r6,r1,r0
-                insn(0x86, 24, 1, 0),     # LDWU r24,r1,r0
-                wyde(0xe3, 7, 0x5678),    # SETL r7,0x5678
-                insn(0xa5, 7, 1, 6),      # STWI r7,r1,6
-                insn(0x87, 25, 1, 6),     # LDWUI r25,r1,6
-                wyde(0xe3, 8, 0x9abc),    # SETL r8,0x9abc
-                insn(0xa6, 8, 1, 0),      # STWU r8,r1,r0
-                insn(0x86, 26, 1, 0),     # LDWU r26,r1,r0
-                wyde(0xe3, 9, 0xdef0),    # SETL r9,0xdef0
-                insn(0xa7, 9, 1, 10),     # STWUI r9,r1,10
-                insn(0x87, 27, 1, 10),    # LDWUI r27,r1,10
-                wyde(0xe2, 10, 0x1122),   # SETML r10,0x1122
-                wyde(0xe7, 10, 0x3344),   # INCL r10,0x3344
-                insn(0xa8, 10, 1, 0),     # STT r10,r1,r0
-                insn(0x8a, 28, 1, 0),     # LDTU r28,r1,r0
-                wyde(0xe2, 11, 0x5566),   # SETML r11,0x5566
-                wyde(0xe7, 11, 0x7788),   # INCL r11,0x7788
-                insn(0xa9, 11, 1, 16),    # STTI r11,r1,16
-                insn(0x8b, 29, 1, 16),    # LDTUI r29,r1,16
-                wyde(0xe2, 12, 0x99aa),   # SETML r12,0x99aa
-                wyde(0xe7, 12, 0xbbcc),   # INCL r12,0xbbcc
-                insn(0xaa, 12, 1, 0),     # STTU r12,r1,r0
-                insn(0x8a, 30, 1, 0),     # LDTU r30,r1,r0
-                wyde(0xe2, 13, 0xddee),   # SETML r13,0xddee
-                wyde(0xe7, 13, 0xff00),   # INCL r13,0xff00
-                insn(0xab, 13, 1, 24),    # STTUI r13,r1,24
-                insn(0x8b, 31, 1, 24),    # LDTUI r31,r1,24
+                wyde(SETL, R1, 0x0240),
+                wyde(SETL, R2, 0x2a),
+                insn(STB, R2, R1, R0),
+                insn(LDBU, R20, R1, R0),
+                wyde(SETL, R3, 0x3b),
+                insn(STBI, R3, R1, 1),
+                insn(LDBUI, R21, R1, 1),
+                wyde(SETL, R4, 0xcc),
+                insn(STBU, R4, R1, R2),
+                insn(LDBU, R22, R1, R2),
+                wyde(SETL, R5, 0xdd),
+                insn(STBUI, R5, R1, 3),
+                insn(LDBUI, R23, R1, 3),
+                wyde(SETL, R6, 0x1234),
+                insn(STW, R6, R1, R0),
+                insn(LDWU, R24, R1, R0),
+                wyde(SETL, R7, 0x5678),
+                insn(STWI, R7, R1, 6),
+                insn(LDWUI, R25, R1, 6),
+                wyde(SETL, R8, 0x9abc),
+                insn(STWU, R8, R1, R0),
+                insn(LDWU, R26, R1, R0),
+                wyde(SETL, R9, 0xdef0),
+                insn(STWUI, R9, R1, 10),
+                insn(LDWUI, R27, R1, 10),
+                wyde(SETML, R10, 0x1122),
+                wyde(INCL, R10, 0x3344),
+                insn(STT, R10, R1, R0),
+                insn(LDTU, R28, R1, R0),
+                wyde(SETML, R11, 0x5566),
+                wyde(INCL, R11, 0x7788),
+                insn(STTI, R11, R1, 16),
+                insn(LDTUI, R29, R1, 16),
+                wyde(SETML, R12, 0x99aa),
+                wyde(INCL, R12, 0xbbcc),
+                insn(STTU, R12, R1, R0),
+                insn(LDTU, R30, R1, R0),
+                wyde(SETML, R13, 0xddee),
+                wyde(INCL, R13, 0xff00),
+                insn(STTUI, R13, R1, 24),
+                insn(LDTUI, R31, R1, 24),
                 halt(),
             ]
         ),
         pc=0xa4,
         regs={
-            20: 0x2a,
-            21: 0x3b,
-            22: 0xcc,
-            23: 0xdd,
-            24: 0x1234,
-            25: 0x5678,
-            26: 0x9abc,
-            27: 0xdef0,
-            28: 0x11223344,
-            29: 0x55667788,
-            30: 0x99aabbcc,
-            31: 0xddeeff00,
+            R20: 0x2a,
+            R21: 0x3b,
+            R22: 0xcc,
+            R23: 0xdd,
+            R24: 0x1234,
+            R25: 0x5678,
+            R26: 0x9abc,
+            R27: 0xdef0,
+            R28: 0x11223344,
+            R29: 0x55667788,
+            R30: 0x99aabbcc,
+            R31: 0xddeeff00,
         },
     ),
     MMIXTest(
         "memory-high-tetra",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0280),    # SETL r1,0x280
-                wyde(0xe0, 2, 0x1234),    # SETH r2,0x1234
-                wyde(0xe5, 2, 0x5678),    # INCMH r2,0x5678
-                wyde(0xe6, 2, 0x9abc),    # INCML r2,0x9abc
-                wyde(0xe7, 2, 0xdef0),    # INCL r2,0xdef0
-                insn(0xb2, 2, 1, 0),      # STHT r2,r1,r0
-                insn(0x92, 3, 1, 0),      # LDHT r3,r1,r0
-                insn(0xb3, 2, 1, 4),      # STHTI r2,r1,4
-                insn(0x93, 4, 1, 4),      # LDHTI r4,r1,4
+                wyde(SETL, R1, 0x0280),
+                wyde(SETH, R2, 0x1234),
+                wyde(INCMH, R2, 0x5678),
+                wyde(INCML, R2, 0x9abc),
+                wyde(INCL, R2, 0xdef0),
+                insn(STHT, R2, R1, R0),
+                insn(LDHT, R3, R1, R0),
+                insn(STHTI, R2, R1, 4),
+                insn(LDHTI, R4, R1, 4),
                 halt(),
             ]
         ),
         pc=0x24,
         regs={
-            2: 0x123456789abcdef0,
-            3: 0x1234567800000000,
-            4: 0x1234567800000000,
+            R2: 0x123456789abcdef0,
+            R3: 0x1234567800000000,
+            R4: 0x1234567800000000,
         },
     ),
     MMIXTest(
         "memory-uncached-octa",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0300),    # SETL r1,0x300
-                *set_octa(2, 0x1122334455667788),
-                insn(0xb6, 2, 1, 0),      # STUNC r2,r1,r0
-                insn(0x8e, 3, 1, 0),      # LDOU r3,r1,r0
-                *set_octa(4, 0x99aabbccddeeff00),
-                insn(0xae, 4, 1, 0),      # STOU r4,r1,r0
-                insn(0x96, 5, 1, 0),      # LDUNC r5,r1,r0
-                insn(0xb7, 2, 1, 8),      # STUNCI r2,r1,8
-                insn(0x97, 6, 1, 8),      # LDUNCI r6,r1,8
+                wyde(SETL, R1, 0x0300),
+                *set_octa(R2, 0x1122334455667788),
+                insn(STUNC, R2, R1, R0),
+                insn(LDOU, R3, R1, R0),
+                *set_octa(R4, 0x99aabbccddeeff00),
+                insn(STOU, R4, R1, R0),
+                insn(LDUNC, R5, R1, R0),
+                insn(STUNCI, R2, R1, 8),
+                insn(LDUNCI, R6, R1, 8),
                 halt(),
             ]
         ),
         pc=0x3c,
         regs={
-            1: 0x0300,
-            2: 0x1122334455667788,
-            3: 0x1122334455667788,
-            4: 0x99aabbccddeeff00,
-            5: 0x99aabbccddeeff00,
-            6: 0x1122334455667788,
+            R1: 0x0300,
+            R2: 0x1122334455667788,
+            R3: 0x1122334455667788,
+            R4: 0x99aabbccddeeff00,
+            R5: 0x99aabbccddeeff00,
+            R6: 0x1122334455667788,
         },
     ),
     MMIXTest(
         "memory-prefetch-sync-hints",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0380),    # SETL r1,0x380
-                *set_octa(2, 0x0123456789abcdef),
-                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
-                *set_octa(3, 0xfffffffffffffff8),
-                insn(0x9a, 15, 3, 3),     # PRELD 15,r3,r3
-                insn(0x9b, 16, 3, 0xff),  # PRELDI 16,r3,0xff
-                insn(0xba, 17, 3, 3),     # PREST 17,r3,r3
-                insn(0xbb, 18, 3, 0xff),  # PRESTI 18,r3,0xff
-                insn(0x9c, 19, 3, 3),     # PREGO 19,r3,r3
-                insn(0x9d, 20, 3, 0xff),  # PREGOI 20,r3,0xff
-                insn(0xb8, 21, 3, 3),     # SYNCD 21,r3,r3
-                insn(0xb9, 22, 3, 0xff),  # SYNCDI 22,r3,0xff
-                insn(0xbc, 23, 3, 3),     # SYNCID 23,r3,r3
-                insn(0xbd, 24, 3, 0xff),  # SYNCIDI 24,r3,0xff
-                jump(0xfc, 0),            # SYNC 0
-                jump(0xfc, 1),            # SYNC 1
-                jump(0xfc, 2),            # SYNC 2
-                jump(0xfc, 3),            # SYNC 3
-                jump(0xfc, 4),            # SYNC 4
-                jump(0xfc, 5),            # SYNC 5
-                jump(0xfc, 6),            # SYNC 6
-                jump(0xfc, 7),            # SYNC 7
-                insn(0x8e, 4, 1, 0),      # LDOU r4,r1,r0
+                wyde(SETL, R1, 0x0380),
+                *set_octa(R2, 0x0123456789abcdef),
+                insn(STOU, R2, R1, R0),
+                *set_octa(R3, 0xfffffffffffffff8),
+                insn(PRELD, 15, R3, R3),
+                insn(PRELDI, 16, R3, 0xff),
+                insn(PREST, 17, R3, R3),
+                insn(PRESTI, 18, R3, 0xff),
+                insn(PREGO, 19, R3, R3),
+                insn(PREGOI, 20, R3, 0xff),
+                insn(SYNCD, 21, R3, R3),
+                insn(SYNCDI, 22, R3, 0xff),
+                insn(SYNCID, 23, R3, R3),
+                insn(SYNCIDI, 24, R3, 0xff),
+                jump(SYNC, 0),
+                jump(SYNC, 1),
+                jump(SYNC, 2),
+                jump(SYNC, 3),
+                jump(SYNC, 4),
+                jump(SYNC, 5),
+                jump(SYNC, 6),
+                jump(SYNC, 7),
+                insn(LDOU, R4, R1, R0),
                 halt(),
             ]
         ),
         pc=0x74,
         regs={
-            1: 0x0380,
-            2: 0x0123456789abcdef,
-            3: 0xfffffffffffffff8,
-            4: 0x0123456789abcdef,
+            R1: 0x0380,
+            R2: 0x0123456789abcdef,
+            R3: 0xfffffffffffffff8,
+            R4: 0x0123456789abcdef,
         },
     ),
     MMIXTest(
         "memory-compare-swap",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0400),    # SETL r1,0x400
-                *set_octa(2, 0x1111222233334444),
-                *set_octa(3, 0xaaaabbbbccccdddd),
-                insn(0xae, 2, 1, 0),      # STOU r2,r1,r0
-                insn(0xf6, 23, 0, 2),     # PUT rP,r2
-                insn(0x94, 3, 1, 0),      # CSWAP r3,r1,r0
-                insn(0x8e, 4, 1, 0),      # LDOU r4,r1,r0
-                insn(0xfe, 5, 0, 23),     # GET r5,rP
-                *set_octa(6, 0x5555666677778888),
-                *set_octa(7, 0x9999aaaabbbbcccc),
-                insn(0xf6, 23, 0, 7),     # PUT rP,r7
-                insn(0x94, 6, 1, 0),      # CSWAP r6,r1,r0
-                insn(0x8e, 8, 1, 0),      # LDOU r8,r1,r0
-                insn(0xfe, 9, 0, 23),     # GET r9,rP
-                *set_octa(10, 0x0102030405060708),
-                insn(0xaf, 10, 1, 16),    # STOUI r10,r1,16
-                *set_octa(11, 0x1020304050607080),
-                insn(0xf6, 23, 0, 10),    # PUT rP,r10
-                insn(0x95, 11, 1, 16),    # CSWAPI r11,r1,16
-                insn(0x8f, 12, 1, 16),    # LDOUI r12,r1,16
-                insn(0xfe, 13, 0, 23),    # GET r13,rP
-                *set_octa(14, 0x0f0e0d0c0b0a0908),
-                insn(0xf6, 23, 0, 14),    # PUT rP,r14
-                *set_octa(15, 0x8877665544332211),
-                insn(0x95, 15, 1, 16),    # CSWAPI r15,r1,16
-                insn(0x8f, 16, 1, 16),    # LDOUI r16,r1,16
-                insn(0xfe, 17, 0, 23),    # GET r17,rP
+                wyde(SETL, R1, 0x0400),
+                *set_octa(R2, 0x1111222233334444),
+                *set_octa(R3, 0xaaaabbbbccccdddd),
+                insn(STOU, R2, R1, R0),
+                insn(PUT, SR_P, 0, R2),
+                insn(CSWAP, R3, R1, R0),
+                insn(LDOU, R4, R1, R0),
+                insn(GET, R5, 0, SR_P),
+                *set_octa(R6, 0x5555666677778888),
+                *set_octa(R7, 0x9999aaaabbbbcccc),
+                insn(PUT, SR_P, 0, R7),
+                insn(CSWAP, R6, R1, R0),
+                insn(LDOU, R8, R1, R0),
+                insn(GET, R9, 0, SR_P),
+                *set_octa(R10, 0x0102030405060708),
+                insn(STOUI, R10, R1, 16),
+                *set_octa(R11, 0x1020304050607080),
+                insn(PUT, SR_P, 0, R10),
+                insn(CSWAPI, R11, R1, 16),
+                insn(LDOUI, R12, R1, 16),
+                insn(GET, R13, 0, SR_P),
+                *set_octa(R14, 0x0f0e0d0c0b0a0908),
+                insn(PUT, SR_P, 0, R14),
+                *set_octa(R15, 0x8877665544332211),
+                insn(CSWAPI, R15, R1, 16),
+                insn(LDOUI, R16, R1, 16),
+                insn(GET, R17, 0, SR_P),
                 halt(),
             ]
         ),
         pc=0xcc,
         regs={
-            1: 0x0400,
-            3: 1,
-            4: 0xaaaabbbbccccdddd,
-            5: 0x1111222233334444,
-            6: 0,
-            8: 0xaaaabbbbccccdddd,
-            9: 0xaaaabbbbccccdddd,
-            11: 1,
-            12: 0x1020304050607080,
-            13: 0x0102030405060708,
-            15: 0,
-            16: 0x1020304050607080,
-            17: 0x1020304050607080,
+            R1: 0x0400,
+            R3: 1,
+            R4: 0xaaaabbbbccccdddd,
+            R5: 0x1111222233334444,
+            R6: 0,
+            R8: 0xaaaabbbbccccdddd,
+            R9: 0xaaaabbbbccccdddd,
+            R11: 1,
+            R12: 0x1020304050607080,
+            R13: 0x0102030405060708,
+            R15: 0,
+            R16: 0x1020304050607080,
+            R17: 0x1020304050607080,
         },
     ),
     MMIXTest(
         "special-register-get-reset",
         b"".join(
             [
-                insn(0xfe, 33, 0, 15),    # GET r33,rK
-                insn(0xfe, 34, 0, 13),    # GET r34,rT
-                insn(0xfe, 35, 0, 14),    # GET r35,rTT
-                insn(0xfe, 36, 0, 18),    # GET r36,rV
-                insn(0xfe, 37, 0, 19),    # GET r37,rG
-                insn(0xfe, 38, 0, 20),    # GET r38,rL
-                insn(0xfe, 39, 0, 21),    # GET r39,rA
+                insn(GET, R33, 0, SR_K),
+                insn(GET, R34, 0, SR_T),
+                insn(GET, R35, 0, SR_TT),
+                insn(GET, R36, 0, SR_V),
+                insn(GET, R37, 0, SR_G),
+                insn(GET, R38, 0, SR_L),
+                insn(GET, R39, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x1c,
         regs={
-            33: 0,
-            34: 0x8000000500000000,
-            35: 0x8000000600000000,
-            36: 0x369c200400000000,
-            37: 32,
-            38: 0,
-            39: 0,
+            R33: 0,
+            R34: 0x8000000500000000,
+            R35: 0x8000000600000000,
+            R36: 0x369c200400000000,
+            R37: 32,
+            R38: 0,
+            R39: 0,
         },
     ),
     MMIXTest(
         "privileged-register-user-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                insn(0xf7, 8, 0, 0xaa),   # PUTI rC,0xaa
-                wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
+                wyde(SETL, R1, 0x40),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                insn(PUTI, SR_C, 0, 0xaa),
+                wyde(SETL, R3, 0xee),      # skipped after dynamic trap
             ],
             0x40,
             [
-                insn(0xfe, 40, 0, 8),     # GET r40,rC
-                insn(0xfe, 41, 0, 16),    # GET r41,rQ
-                insn(0xfe, 42, 0, 29),    # GET r42,rXX
-                insn(0xfe, 43, 0, 28),    # GET r43,rWW
-                insn(0xfe, 44, 0, 15),    # GET r44,rK
+                insn(GET, R40, 0, SR_C),
+                insn(GET, R41, 0, SR_Q),
+                insn(GET, R42, 0, SR_XX),
+                insn(GET, R43, 0, SR_WW),
+                insn(GET, R44, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x54,
         regs={
-            3: 0,
-            40: 0,
-            41: RQ_PROGRAM_K,
-            42: RQ_PROGRAM_K,
-            43: 0x20,
-            44: 0,
+            R3: 0,
+            R40: 0,
+            R41: RQ_PROGRAM_K,
+            R42: RQ_PROGRAM_K,
+            R43: 0x20,
+            R44: 0,
         },
     ),
     MMIXTest(
         "privileged-sync-user-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                jump(0xfc, 4),            # SYNC 4
-                wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
+                wyde(SETL, R1, 0x40),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                jump(SYNC, 4),
+                wyde(SETL, R3, 0xee),      # skipped after dynamic trap
             ],
             0x40,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x50,
         regs={
-            3: 0,
-            40: RQ_PROGRAM_K,
-            41: RQ_PROGRAM_K,
-            42: 0x20,
-            43: 0,
+            R3: 0,
+            R40: RQ_PROGRAM_K,
+            R41: RQ_PROGRAM_K,
+            R42: 0x20,
+            R43: 0,
         },
     ),
     MMIXTest(
         "privileged-sync7-user-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                jump(0xfc, 7),            # SYNC 7
-                wyde(0xe3, 3, 0xee),      # skipped after dynamic trap
+                wyde(SETL, R1, 0x40),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                jump(SYNC, 7),
+                wyde(SETL, R3, 0xee),      # skipped after dynamic trap
             ],
             0x40,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x50,
         regs={
-            3: 0,
-            40: RQ_PROGRAM_K,
-            41: RQ_PROGRAM_K,
-            42: 0x20,
-            43: 0,
+            R3: 0,
+            R40: RQ_PROGRAM_K,
+            R41: RQ_PROGRAM_K,
+            R42: 0x20,
+            R43: 0,
         },
     ),
     MMIXTest(
         "ldvts-current-cache-policy",
         b"".join(
             [
-                *set_octa(1, 0x2000000000000005),
-                wyde(0xe3, 2, 3),         # SETL r2,3
-                insn(0x98, 3, 1, 2),      # LDVTS r3,r1,r2
-                insn(0x99, 4, 1, 7),      # LDVTSI r4,r1,7
+                *set_octa(R1, 0x2000000000000005),
+                wyde(SETL, R2, 3),
+                insn(LDVTS, R3, R1, R2),
+                insn(LDVTSI, R4, R1, 7),
                 halt(),
             ]
         ),
         pc=0x1c,
         regs={
-            1: 0x2000000000000005,
-            2: 3,
-            3: 0,
-            4: 0,
+            R1: 0x2000000000000005,
+            R2: 3,
+            R3: 0,
+            R4: 0,
         },
     ),
     MMIXTest(
         "ldvts-user-trap",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,handler
-                insn(0xf6, 14, 0, 1),     # PUT rTT,r1
-                *set_octa(2, RQ_PROGRAM_K),
-                insn(0xf6, 15, 0, 2),     # PUT rK,r2
-                insn(0x99, 3, 0, 7),      # LDVTSI r3,r0,7
-                wyde(0xe3, 4, 0xee),      # skipped after dynamic trap
+                wyde(SETL, R1, 0x40),  # handler address
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                insn(PUT, SR_K, 0, R2),
+                insn(LDVTSI, R3, R0, 7),
+                wyde(SETL, R4, 0xee),      # skipped after dynamic trap
             ],
             0x40,
             [
-                insn(0xfe, 40, 0, 16),    # GET r40,rQ
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 28),    # GET r42,rWW
-                insn(0xfe, 43, 0, 15),    # GET r43,rK
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
                 halt(),
             ],
         ),
         pc=0x50,
         regs={
-            3: 0,
-            4: 0,
-            40: RQ_PROGRAM_K,
-            41: RQ_PROGRAM_K,
-            42: 0x20,
-            43: 0,
+            R3: 0,
+            R4: 0,
+            R40: RQ_PROGRAM_K,
+            R41: RQ_PROGRAM_K,
+            R42: 0x20,
+            R43: 0,
         },
     ),
     MMIXTest(
@@ -1211,7 +1211,7 @@ ISA_TESTS = [
         b"".join(
             [
                 *[
-                    insn(0xfe, 33 + reg, 0, reg)
+                    insn(GET, 33 + reg, 0, reg)
                     for reg in range(32)
                 ],
                 halt(),
@@ -1233,1017 +1233,1027 @@ ISA_TESTS = [
         "special-register-put-readback",
         b"".join(
             [
-                wyde(0xe0, 1, 0xfeed),    # SETH r1,0xfeed
-                wyde(0xe5, 1, 0xcafe),    # INCMH r1,0xcafe
-                wyde(0xe6, 1, 0x1234),    # INCML r1,0x1234
-                wyde(0xe7, 1, 0x5678),    # INCL r1,0x5678
-                insn(0xf6, 4, 0, 1),      # PUT rJ,r1
-                insn(0xfe, 2, 0, 4),      # GET r2,rJ
-                insn(0xf7, 5, 0, 0x7b),   # PUTI rM,0x7b
-                insn(0xfe, 3, 0, 5),      # GET r3,rM
-                insn(0xf6, 28, 0, 1),     # PUT rWW,r1
-                insn(0xfe, 4, 0, 28),     # GET r4,rWW
-                insn(0xf7, 8, 0, 0x11),   # PUTI rC,0x11
-                insn(0xf7, 12, 0, 0x12),  # PUTI rI,0x12
-                insn(0xf7, 15, 0, 0x13),  # PUTI rK,0x13
-                insn(0xf7, 16, 0, 0x14),  # PUTI rQ,0x14
-                insn(0xf7, 13, 0, 0x15),  # PUTI rT,0x15
-                insn(0xf7, 17, 0, 0x16),  # PUTI rU,0x16
-                insn(0xf7, 14, 0, 0x17),  # PUTI rTT,0x17
-                insn(0xf7, 23, 0, 0x18),  # PUTI rP,0x18
-                insn(0xfe, 40, 0, 8),     # GET r40,rC
-                insn(0xfe, 41, 0, 12),    # GET r41,rI
-                insn(0xfe, 42, 0, 15),    # GET r42,rK
-                insn(0xfe, 43, 0, 16),    # GET r43,rQ
-                insn(0xfe, 44, 0, 13),    # GET r44,rT
-                insn(0xfe, 45, 0, 17),    # GET r45,rU
-                insn(0xfe, 46, 0, 14),    # GET r46,rTT
-                insn(0xfe, 47, 0, 23),    # GET r47,rP
+                wyde(SETH, R1, 0xfeed),
+                wyde(INCMH, R1, 0xcafe),
+                wyde(INCML, R1, 0x1234),
+                wyde(INCL, R1, 0x5678),
+                insn(PUT, SR_J, 0, R1),
+                insn(GET, R2, 0, SR_J),
+                insn(PUTI, SR_M, 0, 0x7b),
+                insn(GET, R3, 0, SR_M),
+                insn(PUT, SR_WW, 0, R1),
+                insn(GET, R4, 0, SR_WW),
+                insn(PUTI, SR_C, 0, 0x11),
+                insn(PUTI, SR_I, 0, 0x12),
+                insn(PUTI, SR_K, 0, 0x13),
+                insn(PUTI, SR_Q, 0, 0x14),
+                insn(PUTI, SR_T, 0, 0x15),
+                insn(PUTI, SR_U, 0, 0x16),
+                insn(PUTI, SR_TT, 0, 0x17),
+                insn(PUTI, SR_P, 0, 0x18),
+                insn(GET, R40, 0, SR_C),
+                insn(GET, R41, 0, SR_I),
+                insn(GET, R42, 0, SR_K),
+                insn(GET, R43, 0, SR_Q),
+                insn(GET, R44, 0, SR_T),
+                insn(GET, R45, 0, SR_U),
+                insn(GET, R46, 0, SR_TT),
+                insn(GET, R47, 0, SR_P),
                 halt(),
             ]
         ),
         pc=0x68,
         regs={
-            1: 0xfeedcafe12345678,
-            2: 0xfeedcafe12345678,
-            3: 0x7b,
-            4: 0xfeedcafe12345678,
-            40: 0x11,
-            41: 0x12,
-            42: 0x13,
-            43: 0x14,
-            44: 0x15,
-            45: 0x16,
-            46: 0x17,
-            47: 0x18,
+            R1: 0xfeedcafe12345678,
+            R2: 0xfeedcafe12345678,
+            R3: 0x7b,
+            R4: 0xfeedcafe12345678,
+            R40: 0x11,
+            R41: 0x12,
+            R42: 0x13,
+            R43: 0x14,
+            R44: 0x15,
+            R45: 0x16,
+            R46: 0x17,
+            R47: 0x18,
         },
     ),
     MMIXTest(
         "special-register-ra-mask",
         b"".join(
             [
-                *set_octa(1, 0xffffffff0003ffff),
-                insn(0xf6, 21, 0, 1),     # PUT rA,r1
-                insn(0xfe, 33, 0, 21),    # GET r33,rA
+                *set_octa(R1, 0xffffffff0003ffff),
+                insn(PUT, SR_A, 0, R1),
+                insn(GET, R33, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x18,
-        regs={33: 0x3ffff},
+        regs={R33: 0x3ffff},
     ),
     MMIXTest(
         "special-register-rg-rl-policy",
         b"".join(
             [
-                wyde(0xe3, 1, 64),        # SETL r1,64
-                insn(0xf6, 19, 0, 1),     # PUT rG,r1
-                wyde(0xe3, 40, 0x00aa),   # SETL r40,0xaa
-                insn(0xfe, 70, 0, 20),    # GET r70,rL
-                wyde(0xe3, 2, 40),        # SETL r2,40
-                insn(0xf6, 19, 0, 2),     # PUT rG,r2
-                insn(0xfe, 65, 0, 19),    # GET r65,rG
-                insn(0xfe, 66, 0, 20),    # GET r66,rL
+                wyde(SETL, R1, 64),
+                insn(PUT, SR_G, 0, R1),
+                wyde(SETL, R40, 0x00aa),
+                insn(GET, R70, 0, SR_L),
+                wyde(SETL, R2, 40),
+                insn(PUT, SR_G, 0, R2),
+                insn(GET, R65, 0, SR_G),
+                insn(GET, R66, 0, SR_L),
                 halt(),
             ]
         ),
         pc=0x20,
         regs={
-            65: 40,
-            66: 40,
-            70: 41,
+            R65: 40,
+            R66: 40,
+            R70: 41,
         },
     ),
     MMIXTest(
         "local-global-registers",
         b"".join(
             [
-                insn(0x21, 2, 1, 5),      # ADDI r2,r1,5
-                insn(0xfe, 33, 0, 20),    # GET r33,rL
-                wyde(0xe3, 10, 0x00aa),   # SETL r10,0xaa
-                insn(0xfe, 34, 0, 20),    # GET r34,rL
-                wyde(0xe3, 32, 0x0044),   # SETL r32,0x44
-                insn(0xfe, 35, 0, 20),    # GET r35,rL
+                insn(ADDI, R2, R1, 5),
+                insn(GET, R33, 0, SR_L),
+                wyde(SETL, R10, 0x00aa),
+                insn(GET, R34, 0, SR_L),
+                wyde(SETL, R32, 0x0044),
+                insn(GET, R35, 0, SR_L),
                 halt(),
             ]
         ),
         pc=0x18,
         regs={
-            1: 0,
-            2: 5,
-            9: 0,
-            10: 0xaa,
-            32: 0x44,
-            33: 3,
-            34: 11,
-            35: 11,
+            R1: 0,
+            R2: 5,
+            R9: 0,
+            R10: 0xaa,
+            R32: 0x44,
+            R33: 3,
+            R34: 11,
+            R35: 11,
         },
     ),
     MMIXTest(
         "put-rl-narrowing",
         b"".join(
             [
-                wyde(0xe3, 10, 0x00aa),   # SETL r10,0xaa
-                insn(0xfe, 33, 0, 20),    # GET r33,rL
-                wyde(0xe3, 2, 5),         # SETL r2,5
-                insn(0xf6, 20, 0, 2),     # PUT rL,r2
-                insn(0xfe, 34, 0, 20),    # GET r34,rL
-                insn(0x21, 11, 10, 0),    # ADDI r11,r10,0
-                insn(0xfe, 35, 0, 20),    # GET r35,rL
+                wyde(SETL, R10, 0x00aa),
+                insn(GET, R33, 0, SR_L),
+                wyde(SETL, R2, 5),
+                insn(PUT, SR_L, 0, R2),
+                insn(GET, R34, 0, SR_L),
+                insn(ADDI, R11, R10, 0),
+                insn(GET, R35, 0, SR_L),
                 halt(),
             ]
         ),
         pc=0x1c,
         regs={
-            2: 5,
-            10: 0,
-            11: 0,
-            33: 11,
-            34: 5,
-            35: 12,
+            R2: 5,
+            R10: 0,
+            R11: 0,
+            R33: 11,
+            R34: 5,
+            R35: 12,
         },
     ),
     MMIXTest(
         "existing-integer-logical-variants",
         b"".join(
             [
-                insn(0x21, 1, 0, 0xf0),   # ADDI r1,r0,0xf0
-                insn(0x21, 2, 0, 0x0f),   # ADDI r2,r0,0x0f
-                insn(0xfd, 0, 0, 0),      # SWYM
-                insn(0x24, 3, 1, 2),      # SUB r3,r1,r2
-                insn(0x22, 4, 3, 2),      # ADDU r4,r3,r2
-                insn(0x23, 5, 4, 1),      # ADDUI r5,r4,1
-                insn(0x26, 6, 5, 2),      # SUBU r6,r5,r2
-                insn(0x27, 7, 6, 2),      # SUBUI r7,r6,2
-                insn(0xc0, 8, 1, 2),      # OR r8,r1,r2
-                insn(0xc6, 9, 1, 2),      # XOR r9,r1,r2
-                insn(0xc8, 10, 1, 2),     # AND r10,r1,r2
+                insn(ADDI, R1, R0, 0xf0),
+                insn(ADDI, R2, R0, 0x0f),
+                insn(SWYM, 0, 0, 0),
+                insn(SUB, R3, R1, R2),
+                insn(ADDU, R4, R3, R2),
+                insn(ADDUI, R5, R4, 1),
+                insn(SUBU, R6, R5, R2),
+                insn(SUBUI, R7, R6, 2),
+                insn(OR, R8, R1, R2),
+                insn(XOR, R9, R1, R2),
+                insn(AND, R10, R1, R2),
                 halt(),
             ]
         ),
         pc=0x2c,
         regs={
-            1: 0xf0,
-            2: 0x0f,
-            3: 0xe1,
-            4: 0xf0,
-            5: 0xf1,
-            6: 0xe2,
-            7: 0xe0,
-            8: 0xff,
-            9: 0xff,
-            10: 0,
+            R1: 0xf0,
+            R2: 0x0f,
+            R3: 0xe1,
+            R4: 0xf0,
+            R5: 0xf1,
+            R6: 0xe2,
+            R7: 0xe0,
+            R8: 0xff,
+            R9: 0xff,
+            R10: 0,
         },
     ),
     MMIXTest(
         "wyde-constants",
         b"".join(
             [
-                wyde(0xe0, 1, 0x1234),    # SETH r1,0x1234
-                wyde(0xe1, 2, 0x5678),    # SETMH r2,0x5678
-                wyde(0xe2, 3, 0x9abc),    # SETML r3,0x9abc
-                wyde(0xe3, 4, 0xdef0),    # SETL r4,0xdef0
-                wyde(0xe0, 5, 0x1111),    # SETH r5,0x1111
-                wyde(0xe5, 5, 0x2222),    # INCMH r5,0x2222
-                wyde(0xe6, 5, 0x3333),    # INCML r5,0x3333
-                wyde(0xe7, 5, 0x4444),    # INCL r5,0x4444
-                wyde(0xe3, 6, 0xffff),    # SETL r6,0xffff
-                wyde(0xe7, 6, 0x0001),    # INCL r6,1
-                wyde(0xe0, 7, 0xffff),    # SETH r7,0xffff
-                wyde(0xe4, 7, 0x0001),    # INCH r7,1
+                wyde(SETH, R1, 0x1234),
+                wyde(SETMH, R2, 0x5678),
+                wyde(SETML, R3, 0x9abc),
+                wyde(SETL, R4, 0xdef0),
+                wyde(SETH, R5, 0x1111),
+                wyde(INCMH, R5, 0x2222),
+                wyde(INCML, R5, 0x3333),
+                wyde(INCL, R5, 0x4444),
+                wyde(SETL, R6, 0xffff),
+                wyde(INCL, R6, 0x0001),
+                wyde(SETH, R7, 0xffff),
+                wyde(INCH, R7, 0x0001),
                 halt(),
             ]
         ),
         pc=0x30,
         regs={
-            1: 0x1234000000000000,
-            2: 0x0000567800000000,
-            3: 0x000000009abc0000,
-            4: 0x000000000000def0,
-            5: 0x1111222233334444,
-            6: 0x0000000000010000,
-            7: 0,
+            R1: 0x1234000000000000,
+            R2: 0x0000567800000000,
+            R3: 0x000000009abc0000,
+            R4: 0x000000000000def0,
+            R5: 0x1111222233334444,
+            R6: 0x0000000000010000,
+            R7: 0,
         },
     ),
     MMIXTest(
         "scaled-unsigned-add",
         b"".join(
             [
-                wyde(0xe3, 1, 7),         # SETL r1,7
-                wyde(0xe3, 2, 3),         # SETL r2,3
-                insn(0x28, 3, 1, 2),      # 2ADDU r3,r1,r2
-                insn(0x29, 4, 1, 5),      # 2ADDUI r4,r1,5
-                insn(0x2a, 5, 1, 2),      # 4ADDU r5,r1,r2
-                insn(0x2b, 6, 1, 5),      # 4ADDUI r6,r1,5
-                insn(0x2c, 7, 1, 2),      # 8ADDU r7,r1,r2
-                insn(0x2d, 8, 1, 5),      # 8ADDUI r8,r1,5
-                insn(0x2e, 9, 1, 2),      # 16ADDU r9,r1,r2
-                insn(0x2f, 10, 1, 5),     # 16ADDUI r10,r1,5
-                wyde(0xe0, 11, 0x8000),   # SETH r11,0x8000
-                insn(0x29, 12, 11, 0),    # 2ADDUI r12,r11,0
+                wyde(SETL, R1, 7),
+                wyde(SETL, R2, 3),
+                insn(TWO_ADDU, R3, R1, R2),
+                insn(TWO_ADDUI, R4, R1, 5),
+                insn(FOUR_ADDU, R5, R1, R2),
+                insn(FOUR_ADDUI, R6, R1, 5),
+                insn(EIGHT_ADDU, R7, R1, R2),
+                insn(EIGHT_ADDUI, R8, R1, 5),
+                insn(SIXTEEN_ADDU, R9, R1, R2),
+                insn(SIXTEEN_ADDUI, R10, R1, 5),
+                wyde(SETH, R11, 0x8000),
+                insn(TWO_ADDUI, R12, R11, 0),
                 halt(),
             ]
         ),
         pc=0x30,
-        regs={3: 17, 4: 19, 5: 31, 6: 33, 7: 59, 8: 61, 9: 115, 10: 117, 12: 0},
+        regs={
+            R3: 17,
+            R4: 19,
+            R5: 31,
+            R6: 33,
+            R7: 59,
+            R8: 61,
+            R9: 115,
+            R10: 117,
+            R12: 0,
+        },
     ),
     MMIXTest(
         "logical-complement",
         b"".join(
             [
-                wyde(0xe0, 1, 0xf0f0),    # SETH r1,0xf0f0
-                wyde(0xe5, 1, 0xf0f0),    # INCMH r1,0xf0f0
-                wyde(0xe6, 1, 0xf0f0),    # INCML r1,0xf0f0
-                wyde(0xe7, 1, 0xf0f0),    # INCL r1,0xf0f0
-                wyde(0xe0, 2, 0x0ff0),    # SETH r2,0x0ff0
-                wyde(0xe5, 2, 0x0ff0),    # INCMH r2,0x0ff0
-                wyde(0xe6, 2, 0x0ff0),    # INCML r2,0x0ff0
-                wyde(0xe7, 2, 0x0ff0),    # INCL r2,0x0ff0
-                insn(0xca, 3, 1, 2),      # ANDN r3,r1,r2
-                insn(0xc2, 4, 1, 2),      # ORN r4,r1,r2
-                insn(0xc4, 5, 1, 2),      # NOR r5,r1,r2
-                insn(0xcc, 6, 1, 2),      # NAND r6,r1,r2
-                insn(0xce, 7, 1, 2),      # NXOR r7,r1,r2
-                wyde(0xe3, 8, 0x00f0),    # SETL r8,0xf0
-                insn(0xcb, 9, 8, 0x0f),   # ANDNI r9,r8,0x0f
-                insn(0xc3, 10, 8, 0x0f),  # ORNI r10,r8,0x0f
-                insn(0xc5, 11, 8, 0x0f),  # NORI r11,r8,0x0f
-                insn(0xcd, 12, 8, 0x0f),  # NANDI r12,r8,0x0f
-                insn(0xcf, 13, 8, 0x0f),  # NXORI r13,r8,0x0f
+                wyde(SETH, R1, 0xf0f0),
+                wyde(INCMH, R1, 0xf0f0),
+                wyde(INCML, R1, 0xf0f0),
+                wyde(INCL, R1, 0xf0f0),
+                wyde(SETH, R2, 0x0ff0),
+                wyde(INCMH, R2, 0x0ff0),
+                wyde(INCML, R2, 0x0ff0),
+                wyde(INCL, R2, 0x0ff0),
+                insn(ANDN, R3, R1, R2),
+                insn(ORN, R4, R1, R2),
+                insn(NOR, R5, R1, R2),
+                insn(NAND, R6, R1, R2),
+                insn(NXOR, R7, R1, R2),
+                wyde(SETL, R8, 0x00f0),
+                insn(ANDNI, R9, R8, 0x0f),
+                insn(ORNI, R10, R8, 0x0f),
+                insn(NORI, R11, R8, 0x0f),
+                insn(NANDI, R12, R8, 0x0f),
+                insn(NXORI, R13, R8, 0x0f),
                 halt(),
             ]
         ),
         pc=0x4c,
         regs={
-            1: 0xf0f0f0f0f0f0f0f0,
-            2: 0x0ff00ff00ff00ff0,
-            3: 0xf000f000f000f000,
-            4: 0xf0fff0fff0fff0ff,
-            5: 0x000f000f000f000f,
-            6: 0xff0fff0fff0fff0f,
-            7: 0x00ff00ff00ff00ff,
-            8: 0xf0,
-            9: 0xf0,
-            10: 0xfffffffffffffff0,
-            11: 0xffffffffffffff00,
-            12: MASK64,
-            13: 0xffffffffffffff00,
+            R1: 0xf0f0f0f0f0f0f0f0,
+            R2: 0x0ff00ff00ff00ff0,
+            R3: 0xf000f000f000f000,
+            R4: 0xf0fff0fff0fff0ff,
+            R5: 0x000f000f000f000f,
+            R6: 0xff0fff0fff0fff0f,
+            R7: 0x00ff00ff00ff00ff,
+            R8: 0xf0,
+            R9: 0xf0,
+            R10: 0xfffffffffffffff0,
+            R11: 0xffffffffffffff00,
+            R12: MASK64,
+            R13: 0xffffffffffffff00,
         },
     ),
     MMIXTest(
         "wyde-logical-immediates",
         b"".join(
             [
-                *set_octa(1, 0x1111222233334444),
-                wyde(0xe8, 1, 0x8000),    # ORH r1,0x8000
-                wyde(0xe9, 1, 0x0800),    # ORMH r1,0x0800
-                wyde(0xea, 1, 0x0080),    # ORML r1,0x0080
-                wyde(0xeb, 1, 0x0008),    # ORL r1,0x0008
-                *set_octa(2, MASK64),
-                wyde(0xec, 2, 0xf0f0),    # ANDNH r2,0xf0f0
-                wyde(0xed, 2, 0x0f0f),    # ANDNMH r2,0x0f0f
-                wyde(0xee, 2, 0xaaaa),    # ANDNML r2,0xaaaa
-                wyde(0xef, 2, 0x5555),    # ANDNL r2,0x5555
+                *set_octa(R1, 0x1111222233334444),
+                wyde(ORH, R1, 0x8000),
+                wyde(ORMH, R1, 0x0800),
+                wyde(ORML, R1, 0x0080),
+                wyde(ORL, R1, 0x0008),
+                *set_octa(R2, MASK64),
+                wyde(ANDNH, R2, 0xf0f0),
+                wyde(ANDNMH, R2, 0x0f0f),
+                wyde(ANDNML, R2, 0xaaaa),
+                wyde(ANDNL, R2, 0x5555),
                 halt(),
             ]
         ),
         pc=0x40,
-        regs={1: 0x91112a2233b3444c, 2: 0x0f0ff0f05555aaaa},
+        regs={R1: 0x91112a2233b3444c, R2: 0x0f0ff0f05555aaaa},
     ),
     MMIXTest(
         "unsigned-negate",
         b"".join(
             [
-                wyde(0xe3, 1, 5),         # SETL r1,5
-                insn(0x36, 2, 10, 1),     # NEGU r2,10,r1
-                insn(0x37, 3, 1, 2),      # NEGUI r3,1,2
-                insn(0x36, 4, 0, 1),      # NEGU r4,0,r1
-                insn(0x37, 5, 0, 0),      # NEGUI r5,0,0
+                wyde(SETL, R1, 5),
+                insn(NEGU, R2, 10, R1),
+                insn(NEGUI, R3, 1, 2),
+                insn(NEGU, R4, 0, R1),
+                insn(NEGUI, R5, 0, 0),
                 halt(),
             ]
         ),
         pc=0x14,
-        regs={1: 5, 2: 5, 3: MASK64, 4: MASK64 - 4, 5: 0},
+        regs={R1: 5, R2: 5, R3: MASK64, R4: MASK64 - 4, R5: 0},
     ),
     MMIXTest(
         "signed-negate",
         b"".join(
             [
-                wyde(0xe3, 1, 5),         # SETL r1,5
-                wyde(0xe3, 2, 2),         # SETL r2,2
-                insn(0x34, 3, 10, 1),     # NEG r3,10,r1
-                insn(0x35, 4, 1, 2),      # NEGI r4,1,2
-                *set_octa(5, 0x8000000000000000),
-                insn(0x34, 6, 0, 5),      # NEG r6,0,r5
-                insn(0xfe, 7, 0, 21),     # GET r7,rA
+                wyde(SETL, R1, 5),
+                wyde(SETL, R2, 2),
+                insn(NEG, R3, 10, R1),
+                insn(NEGI, R4, 1, 2),
+                *set_octa(R5, 0x8000000000000000),
+                insn(NEG, R6, 0, R5),
+                insn(GET, R7, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x28,
         regs={
-            3: 5,
-            4: MASK64,
-            6: 0x8000000000000000,
-            7: RA_EVENT_V,
+            R3: 5,
+            R4: MASK64,
+            R6: 0x8000000000000000,
+            R7: RA_EVENT_V,
         },
     ),
     MMIXTest(
         "enabled-signed-negate-overflow-trip",
         program_with_handler(
             [
-                *set_octa(1, 0x8000000000000000),
-                wyde(0xe3, 2, 1),                         # SETL r2,1
-                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
-                insn(0x34, 3, 0, 1),                      # NEG r3,0,r1
+                *set_octa(R1, 0x8000000000000000),
+                wyde(SETL, R2, 1),
+                wyde(SETL, R4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R4),
+                insn(NEG, R3, 0, R1),
             ],
             32,
             [
-                insn(0xfe, 40, 0, 24),                    # GET r40,rW
-                insn(0xfe, 41, 0, 25),                    # GET r41,rX
-                insn(0xfe, 42, 0, 26),                    # GET r42,rY
-                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
-                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_Y),
+                insn(GET, R43, 0, SR_Z),
+                insn(GET, R44, 0, SR_A),
                 halt(),
             ],
         ),
         pc=0x34,
         regs={
-            40: 0x20,
-            41: 0x8000000034030001,
-            42: 0,
-            43: 0x8000000000000000,
-            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+            R40: 0x20,
+            R41: 0x8000000034030001,
+            R42: 0,
+            R43: 0x8000000000000000,
+            R44: RA_EVENT_V << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
         "low-risk-shifts",
         b"".join(
             [
-                wyde(0xe3, 1, 1),         # SETL r1,1
-                wyde(0xe3, 2, 64),        # SETL r2,64
-                insn(0x37, 3, 0, 8),      # NEGUI r3,0,8
-                insn(0x3b, 4, 1, 63),     # SLUI r4,r1,63
-                insn(0x3a, 5, 1, 2),      # SLU r5,r1,r2
-                insn(0x3d, 6, 3, 1),      # SRI r6,r3,1
-                insn(0x3c, 7, 3, 2),      # SR r7,r3,r2
-                insn(0x3f, 8, 3, 1),      # SRUI r8,r3,1
-                insn(0x3e, 9, 3, 2),      # SRU r9,r3,r2
-                insn(0x3f, 10, 1, 0),     # SRUI r10,r1,0
+                wyde(SETL, R1, 1),
+                wyde(SETL, R2, 64),
+                insn(NEGUI, R3, 0, 8),
+                insn(SLUI, R4, R1, 63),
+                insn(SLU, R5, R1, R2),
+                insn(SRI, R6, R3, 1),
+                insn(SR, R7, R3, R2),
+                insn(SRUI, R8, R3, 1),
+                insn(SRU, R9, R3, R2),
+                insn(SRUI, R10, R1, 0),
                 halt(),
             ]
         ),
         pc=0x28,
         regs={
-            1: 1,
-            2: 64,
-            3: MASK64 - 7,
-            4: 0x8000000000000000,
-            5: 0,
-            6: MASK64 - 3,
-            7: MASK64,
-            8: 0x7ffffffffffffffc,
-            9: 0,
-            10: 1,
+            R1: 1,
+            R2: 64,
+            R3: MASK64 - 7,
+            R4: 0x8000000000000000,
+            R5: 0,
+            R6: MASK64 - 3,
+            R7: MASK64,
+            R8: 0x7ffffffffffffffc,
+            R9: 0,
+            R10: 1,
         },
     ),
     MMIXTest(
         "signed-shift-left",
         b"".join(
             [
-                wyde(0xe3, 1, 2),         # SETL r1,2
-                wyde(0xe3, 2, 4),         # SETL r2,4
-                insn(0x39, 3, 1, 4),      # SLI r3,r1,4
-                insn(0x38, 4, 1, 2),      # SL r4,r1,r2
-                insn(0x39, 5, 1, 62),     # SLI r5,r1,62
-                wyde(0xe3, 6, 64),        # SETL r6,64
-                insn(0x38, 7, 1, 6),      # SL r7,r1,r6
-                insn(0x39, 8, 0, 64),     # SLI r8,r0,64
-                insn(0xfe, 9, 0, 21),     # GET r9,rA
+                wyde(SETL, R1, 2),
+                wyde(SETL, R2, 4),
+                insn(SLI, R3, R1, 4),
+                insn(SL, R4, R1, R2),
+                insn(SLI, R5, R1, 62),
+                wyde(SETL, R6, 64),
+                insn(SL, R7, R1, R6),
+                insn(SLI, R8, R0, 64),
+                insn(GET, R9, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x24,
         regs={
-            3: 32,
-            4: 32,
-            5: 0x8000000000000000,
-            7: 0,
-            8: 0,
-            9: RA_EVENT_V,
+            R3: 32,
+            R4: 32,
+            R5: 0x8000000000000000,
+            R7: 0,
+            R8: 0,
+            R9: RA_EVENT_V,
         },
     ),
     MMIXTest(
         "enabled-signed-shift-left-overflow-trip",
         program_with_handler(
             [
-                wyde(0xe3, 1, 2),                         # SETL r1,2
-                wyde(0xe3, 2, 62),                        # SETL r2,62
-                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
-                insn(0x38, 3, 1, 2),                      # SL r3,r1,r2
+                wyde(SETL, R1, 2),
+                wyde(SETL, R2, 62),
+                wyde(SETL, R4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R4),
+                insn(SL, R3, R1, R2),
             ],
             32,
             [
-                insn(0xfe, 40, 0, 24),                    # GET r40,rW
-                insn(0xfe, 41, 0, 25),                    # GET r41,rX
-                insn(0xfe, 42, 0, 26),                    # GET r42,rY
-                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
-                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_Y),
+                insn(GET, R43, 0, SR_Z),
+                insn(GET, R44, 0, SR_A),
                 halt(),
             ],
         ),
         pc=0x34,
         regs={
-            40: 0x14,
-            41: 0x8000000038030102,
-            42: 2,
-            43: 62,
-            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+            R40: 0x14,
+            R41: 0x8000000038030102,
+            R42: 2,
+            R43: 62,
+            R44: RA_EVENT_V << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
         "bit-difference",
         b"".join(
             [
-                *set_octa(1, 0x1020304050607080),
-                *set_octa(2, 0x0111223344556677),
-                insn(0xd0, 3, 1, 2),      # BDIF r3,r1,r2
-                insn(0xd1, 4, 1, 0x10),   # BDIFI r4,r1,0x10
-                insn(0xd2, 5, 1, 2),      # WDIF r5,r1,r2
-                insn(0xd4, 6, 1, 2),      # TDIF r6,r1,r2
-                insn(0xd6, 7, 1, 2),      # ODIF r7,r1,r2
-                insn(0xd7, 8, 1, 0x80),   # ODIFI r8,r1,0x80
+                *set_octa(R1, 0x1020304050607080),
+                *set_octa(R2, 0x0111223344556677),
+                insn(BDIF, R3, R1, R2),
+                insn(BDIFI, R4, R1, 0x10),
+                insn(WDIF, R5, R1, R2),
+                insn(TDIF, R6, R1, R2),
+                insn(ODIF, R7, R1, R2),
+                insn(ODIFI, R8, R1, 0x80),
                 halt(),
             ]
         ),
         pc=0x38,
         regs={
-            3: lane_difference(0x1020304050607080, 0x0111223344556677, 8),
-            4: lane_difference(0x1020304050607080, 0x10, 8),
-            5: lane_difference(0x1020304050607080, 0x0111223344556677, 16),
-            6: lane_difference(0x1020304050607080, 0x0111223344556677, 32),
-            7: 0x0f0f0e0d0c0b0a09,
-            8: 0x1020304050607000,
+            R3: lane_difference(0x1020304050607080, 0x0111223344556677, 8),
+            R4: lane_difference(0x1020304050607080, 0x10, 8),
+            R5: lane_difference(0x1020304050607080, 0x0111223344556677, 16),
+            R6: lane_difference(0x1020304050607080, 0x0111223344556677, 32),
+            R7: 0x0f0f0e0d0c0b0a09,
+            R8: 0x1020304050607000,
         },
     ),
     MMIXTest(
         "sideways-add",
         b"".join(
             [
-                *set_octa(1, MASK64),
-                *set_octa(2, 0xf0f0f0f0f0f0f0f0),
-                insn(0xda, 3, 1, 0),      # SADD r3,r1,r0
-                insn(0xda, 4, 1, 2),      # SADD r4,r1,r2
-                insn(0xdb, 5, 2, 0xf0),   # SADDI r5,r2,0xf0
-                insn(0xdb, 6, 0, 0xff),   # SADDI r6,r0,0xff
+                *set_octa(R1, MASK64),
+                *set_octa(R2, 0xf0f0f0f0f0f0f0f0),
+                insn(SADD, R3, R1, R0),
+                insn(SADD, R4, R1, R2),
+                insn(SADDI, R5, R2, 0xf0),
+                insn(SADDI, R6, R0, 0xff),
                 halt(),
             ]
         ),
         pc=0x30,
         regs={
-            3: sadd(MASK64, 0),
-            4: sadd(MASK64, 0xf0f0f0f0f0f0f0f0),
-            5: sadd(0xf0f0f0f0f0f0f0f0, 0xf0),
-            6: 0,
+            R3: sadd(MASK64, 0),
+            R4: sadd(MASK64, 0xf0f0f0f0f0f0f0f0),
+            R5: sadd(0xf0f0f0f0f0f0f0f0, 0xf0),
+            R6: 0,
         },
     ),
     MMIXTest(
         "bit-matrix",
         b"".join(
             [
-                *set_octa(1, 0x1122334455667788),
-                *set_octa(2, 0x8040201008040201),
-                *set_octa(3, 0x0102040810204080),
-                insn(0xdc, 4, 1, 2),      # MOR r4,r1,r2
-                insn(0xde, 5, 1, 2),      # MXOR r5,r1,r2
-                insn(0xdc, 6, 1, 3),      # MOR r6,r1,r3
-                insn(0xde, 7, 1, 3),      # MXOR r7,r1,r3
-                insn(0xdd, 8, 1, 0xff),   # MORI r8,r1,0xff
-                insn(0xdf, 9, 1, 0xff),   # MXORI r9,r1,0xff
+                *set_octa(R1, 0x1122334455667788),
+                *set_octa(R2, 0x8040201008040201),
+                *set_octa(R3, 0x0102040810204080),
+                insn(MOR, R4, R1, R2),
+                insn(MXOR, R5, R1, R2),
+                insn(MOR, R6, R1, R3),
+                insn(MXOR, R7, R1, R3),
+                insn(MORI, R8, R1, 0xff),
+                insn(MXORI, R9, R1, 0xff),
                 halt(),
             ]
         ),
         pc=0x48,
         regs={
-            4: matrix_multiply(0x1122334455667788, 0x8040201008040201, False),
-            5: matrix_multiply(0x1122334455667788, 0x8040201008040201, True),
-            6: matrix_multiply(0x1122334455667788, 0x0102040810204080, False),
-            7: matrix_multiply(0x1122334455667788, 0x0102040810204080, True),
-            8: matrix_multiply(0x1122334455667788, 0xff, False),
-            9: matrix_multiply(0x1122334455667788, 0xff, True),
+            R4: matrix_multiply(0x1122334455667788, 0x8040201008040201, False),
+            R5: matrix_multiply(0x1122334455667788, 0x8040201008040201, True),
+            R6: matrix_multiply(0x1122334455667788, 0x0102040810204080, False),
+            R7: matrix_multiply(0x1122334455667788, 0x0102040810204080, True),
+            R8: matrix_multiply(0x1122334455667788, 0xff, False),
+            R9: matrix_multiply(0x1122334455667788, 0xff, True),
         },
     ),
     MMIXTest(
         "integer-multiply",
         b"".join(
             [
-                *set_octa(1, 0xfffffffffffffff0),
-                wyde(0xe3, 2, 3),         # SETL r2,3
-                insn(0x18, 3, 1, 2),      # MUL r3,r1,r2
-                insn(0x19, 4, 1, 5),      # MULI r4,r1,5
-                *set_octa(5, MASK64),
-                insn(0x1a, 6, 5, 5),      # MULU r6,r5,r5
-                insn(0xfe, 7, 0, 3),      # GET r7,rH
-                insn(0x1b, 8, 5, 2),      # MULUI r8,r5,2
-                insn(0xfe, 9, 0, 3),      # GET r9,rH
+                *set_octa(R1, 0xfffffffffffffff0),
+                wyde(SETL, R2, 3),
+                insn(MUL, R3, R1, R2),
+                insn(MULI, R4, R1, 5),
+                *set_octa(R5, MASK64),
+                insn(MULU, R6, R5, R5),
+                insn(GET, R7, 0, SR_H),
+                insn(MULUI, R8, R5, 2),
+                insn(GET, R9, 0, SR_H),
                 halt(),
             ]
         ),
         pc=0x3c,
         regs={
-            3: (-16 * 3) & MASK64,
-            4: (-16 * 5) & MASK64,
-            6: 1,
-            7: MASK64 - 1,
-            8: MASK64 - 1,
-            9: 1,
+            R3: (-16 * 3) & MASK64,
+            R4: (-16 * 5) & MASK64,
+            R6: 1,
+            R7: MASK64 - 1,
+            R8: MASK64 - 1,
+            R9: 1,
         },
     ),
     MMIXTest(
         "integer-multiply-overflow-status",
         b"".join(
             [
-                *set_octa(1, 0x7fffffffffffffff),
-                wyde(0xe3, 2, 2),         # SETL r2,2
-                insn(0x18, 3, 1, 2),      # MUL r3,r1,r2
-                insn(0xfe, 4, 0, 21),     # GET r4,rA
+                *set_octa(R1, 0x7fffffffffffffff),
+                wyde(SETL, R2, 2),
+                insn(MUL, R3, R1, R2),
+                insn(GET, R4, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x1c,
-        regs={3: MASK64 - 1, 4: RA_EVENT_V},
+        regs={R3: MASK64 - 1, R4: RA_EVENT_V},
     ),
     MMIXTest(
         "enabled-integer-multiply-overflow-trip",
         program_with_handler(
             [
-                *set_octa(1, 0x7fffffffffffffff),
-                wyde(0xe3, 2, 2),                         # SETL r2,2
-                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
-                insn(0x18, 3, 1, 2),                      # MUL r3,r1,r2
+                *set_octa(R1, 0x7fffffffffffffff),
+                wyde(SETL, R2, 2),
+                wyde(SETL, R4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R4),
+                insn(MUL, R3, R1, R2),
             ],
             32,
             [
-                insn(0xfe, 40, 0, 24),                    # GET r40,rW
-                insn(0xfe, 41, 0, 25),                    # GET r41,rX
-                insn(0xfe, 42, 0, 26),                    # GET r42,rY
-                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
-                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_Y),
+                insn(GET, R43, 0, SR_Z),
+                insn(GET, R44, 0, SR_A),
                 halt(),
             ],
         ),
         pc=0x34,
         regs={
-            40: 0x20,
-            41: 0x8000000018030102,
-            42: 0x7fffffffffffffff,
-            43: 2,
-            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+            R40: 0x20,
+            R41: 0x8000000018030102,
+            R42: 0x7fffffffffffffff,
+            R43: 2,
+            R44: RA_EVENT_V << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
         "integer-divide",
         b"".join(
             [
-                *set_octa(1, (-7) & MASK64),
-                wyde(0xe3, 2, 3),         # SETL r2,3
-                insn(0x1c, 3, 1, 2),      # DIV r3,r1,r2
-                insn(0xfe, 4, 0, 6),      # GET r4,rR
-                wyde(0xe3, 5, 7),         # SETL r5,7
-                *set_octa(6, (-3) & MASK64),
-                insn(0x1c, 7, 5, 6),      # DIV r7,r5,r6
-                insn(0xfe, 8, 0, 6),      # GET r8,rR
-                insn(0x1d, 9, 1, 3),      # DIVI r9,r1,3
-                insn(0xfe, 10, 0, 6),     # GET r10,rR
-                insn(0x1c, 11, 5, 0),     # DIV r11,r5,r0
-                insn(0xfe, 12, 0, 6),     # GET r12,rR
-                insn(0xfe, 13, 0, 21),    # GET r13,rA
+                *set_octa(R1, (-7) & MASK64),
+                wyde(SETL, R2, 3),
+                insn(DIV, R3, R1, R2),
+                insn(GET, R4, 0, SR_R),
+                wyde(SETL, R5, 7),
+                *set_octa(R6, (-3) & MASK64),
+                insn(DIV, R7, R5, R6),
+                insn(GET, R8, 0, SR_R),
+                insn(DIVI, R9, R1, 3),
+                insn(GET, R10, 0, SR_R),
+                insn(DIV, R11, R5, R0),
+                insn(GET, R12, 0, SR_R),
+                insn(GET, R13, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x4c,
         regs={
-            3: signed_div((-7) & MASK64, 3)[0],
-            4: signed_div((-7) & MASK64, 3)[1],
-            7: signed_div(7, (-3) & MASK64)[0],
-            8: signed_div(7, (-3) & MASK64)[1],
-            9: signed_div((-7) & MASK64, 3)[0],
-            10: signed_div((-7) & MASK64, 3)[1],
-            11: 0,
-            12: 7,
-            13: RA_EVENT_D,
+            R3: signed_div((-7) & MASK64, 3)[0],
+            R4: signed_div((-7) & MASK64, 3)[1],
+            R7: signed_div(7, (-3) & MASK64)[0],
+            R8: signed_div(7, (-3) & MASK64)[1],
+            R9: signed_div((-7) & MASK64, 3)[0],
+            R10: signed_div((-7) & MASK64, 3)[1],
+            R11: 0,
+            R12: 7,
+            R13: RA_EVENT_D,
         },
     ),
     MMIXTest(
         "integer-divide-overflow-status",
         b"".join(
             [
-                *set_octa(1, 0x8000000000000000),
-                *set_octa(2, MASK64),
-                insn(0x1c, 3, 1, 2),      # DIV r3,r1,r2
-                insn(0xfe, 4, 0, 6),      # GET r4,rR
-                insn(0xfe, 5, 0, 21),     # GET r5,rA
+                *set_octa(R1, 0x8000000000000000),
+                *set_octa(R2, MASK64),
+                insn(DIV, R3, R1, R2),
+                insn(GET, R4, 0, SR_R),
+                insn(GET, R5, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x2c,
-        regs={3: 0x8000000000000000, 4: 0, 5: RA_EVENT_V},
+        regs={R3: 0x8000000000000000, R4: 0, R5: RA_EVENT_V},
     ),
     MMIXTest(
         "integer-unsigned-divide",
         b"".join(
             [
-                wyde(0xe3, 1, 1),         # SETL r1,1
-                insn(0xf6, 1, 0, 1),      # PUT rD,r1
-                wyde(0xe3, 3, 2),         # SETL r3,2
-                insn(0x1e, 4, 0, 3),      # DIVU r4,r0,r3
-                insn(0xfe, 5, 0, 6),      # GET r5,rR
-                insn(0xfe, 6, 0, 1),      # GET r6,rD
-                wyde(0xe3, 7, 5),         # SETL r7,5
-                insn(0xf6, 1, 0, 7),      # PUT rD,r7
-                wyde(0xe3, 8, 0x1234),    # SETL r8,0x1234
-                insn(0x1e, 9, 8, 7),      # DIVU r9,r8,r7
-                insn(0xfe, 10, 0, 6),     # GET r10,rR
-                wyde(0xe3, 11, 1),        # SETL r11,1
-                insn(0xf6, 1, 0, 11),     # PUT rD,r11
-                insn(0x1f, 12, 0, 2),     # DIVUI r12,r0,2
-                insn(0xfe, 13, 0, 6),     # GET r13,rR
+                wyde(SETL, R1, 1),
+                insn(PUT, SR_D, 0, R1),
+                wyde(SETL, R3, 2),
+                insn(DIVU, R4, R0, R3),
+                insn(GET, R5, 0, SR_R),
+                insn(GET, R6, 0, SR_D),
+                wyde(SETL, R7, 5),
+                insn(PUT, SR_D, 0, R7),
+                wyde(SETL, R8, 0x1234),
+                insn(DIVU, R9, R8, R7),
+                insn(GET, R10, 0, SR_R),
+                wyde(SETL, R11, 1),
+                insn(PUT, SR_D, 0, R11),
+                insn(DIVUI, R12, R0, 2),
+                insn(GET, R13, 0, SR_R),
                 halt(),
             ]
         ),
         pc=0x3c,
         regs={
-            4: unsigned_div(1, 0, 2)[0],
-            5: unsigned_div(1, 0, 2)[1],
-            6: 1,
-            9: 5,
-            10: 0x1234,
-            12: unsigned_div(1, 0, 2)[0],
-            13: unsigned_div(1, 0, 2)[1],
+            R4: unsigned_div(1, 0, 2)[0],
+            R5: unsigned_div(1, 0, 2)[1],
+            R6: 1,
+            R9: 5,
+            R10: 0x1234,
+            R12: unsigned_div(1, 0, 2)[0],
+            R13: unsigned_div(1, 0, 2)[1],
         },
     ),
     MMIXTest(
         "bit-mux",
         b"".join(
             [
-                *set_octa(1, 0xff00ff00ff00ff00),
-                insn(0xf6, 5, 0, 1),      # PUT rM,r1
-                *set_octa(2, MASK64),
-                *set_octa(3, 0x123456789abcdef0),
-                insn(0xd8, 4, 2, 3),      # MUX r4,r2,r3
-                insn(0xd9, 5, 3, 0xaa),   # MUXI r5,r3,0xaa
-                insn(0xf7, 5, 0, 0),      # PUTI rM,0
-                insn(0xd8, 6, 2, 3),      # MUX r6,r2,r3
-                *set_octa(7, MASK64),
-                insn(0xf6, 5, 0, 7),      # PUT rM,r7
-                insn(0xd8, 8, 2, 3),      # MUX r8,r2,r3
-                insn(0xfe, 9, 0, 5),      # GET r9,rM
+                *set_octa(R1, 0xff00ff00ff00ff00),
+                insn(PUT, SR_M, 0, R1),
+                *set_octa(R2, MASK64),
+                *set_octa(R3, 0x123456789abcdef0),
+                insn(MUX, R4, R2, R3),
+                insn(MUXI, R5, R3, 0xaa),
+                insn(PUTI, SR_M, 0, 0),
+                insn(MUX, R6, R2, R3),
+                *set_octa(R7, MASK64),
+                insn(PUT, SR_M, 0, R7),
+                insn(MUX, R8, R2, R3),
+                insn(GET, R9, 0, SR_M),
                 halt(),
             ]
         ),
         pc=0x60,
         regs={
-            4: mux(MASK64, 0x123456789abcdef0, 0xff00ff00ff00ff00),
-            5: mux(0x123456789abcdef0, 0xaa, 0xff00ff00ff00ff00),
-            6: 0x123456789abcdef0,
-            8: MASK64,
-            9: MASK64,
+            R4: mux(MASK64, 0x123456789abcdef0, 0xff00ff00ff00ff00),
+            R5: mux(0x123456789abcdef0, 0xaa, 0xff00ff00ff00ff00),
+            R6: 0x123456789abcdef0,
+            R8: MASK64,
+            R9: MASK64,
         },
     ),
     MMIXTest(
         "integer-overflow-status",
         b"".join(
             [
-                *set_octa(1, 0x7fffffffffffffff),
-                wyde(0xe3, 2, 1),         # SETL r2,1
-                insn(0x20, 3, 1, 2),      # ADD r3,r1,r2
-                insn(0xfe, 4, 0, 21),     # GET r4,rA
+                *set_octa(R1, 0x7fffffffffffffff),
+                wyde(SETL, R2, 1),
+                insn(ADD, R3, R1, R2),
+                insn(GET, R4, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x1c,
-        regs={3: 0x8000000000000000, 4: RA_EVENT_V},
+        regs={R3: 0x8000000000000000, R4: RA_EVENT_V},
     ),
     MMIXTest(
         "enabled-integer-overflow-trip",
         program_with_handler(
             [
-                *set_octa(1, 0x7fffffffffffffff),
-                wyde(0xe3, 2, 1),                         # SETL r2,1
-                wyde(0xe3, 4, RA_EVENT_V << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 4),                     # PUT rA,r4
-                insn(0x20, 3, 1, 2),                      # ADD r3,r1,r2
+                *set_octa(R1, 0x7fffffffffffffff),
+                wyde(SETL, R2, 1),
+                wyde(SETL, R4, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R4),
+                insn(ADD, R3, R1, R2),
             ],
             32,
             [
-                insn(0xfe, 40, 0, 24),                    # GET r40,rW
-                insn(0xfe, 41, 0, 25),                    # GET r41,rX
-                insn(0xfe, 42, 0, 26),                    # GET r42,rY
-                insn(0xfe, 43, 0, 27),                    # GET r43,rZ
-                insn(0xfe, 44, 0, 21),                    # GET r44,rA
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_Y),
+                insn(GET, R43, 0, SR_Z),
+                insn(GET, R44, 0, SR_A),
                 halt(),
             ],
         ),
         pc=0x34,
         regs={
-            40: 0x20,
-            41: 0x8000000020030102,
-            42: 0x7fffffffffffffff,
-            43: 1,
-            44: RA_EVENT_V << RA_ENABLE_SHIFT,
+            R40: 0x20,
+            R41: 0x8000000020030102,
+            R42: 0x7fffffffffffffff,
+            R43: 1,
+            R44: RA_EVENT_V << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
         "floating-point-compare",
         b"".join(
             [
-                *set_octa(1, f64(1.0)),
-                *set_octa(2, f64(2.0)),
-                *set_octa(3, 0x8000000000000000),
-                *set_octa(5, 0x7ff8000000000001),
-                insn(0x01, 10, 1, 2),     # FCMP r10,r1,r2
-                insn(0x01, 11, 2, 1),     # FCMP r11,r2,r1
-                insn(0x01, 12, 1, 1),     # FCMP r12,r1,r1
-                insn(0x03, 13, 3, 0),     # FEQL r13,-0.0,+0.0
-                insn(0x02, 14, 1, 5),     # FUN r14,r1,NaN
-                insn(0x01, 15, 1, 5),     # FCMP r15,r1,NaN
-                insn(0xfe, 16, 0, 21),    # GET r16,rA
-                insn(0x11, 17, 1, 2),     # FCMPE r17,r1,r2
-                insn(0x13, 18, 1, 1),     # FEQLE r18,r1,r1
-                insn(0x12, 19, 1, 5),     # FUNE r19,r1,NaN
+                *set_octa(R1, f64(1.0)),
+                *set_octa(R2, f64(2.0)),
+                *set_octa(R3, 0x8000000000000000),
+                *set_octa(R5, 0x7ff8000000000001),
+                insn(FCMP, R10, R1, R2),
+                insn(FCMP, R11, R2, R1),
+                insn(FCMP, R12, R1, R1),
+                insn(FEQL, R13, R3, R0),
+                insn(FUN, R14, R1, R5),
+                insn(FCMP, R15, R1, R5),
+                insn(GET, R16, 0, SR_A),
+                insn(FCMPE, R17, R1, R2),
+                insn(FEQLE, R18, R1, R1),
+                insn(FUNE, R19, R1, R5),
                 halt(),
             ]
         ),
         pc=0x68,
         regs={
-            10: MASK64,
-            11: 1,
-            12: 0,
-            13: 1,
-            14: 1,
-            15: 0,
-            16: 0x10,
-            17: MASK64,
-            18: 1,
-            19: 1,
+            R10: MASK64,
+            R11: 1,
+            R12: 0,
+            R13: 1,
+            R14: 1,
+            R15: 0,
+            R16: 0x10,
+            R17: MASK64,
+            R18: 1,
+            R19: 1,
         },
     ),
     MMIXTest(
         "floating-point-arithmetic",
         b"".join(
             [
-                *set_octa(1, f64(1.0)),
-                *set_octa(2, f64(2.0)),
-                *set_octa(3, f64(3.0)),
-                *set_octa(4, f64(4.0)),
-                *set_octa(5, f64(5.0)),
-                *set_octa(6, f64(1.5)),
-                insn(0x04, 10, 1, 2),     # FADD r10,r1,r2
-                insn(0x06, 11, 2, 1),     # FSUB r11,r2,r1
-                insn(0x10, 12, 2, 3),     # FMUL r12,r2,r3
-                insn(0x14, 13, 4, 2),     # FDIV r13,r4,r2
-                insn(0x16, 14, 5, 2),     # FREM r14,r5,r2
-                insn(0x15, 15, 0, 4),     # FSQRT r15,r4
-                insn(0x17, 16, 0, 6),     # FINT r16,r6
+                *set_octa(R1, f64(1.0)),
+                *set_octa(R2, f64(2.0)),
+                *set_octa(R3, f64(3.0)),
+                *set_octa(R4, f64(4.0)),
+                *set_octa(R5, f64(5.0)),
+                *set_octa(R6, f64(1.5)),
+                insn(FADD, R10, R1, R2),
+                insn(FSUB, R11, R2, R1),
+                insn(FMUL, R12, R2, R3),
+                insn(FDIV, R13, R4, R2),
+                insn(FREM, R14, R5, R2),
+                insn(FSQRT, R15, 0, R4),
+                insn(FINT, R16, 0, R6),
                 halt(),
             ]
         ),
         pc=0x7c,
         regs={
-            10: f64(3.0),
-            11: f64(1.0),
-            12: f64(6.0),
-            13: f64(2.0),
-            14: f64(1.0),
-            15: f64(2.0),
-            16: f64(2.0),
+            R10: f64(3.0),
+            R11: f64(1.0),
+            R12: f64(6.0),
+            R13: f64(2.0),
+            R14: f64(1.0),
+            R15: f64(2.0),
+            R16: f64(2.0),
         },
     ),
     MMIXTest(
         "floating-point-conversion",
         b"".join(
             [
-                wyde(0xe3, 1, 42),        # SETL r1,42
-                insn(0x08, 10, 0, 1),     # FLOT r10,r1
-                insn(0x09, 11, 0, 42),    # FLOTI r11,42
-                insn(0x0a, 12, 0, 1),     # FLOTU r12,r1
-                insn(0x0d, 13, 0, 42),    # SFLOTI r13,42
-                *set_octa(2, f64(42.0)),
-                insn(0x05, 14, 0, 2),     # FIX r14,r2
-                insn(0x07, 15, 0, 2),     # FIXU r15,r2
+                wyde(SETL, R1, 42),
+                insn(FLOT, R10, 0, R1),
+                insn(FLOTI, R11, 0, 42),
+                insn(FLOTU, R12, 0, R1),
+                insn(SFLOTI, R13, 0, 42),
+                *set_octa(R2, f64(42.0)),
+                insn(FIX, R14, 0, R2),
+                insn(FIXU, R15, 0, R2),
                 halt(),
             ]
         ),
         pc=0x2c,
         regs={
-            10: f64(42.0),
-            11: f64(42.0),
-            12: f64(42.0),
-            13: f64(42.0),
-            14: 42,
-            15: 42,
+            R10: f64(42.0),
+            R11: f64(42.0),
+            R12: f64(42.0),
+            R13: f64(42.0),
+            R14: 42,
+            R15: 42,
         },
     ),
     MMIXTest(
         "floating-point-status",
         b"".join(
             [
-                *set_octa(1, f64(1.0)),
-                *set_octa(3, f64(3.0)),
-                insn(0x14, 10, 1, 0),     # FDIV r10,r1,+0.0
-                insn(0xfe, 11, 0, 21),    # GET r11,rA
-                insn(0x14, 12, 1, 3),     # FDIV r12,r1,r3
-                insn(0xfe, 13, 0, 21),    # GET r13,rA
+                *set_octa(R1, f64(1.0)),
+                *set_octa(R3, f64(3.0)),
+                insn(FDIV, R10, R1, R0),
+                insn(GET, R11, 0, SR_A),
+                insn(FDIV, R12, R1, R3),
+                insn(GET, R13, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x30,
         regs={
-            10: f64(float("inf")),
-            11: 0x02,
-            12: f64(1.0 / 3.0),
-            13: 0x03,
+            R10: f64(float("inf")),
+            R11: 0x02,
+            R12: f64(1.0 / 3.0),
+            R13: 0x03,
         },
     ),
     MMIXTest(
         "enabled-floating-divide-trip",
         program_with_handler(
             [
-                *set_octa(1, f64(1.0)),
-                wyde(0xe3, 2, RA_EVENT_Z << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 2),     # PUT rA,r2
-                insn(0x14, 3, 1, 0),      # FDIV r3,r1,+0.0
+                *set_octa(R1, f64(1.0)),
+                wyde(SETL, R2, RA_EVENT_Z << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R2),
+                insn(FDIV, R3, R1, R0),
             ],
             112,
             [
-                insn(0xfe, 40, 0, 24),    # GET r40,rW
-                insn(0xfe, 41, 0, 25),    # GET r41,rX
-                insn(0xfe, 42, 0, 26),    # GET r42,rY
-                insn(0xfe, 43, 0, 27),    # GET r43,rZ
-                insn(0xfe, 44, 0, 21),    # GET r44,rA
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_Y),
+                insn(GET, R43, 0, SR_Z),
+                insn(GET, R44, 0, SR_A),
                 halt(),
             ],
         ),
         pc=0x84,
         regs={
-            40: 0x1c,
-            41: 0x8000000014030100,
-            42: f64(1.0),
-            43: 0,
-            44: RA_EVENT_Z << RA_ENABLE_SHIFT,
+            R40: 0x1c,
+            R41: 0x8000000014030100,
+            R42: f64(1.0),
+            R43: 0,
+            R44: RA_EVENT_Z << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
         "arithmetic-trip-priority",
         program_with_handler(
             [
-                *set_octa(1, 0x7fefffffffffffff),
-                *set_octa(2, f64(2.0)),
-                wyde(0xe3, 3, (RA_EVENT_O | RA_EVENT_X) << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 3),     # PUT rA,r3
-                insn(0x10, 4, 1, 2),      # FMUL r4,r1,r2
+                *set_octa(R1, 0x7fefffffffffffff),
+                *set_octa(R2, f64(2.0)),
+                wyde(SETL, R3, (RA_EVENT_O | RA_EVENT_X) << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R3),
+                insn(FMUL, R4, R1, R2),
             ],
             80,
             [
-                insn(0xfe, 40, 0, 24),    # GET r40,rW
-                insn(0xfe, 41, 0, 25),    # GET r41,rX
-                insn(0xfe, 42, 0, 21),    # GET r42,rA
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_A),
                 halt(),
             ],
         ),
         pc=0x5c,
         regs={
-            40: 0x2c,
-            41: 0x8000000010040102,
-            42: (RA_EVENT_O | RA_EVENT_X) << RA_ENABLE_SHIFT,
+            R40: 0x2c,
+            R41: 0x8000000010040102,
+            R42: (RA_EVENT_O | RA_EVENT_X) << RA_ENABLE_SHIFT,
         },
     ),
     MMIXTest(
         "explicit-trip-resume",
         b"".join(
             [
-                branch(0x42, 10, 12),     # BZ r10,main
-                insn(0xfe, 40, 0, 24),    # GET r40,rW
-                insn(0xfe, 41, 0, 25),    # GET r41,rX
-                insn(0xfe, 42, 0, 26),    # GET r42,rY
-                insn(0xfe, 43, 0, 27),    # GET r43,rZ
-                insn(0xfe, 44, 0, 0),     # GET r44,rB
-                insn(0xf9, 0, 0, 0),      # RESUME 0
-                insn(0xfd, 0, 0, 0),      # padding
-                insn(0xfd, 0, 0, 0),      # padding
-                insn(0xfd, 0, 0, 0),      # padding
-                insn(0xfd, 0, 0, 0),      # padding
-                insn(0xfd, 0, 0, 0),      # padding
-                wyde(0xe3, 10, 1),        # main: SETL r10,1
-                wyde(0xe3, 1, 0x00aa),    # SETL r1,0xaa
-                wyde(0xe3, 2, 0x00bb),    # SETL r2,0xbb
-                insn(0xff, 7, 1, 2),      # TRIP 7,1,2
-                wyde(0xe3, 11, 0x55),     # SETL r11,0x55
+                branch(BZ, R10, 12),  # main branch target
+                insn(GET, R40, 0, SR_W),
+                insn(GET, R41, 0, SR_X),
+                insn(GET, R42, 0, SR_Y),
+                insn(GET, R43, 0, SR_Z),
+                insn(GET, R44, 0, SR_B),
+                insn(RESUME, 0, 0, 0),
+                insn(SWYM, 0, 0, 0),      # padding
+                insn(SWYM, 0, 0, 0),      # padding
+                insn(SWYM, 0, 0, 0),      # padding
+                insn(SWYM, 0, 0, 0),      # padding
+                insn(SWYM, 0, 0, 0),      # padding
+                wyde(SETL, R10, 1),  # main
+                wyde(SETL, R1, 0x00aa),
+                wyde(SETL, R2, 0x00bb),
+                insn(TRIP, 7, R1, R2),
+                wyde(SETL, R11, 0x55),
                 halt(),
             ]
         ),
         pc=0x44,
         regs={
-            11: 0x55,
-            40: 0x40,
-            41: 0x80000000ff070102,
-            42: 0xaa,
-            43: 0xbb,
-            44: 0,
+            R11: 0x55,
+            R40: 0x40,
+            R41: 0x80000000ff070102,
+            R42: 0xaa,
+            R43: 0xbb,
+            R44: 0,
         },
     ),
     MMIXTest(
         "explicit-trap-state",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,handler
-                insn(0xf6, 13, 0, 1),     # PUT rT,r1
-                wyde(0xe3, 2, 0x00aa),    # SETL r2,0xaa
-                wyde(0xe3, 3, 0x00bb),    # SETL r3,0xbb
-                wyde(0xe3, 4, 0x00dd),    # SETL r4,0xdd
-                insn(0xf6, 4, 0, 4),      # PUT rJ,r4
-                wyde(0xe3, 255, 0x00cc),  # SETL r255,0xcc
-                insn(0x00, 1, 2, 3),      # TRAP 1,2,3
+                wyde(SETL, R1, 0x40),  # handler address
+                insn(PUT, SR_T, 0, R1),
+                wyde(SETL, R2, 0x00aa),
+                wyde(SETL, R3, 0x00bb),
+                wyde(SETL, R4, 0x00dd),
+                insn(PUT, SR_J, 0, R4),
+                wyde(SETL, R255, 0x00cc),
+                insn(TRAP, 1, 2, 3),
             ],
             0x40,
             [
-                insn(0xfe, 40, 0, 28),    # GET r40,rWW
-                insn(0xfe, 41, 0, 29),    # GET r41,rXX
-                insn(0xfe, 42, 0, 30),    # GET r42,rYY
-                insn(0xfe, 43, 0, 31),    # GET r43,rZZ
-                insn(0xfe, 44, 0, 7),     # GET r44,rBB
-                insn(0xfe, 45, 0, 15),    # GET r45,rK
-                insn(0x21, 46, 255, 0),   # ADDI r46,r255,0
+                insn(GET, R40, 0, SR_WW),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_YY),
+                insn(GET, R43, 0, SR_ZZ),
+                insn(GET, R44, 0, SR_BB),
+                insn(GET, R45, 0, SR_K),
+                insn(ADDI, R46, R255, 0),
                 halt(),
             ],
         ),
         pc=0x5c,
         regs={
-            40: 0x20,
-            41: 0x8000000000010203,
-            42: 0xaa,
-            43: 0xbb,
-            44: 0xcc,
-            45: 0,
-            46: 0xdd,
+            R40: 0x20,
+            R41: 0x8000000000010203,
+            R42: 0xaa,
+            R43: 0xbb,
+            R44: 0xcc,
+            R45: 0,
+            R46: 0xdd,
         },
     ),
     MMIXTest(
         "explicit-trap-resume",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,handler
-                insn(0xf6, 13, 0, 1),     # PUT rT,r1
-                wyde(0xe3, 4, 0x00dd),    # SETL r4,0xdd
-                insn(0xf6, 4, 0, 4),      # PUT rJ,r4
-                wyde(0xe3, 255, 0x00cc),  # SETL r255,0xcc
-                insn(0x00, 1, 0, 0),      # TRAP 1,0,0
-                wyde(0xe3, 10, 0x55),     # SETL r10,0x55
-                insn(0xfe, 11, 0, 15),    # GET r11,rK
-                insn(0x21, 12, 255, 0),   # ADDI r12,r255,0
+                wyde(SETL, R1, 0x40),  # handler address
+                insn(PUT, SR_T, 0, R1),
+                wyde(SETL, R4, 0x00dd),
+                insn(PUT, SR_J, 0, R4),
+                wyde(SETL, R255, 0x00cc),
+                insn(TRAP, 1, 0, 0),
+                wyde(SETL, R10, 0x55),
+                insn(GET, R11, 0, SR_K),
+                insn(ADDI, R12, R255, 0),
                 halt(),
             ],
             0x40,
             [
-                wyde(0xe3, 255, 0x0123),  # SETL r255,0x123
-                insn(0xf9, 0, 0, 1),      # RESUME 1
+                wyde(SETL, R255, 0x0123),
+                insn(RESUME, 0, 0, 1),
             ],
         ),
         pc=0x24,
-        regs={10: 0x55, 11: 0x123, 12: 0xcc},
+        regs={R10: 0x55, R11: 0x123, R12: 0xcc},
     ),
     MMIXTest(
         "arithmetic-trip-resume",
         program_with_handler(
             [
-                *set_octa(1, f64(1.0)),
-                wyde(0xe3, 2, RA_EVENT_Z << RA_ENABLE_SHIFT),
-                insn(0xf6, 21, 0, 2),     # PUT rA,r2
-                insn(0x14, 3, 1, 0),      # FDIV r3,r1,+0.0
-                wyde(0xe3, 10, 0x55),     # SETL r10,0x55
-                insn(0xfe, 11, 0, 21),    # GET r11,rA
+                *set_octa(R1, f64(1.0)),
+                wyde(SETL, R2, RA_EVENT_Z << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R2),
+                insn(FDIV, R3, R1, R0),
+                wyde(SETL, R10, 0x55),
+                insn(GET, R11, 0, SR_A),
                 halt(),
             ],
             112,
             [
-                insn(0xf9, 0, 0, 0),      # RESUME 0
+                insn(RESUME, 0, 0, 0),
             ],
         ),
         pc=0x24,
-        regs={3: 0, 10: 0x55, 11: RA_EVENT_Z << RA_ENABLE_SHIFT},
+        regs={R3: 0, R10: 0x55, R11: RA_EVENT_Z << RA_ENABLE_SHIFT},
     ),
     MMIXTest(
         "resume-ropcode-result",
         program_with_handler(
             [
-                wyde(0xe3, 1, 0x40),      # SETL r1,target
-                insn(0xf6, 24, 0, 1),     # PUT rW,r1
-                *set_octa(2, 0x0200000021050007),
-                insn(0xf6, 25, 0, 2),     # PUT rX,r2
-                wyde(0xe3, 3, 0x77),      # SETL r3,0x77
-                insn(0xf6, 27, 0, 3),     # PUT rZ,r3
-                insn(0xf9, 0, 0, 0),      # RESUME 0
+                wyde(SETL, R1, 0x40),  # target address
+                insn(PUT, SR_W, 0, R1),
+                *set_octa(R2, 0x0200000021050007),
+                insn(PUT, SR_X, 0, R2),
+                wyde(SETL, R3, 0x77),
+                insn(PUT, SR_Z, 0, R3),
+                insn(RESUME, 0, 0, 0),
             ],
             0x40,
             [
@@ -2251,197 +2261,197 @@ ISA_TESTS = [
             ],
         ),
         pc=0x40,
-        regs={5: 0x77},
+        regs={R5: 0x77},
     ),
     MMIXTest(
         "floating-point-exceptions",
         b"".join(
             [
-                *set_octa(1, 0x7ff8000000001234),
-                *set_octa(2, 0x7ff0000000001234),
-                *set_octa(3, f64(1.0)),
-                *set_octa(4, 0x7fefffffffffffff),
-                *set_octa(5, f64(2.0)),
-                *set_octa(6, 0x0010000000000000),
-                *set_octa(7, 0x8000000000000000),
-                insn(0x04, 10, 1, 3),     # FADD r10,qNaN,1.0
-                insn(0x04, 11, 2, 3),     # FADD r11,sNaN,1.0
-                insn(0xfe, 12, 0, 21),    # GET r12,rA
-                insn(0x10, 13, 4, 5),     # FMUL r13,max,2.0
-                insn(0xfe, 14, 0, 21),    # GET r14,rA
-                insn(0x10, 15, 6, 6),     # FMUL r15,min-normal,min-normal
-                insn(0xfe, 16, 0, 21),    # GET r16,rA
-                insn(0x05, 17, 0, 1),     # FIX r17,qNaN
-                insn(0x04, 18, 7, 7),     # FADD r18,-0.0,-0.0
+                *set_octa(R1, 0x7ff8000000001234),
+                *set_octa(R2, 0x7ff0000000001234),
+                *set_octa(R3, f64(1.0)),
+                *set_octa(R4, 0x7fefffffffffffff),
+                *set_octa(R5, f64(2.0)),
+                *set_octa(R6, 0x0010000000000000),
+                *set_octa(R7, 0x8000000000000000),
+                insn(FADD, R10, R1, R3),
+                insn(FADD, R11, R2, R3),
+                insn(GET, R12, 0, SR_A),
+                insn(FMUL, R13, R4, R5),
+                insn(GET, R14, 0, SR_A),
+                insn(FMUL, R15, R6, R6),
+                insn(GET, R16, 0, SR_A),
+                insn(FIX, R17, 0, R1),
+                insn(FADD, R18, R7, R7),
                 halt(),
             ]
         ),
         pc=0x94,
         regs={
-            10: 0x7ff8000000001234,
-            11: 0x7ff8000000001234,
-            12: 0x10,
-            13: f64(float("inf")),
-            14: 0x19,
-            15: 0,
-            16: 0x1d,
-            17: 0x7ff8000000001234,
-            18: 0x8000000000000000,
+            R10: 0x7ff8000000001234,
+            R11: 0x7ff8000000001234,
+            R12: 0x10,
+            R13: f64(float("inf")),
+            R14: 0x19,
+            R15: 0,
+            R16: 0x1d,
+            R17: 0x7ff8000000001234,
+            R18: 0x8000000000000000,
         },
     ),
     MMIXTest(
         "floating-point-rounding",
         b"".join(
             [
-                *set_octa(1, 0xffffffff00030000),
-                insn(0xf6, 21, 0, 1),     # PUT rA,r1
-                insn(0xfe, 2, 0, 21),     # GET r2,rA
-                *set_octa(5, f64(1.5)),
-                insn(0x17, 6, 0, 5),      # FINT r6,r5
-                insn(0x17, 7, 4, 5),      # FINT r7,ROUND_NEAR,r5
+                *set_octa(R1, 0xffffffff00030000),
+                insn(PUT, SR_A, 0, R1),
+                insn(GET, R2, 0, SR_A),
+                *set_octa(R5, f64(1.5)),
+                insn(FINT, R6, 0, R5),
+                insn(FINT, R7, 4, R5),
                 halt(),
             ]
         ),
         pc=0x30,
-        regs={2: 0x30000, 6: f64(1.0), 7: f64(2.0)},
+        regs={R2: 0x30000, R6: f64(1.0), R7: f64(2.0)},
     ),
     MMIXTest(
         "short-float-memory",
         b"".join(
             [
-                wyde(0xe3, 1, 0x0300),    # SETL r1,0x300
-                wyde(0xe2, 2, f32(1.5) >> 16),
-                insn(0xaa, 2, 1, 0),      # STTU r2,r1,r0
-                insn(0x90, 3, 1, 0),      # LDSF r3,r1,r0
-                *set_octa(4, f64(2.0)),
-                insn(0xb1, 4, 1, 4),      # STSFI r4,r1,4
-                insn(0x8b, 5, 1, 4),      # LDTUI r5,r1,4
-                *set_octa(6, f64(1.0 / 3.0)),
-                insn(0xb1, 6, 1, 8),      # STSFI r6,r1,8
-                insn(0xfe, 7, 0, 21),     # GET r7,rA
+                wyde(SETL, R1, 0x0300),
+                wyde(SETML, R2, f32(1.5) >> 16),
+                insn(STTU, R2, R1, R0),
+                insn(LDSF, R3, R1, R0),
+                *set_octa(R4, f64(2.0)),
+                insn(STSFI, R4, R1, 4),
+                insn(LDTUI, R5, R1, 4),
+                *set_octa(R6, f64(1.0 / 3.0)),
+                insn(STSFI, R6, R1, 8),
+                insn(GET, R7, 0, SR_A),
                 halt(),
             ]
         ),
         pc=0x40,
-        regs={3: f64(1.5), 5: f32(2.0), 7: 0x01},
+        regs={R3: f64(1.5), R5: f32(2.0), R7: 0x01},
     ),
     MMIXTest(
         "conditional-set",
         b"".join(
             [
-                wyde(0xe0, 1, 0xffff),    # SETH r1,0xffff
-                wyde(0xe5, 1, 0xffff),    # INCMH r1,0xffff
-                wyde(0xe6, 1, 0xffff),    # INCML r1,0xffff
-                wyde(0xe7, 1, 0xffff),    # INCL r1,0xffff
-                wyde(0xe3, 3, 5),         # SETL r3,5
-                wyde(0xe3, 4, 4),         # SETL r4,4
-                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
-                wyde(0xe3, 30, 0xaaaa),   # SETL r30,0xaaaa
-                insn(0x60, 10, 1, 5),     # CSN r10,r1,r5
-                insn(0x62, 11, 0, 5),     # CSZ r11,r0,r5
-                insn(0x64, 12, 3, 5),     # CSP r12,r3,r5
-                insn(0x66, 13, 3, 5),     # CSOD r13,r3,r5
-                insn(0x68, 14, 0, 5),     # CSNN r14,r0,r5
-                insn(0x6a, 15, 3, 5),     # CSNZ r15,r3,r5
-                insn(0x6c, 16, 1, 5),     # CSNP r16,r1,r5
-                insn(0x6e, 17, 4, 5),     # CSEV r17,r4,r5
-                wyde(0xe3, 18, 0xaaaa),   # SETL r18,0xaaaa
-                insn(0x60, 18, 3, 5),     # CSN false preserves r18
-                wyde(0xe3, 19, 0xaaaa),   # SETL r19,0xaaaa
-                insn(0x62, 19, 3, 5),     # CSZ false preserves r19
-                wyde(0xe3, 20, 0xaaaa),   # SETL r20,0xaaaa
-                insn(0x64, 20, 1, 5),     # CSP false preserves r20
-                wyde(0xe3, 21, 0xaaaa),   # SETL r21,0xaaaa
-                insn(0x66, 21, 4, 5),     # CSOD false preserves r21
-                wyde(0xe3, 22, 0xaaaa),   # SETL r22,0xaaaa
-                insn(0x68, 22, 1, 5),     # CSNN false preserves r22
-                wyde(0xe3, 23, 0xaaaa),   # SETL r23,0xaaaa
-                insn(0x6a, 23, 0, 5),     # CSNZ false preserves r23
-                wyde(0xe3, 24, 0xaaaa),   # SETL r24,0xaaaa
-                insn(0x6c, 24, 3, 5),     # CSNP false preserves r24
-                wyde(0xe3, 25, 0xaaaa),   # SETL r25,0xaaaa
-                insn(0x6e, 25, 3, 5),     # CSEV false preserves r25
-                wyde(0xe3, 26, 0xaaaa),   # SETL r26,0xaaaa
-                insn(0x63, 26, 0, 0x77),  # CSZI r26,r0,0x77
-                wyde(0xe3, 27, 0xaaaa),   # SETL r27,0xaaaa
-                insn(0x6b, 27, 0, 0x77),  # CSNZI false preserves r27
+                wyde(SETH, R1, 0xffff),
+                wyde(INCMH, R1, 0xffff),
+                wyde(INCML, R1, 0xffff),
+                wyde(INCL, R1, 0xffff),
+                wyde(SETL, R3, 5),
+                wyde(SETL, R4, 4),
+                wyde(SETL, R5, 0x55),
+                wyde(SETL, R30, 0xaaaa),
+                insn(CSN, R10, R1, R5),
+                insn(CSZ, R11, R0, R5),
+                insn(CSP, R12, R3, R5),
+                insn(CSOD, R13, R3, R5),
+                insn(CSNN, R14, R0, R5),
+                insn(CSNZ, R15, R3, R5),
+                insn(CSNP, R16, R1, R5),
+                insn(CSEV, R17, R4, R5),
+                wyde(SETL, R18, 0xaaaa),
+                insn(CSN, R18, R3, R5),  # false preserves r18
+                wyde(SETL, R19, 0xaaaa),
+                insn(CSZ, R19, R3, R5),  # false preserves r19
+                wyde(SETL, R20, 0xaaaa),
+                insn(CSP, R20, R1, R5),  # false preserves r20
+                wyde(SETL, R21, 0xaaaa),
+                insn(CSOD, R21, R4, R5),  # false preserves r21
+                wyde(SETL, R22, 0xaaaa),
+                insn(CSNN, R22, R1, R5),  # false preserves r22
+                wyde(SETL, R23, 0xaaaa),
+                insn(CSNZ, R23, R0, R5),  # false preserves r23
+                wyde(SETL, R24, 0xaaaa),
+                insn(CSNP, R24, R3, R5),  # false preserves r24
+                wyde(SETL, R25, 0xaaaa),
+                insn(CSEV, R25, R3, R5),  # false preserves r25
+                wyde(SETL, R26, 0xaaaa),
+                insn(CSZI, R26, R0, 0x77),
+                wyde(SETL, R27, 0xaaaa),
+                insn(CSNZI, R27, R0, 0x77),  # false preserves r27
                 halt(),
             ]
         ),
         pc=0x90,
         regs={
-            10: 0x55,
-            11: 0x55,
-            12: 0x55,
-            13: 0x55,
-            14: 0x55,
-            15: 0x55,
-            16: 0x55,
-            17: 0x55,
-            18: 0xaaaa,
-            19: 0xaaaa,
-            20: 0xaaaa,
-            21: 0xaaaa,
-            22: 0xaaaa,
-            23: 0xaaaa,
-            24: 0xaaaa,
-            25: 0xaaaa,
-            26: 0x77,
-            27: 0xaaaa,
+            R10: 0x55,
+            R11: 0x55,
+            R12: 0x55,
+            R13: 0x55,
+            R14: 0x55,
+            R15: 0x55,
+            R16: 0x55,
+            R17: 0x55,
+            R18: 0xaaaa,
+            R19: 0xaaaa,
+            R20: 0xaaaa,
+            R21: 0xaaaa,
+            R22: 0xaaaa,
+            R23: 0xaaaa,
+            R24: 0xaaaa,
+            R25: 0xaaaa,
+            R26: 0x77,
+            R27: 0xaaaa,
         },
     ),
     MMIXTest(
         "zero-or-set",
         b"".join(
             [
-                wyde(0xe0, 1, 0xffff),    # SETH r1,0xffff
-                wyde(0xe5, 1, 0xffff),    # INCMH r1,0xffff
-                wyde(0xe6, 1, 0xffff),    # INCML r1,0xffff
-                wyde(0xe7, 1, 0xffff),    # INCL r1,0xffff
-                wyde(0xe3, 3, 5),         # SETL r3,5
-                wyde(0xe3, 4, 4),         # SETL r4,4
-                wyde(0xe3, 5, 0x55),      # SETL r5,0x55
-                insn(0x70, 10, 1, 5),     # ZSN r10,r1,r5
-                insn(0x72, 11, 0, 5),     # ZSZ r11,r0,r5
-                insn(0x74, 12, 3, 5),     # ZSP r12,r3,r5
-                insn(0x76, 13, 3, 5),     # ZSOD r13,r3,r5
-                insn(0x78, 14, 0, 5),     # ZSNN r14,r0,r5
-                insn(0x7a, 15, 3, 5),     # ZSNZ r15,r3,r5
-                insn(0x7c, 16, 1, 5),     # ZSNP r16,r1,r5
-                insn(0x7e, 17, 4, 5),     # ZSEV r17,r4,r5
-                insn(0x70, 18, 3, 5),     # ZSN false writes zero
-                insn(0x72, 19, 3, 5),     # ZSZ false writes zero
-                insn(0x74, 20, 1, 5),     # ZSP false writes zero
-                insn(0x76, 21, 4, 5),     # ZSOD false writes zero
-                insn(0x78, 22, 1, 5),     # ZSNN false writes zero
-                insn(0x7a, 23, 0, 5),     # ZSNZ false writes zero
-                insn(0x7c, 24, 3, 5),     # ZSNP false writes zero
-                insn(0x7e, 25, 3, 5),     # ZSEV false writes zero
-                insn(0x73, 26, 0, 0x77),  # ZSZI r26,r0,0x77
-                insn(0x7b, 27, 0, 0x77),  # ZSNZI false writes zero
+                wyde(SETH, R1, 0xffff),
+                wyde(INCMH, R1, 0xffff),
+                wyde(INCML, R1, 0xffff),
+                wyde(INCL, R1, 0xffff),
+                wyde(SETL, R3, 5),
+                wyde(SETL, R4, 4),
+                wyde(SETL, R5, 0x55),
+                insn(ZSN, R10, R1, R5),
+                insn(ZSZ, R11, R0, R5),
+                insn(ZSP, R12, R3, R5),
+                insn(ZSOD, R13, R3, R5),
+                insn(ZSNN, R14, R0, R5),
+                insn(ZSNZ, R15, R3, R5),
+                insn(ZSNP, R16, R1, R5),
+                insn(ZSEV, R17, R4, R5),
+                insn(ZSN, R18, R3, R5),  # false writes zero
+                insn(ZSZ, R19, R3, R5),  # false writes zero
+                insn(ZSP, R20, R1, R5),  # false writes zero
+                insn(ZSOD, R21, R4, R5),  # false writes zero
+                insn(ZSNN, R22, R1, R5),  # false writes zero
+                insn(ZSNZ, R23, R0, R5),  # false writes zero
+                insn(ZSNP, R24, R3, R5),  # false writes zero
+                insn(ZSEV, R25, R3, R5),  # false writes zero
+                insn(ZSZI, R26, R0, 0x77),
+                insn(ZSNZI, R27, R0, 0x77),  # false writes zero
                 halt(),
             ]
         ),
         pc=0x64,
         regs={
-            10: 0x55,
-            11: 0x55,
-            12: 0x55,
-            13: 0x55,
-            14: 0x55,
-            15: 0x55,
-            16: 0x55,
-            17: 0x55,
-            18: 0,
-            19: 0,
-            20: 0,
-            21: 0,
-            22: 0,
-            23: 0,
-            24: 0,
-            25: 0,
-            26: 0x77,
-            27: 0,
+            R10: 0x55,
+            R11: 0x55,
+            R12: 0x55,
+            R13: 0x55,
+            R14: 0x55,
+            R15: 0x55,
+            R16: 0x55,
+            R17: 0x55,
+            R18: 0,
+            R19: 0,
+            R20: 0,
+            R21: 0,
+            R22: 0,
+            R23: 0,
+            R24: 0,
+            R25: 0,
+            R26: 0x77,
+            R27: 0,
         },
     ),
 ]

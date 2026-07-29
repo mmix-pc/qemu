@@ -82,7 +82,7 @@ LOADER_FAILURE_TESTS = [
         "mmo-post-trailing-records",
         mmo_image(
             [
-                mmo_post(255, {255: 0}),
+                mmo_post(R255, {R255: 0}),
                 halt(),
             ]
         ),
@@ -105,14 +105,14 @@ LOADER_FAILURE_TESTS = [
     ),
     MMIXLoaderFailure(
         "mmo-stab-invalid-yz",
-        mmo_image([mmo_post(255, {255: 0}), mmo_lop(MMIX_MMO_LOP_STAB, 1)]),
+        mmo_image([mmo_post(R255, {R255: 0}), mmo_lop(MMIX_MMO_LOP_STAB, 1)]),
         ("invalid MMIX .mmo lop_stab yz=1", "tetra 5"),
     ),
     MMIXLoaderFailure(
         "mmo-end-invalid-count",
         mmo_image(
             [
-                mmo_post(255, {255: 0}),
+                mmo_post(R255, {R255: 0}),
                 mmo_lop(MMIX_MMO_LOP_STAB, 0),
                 struct.pack(">I", 0),
                 mmo_lop(MMIX_MMO_LOP_END, 0),
@@ -122,7 +122,7 @@ LOADER_FAILURE_TESTS = [
     ),
     MMIXLoaderFailure(
         "mmo-records-after-end",
-        mmo_image([mmo_post(255, {255: 0}), mmo_stab_end(), halt()]),
+        mmo_image([mmo_post(R255, {R255: 0}), mmo_stab_end(), halt()]),
         ("unsupported MMIX .mmo records after lop_end", "tetra 7"),
     ),
 ]

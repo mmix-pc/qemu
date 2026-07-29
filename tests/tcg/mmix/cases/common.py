@@ -7,7 +7,7 @@
 import dataclasses
 import struct
 
-from lib.mmix_asm import branch, halt, insn, jump, set_octa, wyde
+from lib.mmix_asm import *
 from lib.mmo import (
     MMIX_MMO_LOP_END,
     MMIX_MMO_LOP_FIXO,
@@ -63,17 +63,17 @@ MMIX_HOSTED_STRING_MAX = 256
 def serial_tx_program():
     return b"".join(
         [
-            *set_octa(1, MMIX_VIRT_UART_BASE),
-            wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
-            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-            wyde(0xe3, 2, ord("M")),                  # SETL r2,'M'
-            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-            wyde(0xe3, 2, ord("I")),                  # SETL r2,'I'
-            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-            wyde(0xe3, 2, ord("X")),                  # SETL r2,'X'
-            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
-            wyde(0xe3, 2, ord("\n")),                 # SETL r2,'\n'
-            insn(0xa1, 2, 1, MMIX_VIRT_UART_TX),      # STBI r2,r1,TX
+            *set_octa(R1, MMIX_VIRT_UART_BASE),
+            wyde(SETL, R2, ord("M")),
+            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
+            wyde(SETL, R2, ord("M")),
+            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
+            wyde(SETL, R2, ord("I")),
+            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
+            wyde(SETL, R2, ord("X")),
+            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
+            wyde(SETL, R2, ord("\n")),
+            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
             halt(),
         ]
     )
@@ -84,12 +84,12 @@ def hosted_fputs_program():
     message = b"Hosted MMIX\n"
     prefix = b"".join(
         [
-            *set_octa(255, message_address),
-            insn(0x00, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+            *set_octa(R255, message_address),
+            insn(TRAP, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
             halt(),
         ]
     )
-    padding = insn(0xfd, 0, 0, 0) * ((message_address - len(prefix)) // 4)
+    padding = insn(SWYM, 0, 0, 0) * ((message_address - len(prefix)) // 4)
     return prefix + padding + message + b"\0"
 
 
@@ -100,7 +100,7 @@ def program_with_handler(prefix, handler_addr, handler):
         raise ValueError("handler address overlaps program prefix")
     if (handler_addr - len(prefix)) % 4 != 0:
         raise ValueError("handler address is not instruction-aligned")
-    padding = insn(0xfd, 0, 0, 0) * ((handler_addr - len(prefix)) // 4)
+    padding = insn(SWYM, 0, 0, 0) * ((handler_addr - len(prefix)) // 4)
     return prefix + padding + handler
 
 
@@ -108,31 +108,31 @@ def register_stack_spill_fill_program(depth):
     sub_base = 0x20
     body_size = 6 * 4
     program = [
-        branch(0xf2, 31, sub_base // 4),   # PUSHJ 31,sub0
-        insn(0x21, 60, 31, 0),             # ADDI r60,r31,0
-        insn(0xfe, 50, 0, 10),             # GET r50,rO
-        insn(0xfe, 51, 0, 11),             # GET r51,rS
+        branch(PUSHJ, R31, sub_base // 4),  # subroutine target
+        insn(ADDI, R60, R31, 0),
+        insn(GET, R50, 0, SR_O),
+        insn(GET, R51, 0, SR_S),
         halt(),
     ]
 
-    program.extend([insn(0xfd, 0, 0, 0)] * ((sub_base - len(program) * 4) // 4))
+    program.extend([insn(SWYM, 0, 0, 0)] * ((sub_base - len(program) * 4) // 4))
 
     for level in range(depth):
         program.extend(
             [
-                insn(0xfe, 40 + level, 0, 4),  # GET global,rJ
-                wyde(0xe3, 31, level + 1),     # SETL r31,level+1
-                branch(0xf2, 31, 4),           # PUSHJ 31,next
-                insn(0x21, 0, 31, 1),          # ADDI r0,r31,1
-                insn(0xf6, 4, 0, 40 + level),  # PUT rJ,global
-                insn(0xf8, 1, 0, 0),           # POP 1,0
+                insn(GET, 40 + level, 0, SR_J),  # global register
+                wyde(SETL, R31, level + 1),
+                branch(PUSHJ, R31, 4),  # next-call target
+                insn(ADDI, R0, R31, 1),
+                insn(PUT, SR_J, 0, 40 + level),  # global register
+                insn(POP, 1, 0, 0),
             ]
         )
 
     program.extend(
         [
-            wyde(0xe3, 0, 1),                  # SETL r0,1
-            insn(0xf8, 1, 0, 0),               # POP 1,0
+            wyde(SETL, R0, 1),
+            insn(POP, 1, 0, 0),
         ]
     )
 
@@ -147,34 +147,34 @@ def register_stack_save_unsave_program(depth):
     sub_base = 0x20
     body_size = 6 * 4
     program = [
-        branch(0xf2, 31, sub_base // 4),   # PUSHJ 31,sub0
-        insn(0x21, 60, 31, 0),             # ADDI r60,r31,0
-        insn(0xfe, 50, 0, 10),             # GET r50,rO
-        insn(0xfe, 51, 0, 11),             # GET r51,rS
+        branch(PUSHJ, R31, sub_base // 4),  # subroutine target
+        insn(ADDI, R60, R31, 0),
+        insn(GET, R50, 0, SR_O),
+        insn(GET, R51, 0, SR_S),
         halt(),
     ]
 
-    program.extend([insn(0xfd, 0, 0, 0)] * ((sub_base - len(program) * 4) // 4))
+    program.extend([insn(SWYM, 0, 0, 0)] * ((sub_base - len(program) * 4) // 4))
 
     for level in range(depth):
         program.extend(
             [
-                insn(0xfe, 40 + level, 0, 4),  # GET global,rJ
-                wyde(0xe3, 31, level + 1),     # SETL r31,level+1
-                branch(0xf2, 31, 4),           # PUSHJ 31,next
-                insn(0x21, 0, 31, 1),          # ADDI r0,r31,1
-                insn(0xf6, 4, 0, 40 + level),  # PUT rJ,global
-                insn(0xf8, 1, 0, 0),           # POP 1,0
+                insn(GET, 40 + level, 0, SR_J),  # global register
+                wyde(SETL, R31, level + 1),
+                branch(PUSHJ, R31, 4),  # next-call target
+                insn(ADDI, R0, R31, 1),
+                insn(PUT, SR_J, 0, 40 + level),  # global register
+                insn(POP, 1, 0, 0),
             ]
         )
 
     program.extend(
         [
-            wyde(0xe3, 0, 0x55),               # SETL r0,0x55
-            insn(0xfa, 32, 0, 0),              # SAVE r32,0
-            wyde(0xe3, 0, 0xaa),               # SETL r0,0xaa
-            insn(0xfb, 0, 0, 32),              # UNSAVE 0,r32
-            insn(0xf8, 1, 0, 0),               # POP 1,0
+            wyde(SETL, R0, 0x55),
+            insn(SAVE, R32, 0, 0),
+            wyde(SETL, R0, 0xaa),
+            insn(UNSAVE, 0, 0, R32),
+            insn(POP, 1, 0, 0),
         ]
     )
 
@@ -187,13 +187,13 @@ def register_stack_save_unsave_program(depth):
 
 def save_state_after_save_program():
     program = [
-        wyde(0xe3, 0, 0x11),               # SETL r0,0x11
-        wyde(0xe3, 1, 0x22),               # SETL r1,0x22
-        insn(0xfa, 32, 0, 0),              # SAVE r32,0
-        insn(0xfe, 33, 0, 20),             # GET r33,rL
-        insn(0xfe, 34, 0, 10),             # GET r34,rO
-        insn(0xfe, 35, 0, 11),             # GET r35,rS
-        insn(0x21, 36, 32, 0),             # ADDI r36,r32,0
+        wyde(SETL, R0, 0x11),
+        wyde(SETL, R1, 0x22),
+        insn(SAVE, R32, 0, 0),
+        insn(GET, R33, 0, SR_L),
+        insn(GET, R34, 0, SR_O),
+        insn(GET, R35, 0, SR_S),
+        insn(ADDI, R36, R32, 0),
         halt(),
     ]
     return b"".join(program), (len(program) - 1) * 4
@@ -201,43 +201,43 @@ def save_state_after_save_program():
 
 def save_unsave_roundtrip_program():
     program = [
-        wyde(0xe3, 0, 0x11),               # SETL r0,0x11
-        wyde(0xe3, 1, 0x22),               # SETL r1,0x22
-        wyde(0xe3, 2, 0x33),               # SETL r2,0x33
-        *set_octa(40, 0x1111222233334444),
-        *set_octa(41, 0x5555666677778888),
-        *set_octa(42, 0x0000000000001234),
-        insn(0xf6, 4, 0, 42),              # PUT rJ,r42
-        insn(0xf7, 5, 0, 0x5a),            # PUTI rM,0x5a
-        insn(0xf7, 23, 0, 0x6b),           # PUTI rP,0x6b
-        *set_octa(43, 0x000000000003ffff),
-        insn(0xf6, 21, 0, 43),             # PUT rA,r43
-        insn(0xfa, 32, 0, 0),              # SAVE r32,0
-        insn(0x21, 33, 32, 0),             # ADDI r33,r32,0
-        wyde(0xe3, 40, 0),                 # SETL r40,0
-        wyde(0xe3, 41, 0),                 # SETL r41,0
-        insn(0xf7, 4, 0, 0),               # PUTI rJ,0
-        insn(0xf7, 5, 0, 0),               # PUTI rM,0
-        insn(0xf7, 23, 0, 0),              # PUTI rP,0
-        insn(0xf7, 21, 0, 0),              # PUTI rA,0
-        wyde(0xe3, 0, 0xee),               # SETL r0,0xee
-        wyde(0xe3, 1, 0xff),               # SETL r1,0xff
-        wyde(0xe3, 2, 0xaa),               # SETL r2,0xaa
-        insn(0xfb, 0, 0, 33),              # UNSAVE 0,r33
-        insn(0x21, 50, 0, 0),              # ADDI r50,r0,0
-        insn(0x21, 51, 1, 0),              # ADDI r51,r1,0
-        insn(0x21, 52, 2, 0),              # ADDI r52,r2,0
-        insn(0xfe, 53, 0, 4),              # GET r53,rJ
-        insn(0xfe, 54, 0, 5),              # GET r54,rM
-        insn(0xfe, 55, 0, 23),             # GET r55,rP
-        insn(0xfe, 56, 0, 21),             # GET r56,rA
-        insn(0xfe, 57, 0, 20),             # GET r57,rL
-        insn(0xfe, 58, 0, 10),             # GET r58,rO
-        insn(0xfe, 59, 0, 11),             # GET r59,rS
-        insn(0x21, 60, 40, 0),             # ADDI r60,r40,0
-        insn(0x21, 61, 41, 0),             # ADDI r61,r41,0
-        insn(0x21, 62, 32, 0),             # ADDI r62,r32,0
-        insn(0x21, 63, 33, 0),             # ADDI r63,r33,0
+        wyde(SETL, R0, 0x11),
+        wyde(SETL, R1, 0x22),
+        wyde(SETL, R2, 0x33),
+        *set_octa(R40, 0x1111222233334444),
+        *set_octa(R41, 0x5555666677778888),
+        *set_octa(R42, 0x0000000000001234),
+        insn(PUT, SR_J, 0, R42),
+        insn(PUTI, SR_M, 0, 0x5a),
+        insn(PUTI, SR_P, 0, 0x6b),
+        *set_octa(R43, 0x000000000003ffff),
+        insn(PUT, SR_A, 0, R43),
+        insn(SAVE, R32, 0, 0),
+        insn(ADDI, R33, R32, 0),
+        wyde(SETL, R40, 0),
+        wyde(SETL, R41, 0),
+        insn(PUTI, SR_J, 0, 0),
+        insn(PUTI, SR_M, 0, 0),
+        insn(PUTI, SR_P, 0, 0),
+        insn(PUTI, SR_A, 0, 0),
+        wyde(SETL, R0, 0xee),
+        wyde(SETL, R1, 0xff),
+        wyde(SETL, R2, 0xaa),
+        insn(UNSAVE, 0, 0, R33),
+        insn(ADDI, R50, R0, 0),
+        insn(ADDI, R51, R1, 0),
+        insn(ADDI, R52, R2, 0),
+        insn(GET, R53, 0, SR_J),
+        insn(GET, R54, 0, SR_M),
+        insn(GET, R55, 0, SR_P),
+        insn(GET, R56, 0, SR_A),
+        insn(GET, R57, 0, SR_L),
+        insn(GET, R58, 0, SR_O),
+        insn(GET, R59, 0, SR_S),
+        insn(ADDI, R60, R40, 0),
+        insn(ADDI, R61, R41, 0),
+        insn(ADDI, R62, R32, 0),
+        insn(ADDI, R63, R33, 0),
         halt(),
     ]
     return b"".join(program), (len(program) - 1) * 4
