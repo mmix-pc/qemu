@@ -96,12 +96,7 @@ def assemble_mmixal_mmo_from_file(mmixal, workdir, name, source_path):
     return object_path.read_bytes()
 
 
-def optional_mmixal_tests(workdir):
-    mmixal = shutil.which("mmixal")
-    if mmixal is None:
-        print("SKIP mmixal-mmo-fixtures (mmixal not found)")
-        return [], []
-
+def mmixal_tests(mmixal, workdir):
     return [
         MMIXSerialTest(
             "mmixal-mmo-uart-output",

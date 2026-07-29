@@ -9,7 +9,7 @@ import pytest
 from cases.expected_failures import EXPECTED_FAILURE_TESTS
 from cases.isa import ISA_TESTS
 from cases.loader_failures import LOADER_FAILURE_TESTS
-from cases.mmixal import optional_mmixal_tests
+from cases.mmixal import mmixal_tests
 from cases.mmo_loader import MMO_LOADER_TESTS
 from cases.serial import SERIAL_TESTS
 from lib.execution import (
@@ -50,17 +50,13 @@ def test_mmo_loader(qemu, workdir, test):
     run_mmo_test(qemu, workdir, test)
 
 
-def test_optional_mmixal_serial(qemu, workdir):
-    serial_tests, _ = optional_mmixal_tests(workdir)
-    if not serial_tests:
-        pytest.skip("mmixal not found")
+def test_mmixal_serial(qemu, mmixal, workdir):
+    serial_tests, _ = mmixal_tests(mmixal, workdir)
     for test in serial_tests:
         run_serial_test(qemu, workdir, test)
 
 
-def test_optional_mmixal_mmo(qemu, workdir):
-    _, mmo_tests = optional_mmixal_tests(workdir)
-    if not mmo_tests:
-        pytest.skip("mmixal not found")
+def test_mmixal_mmo(qemu, mmixal, workdir):
+    _, mmo_tests = mmixal_tests(mmixal, workdir)
     for test in mmo_tests:
         run_mmo_test(qemu, workdir, test)

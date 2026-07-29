@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import pathlib
+import shutil
 
 import pytest
 
@@ -30,4 +31,12 @@ def workdir(pytestconfig):
         pytest.fail("--workdir is required")
     path = pathlib.Path(value)
     path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.fixture(scope="session")
+def mmixal():
+    path = shutil.which("mmixal")
+    if path is None:
+        pytest.skip("mmixal not found")
     return path
