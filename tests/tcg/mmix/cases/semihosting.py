@@ -27,6 +27,9 @@ SEMIHOSTING_TESTS = [
         "semihosting-argv-pool-layout",
         b"".join(
             [
+                insn(ADDI, R32, R0, 0),
+                insn(ADDI, R33, R1, 0),
+                insn(GET, R34, 0, SR_L),
                 *set_octa(R1, MMIX_POOL_SEGMENT_BASE),
                 insn(LDOU, R2, R1, R0),
                 insn(LDOUI, R3, R1, 8),
@@ -43,8 +46,11 @@ SEMIHOSTING_TESTS = [
                 halt(),
             ]
         ),
-        pc=0x40,
+        pc=0x4c,
         regs={
+            R32: 3,
+            R33: MMIX_POOL_SEGMENT_BASE + 8,
+            R34: 2,
             R2: MMIX_POOL_SEGMENT_BASE + 0x40,
             R3: MMIX_POOL_SEGMENT_BASE + 0x28,
             R4: MMIX_POOL_SEGMENT_BASE + 0x30,

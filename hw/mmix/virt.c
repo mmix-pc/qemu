@@ -120,7 +120,16 @@ static bool mmix_write_semihosting_arguments(MachineState *machine,
     return true;
 }
 
-static void mmix_setup_semihosting_arguments(MachineState *machine)
+static void mmix_apply_semihosting_startup_state(CPUState *cpu)
+{
+    CPUMMIXState *env = cpu_env(cpu);
+
+    mmix_cpu_write_reg(env, 0, semihosting_get_argc());
+    mmix_cpu_write_reg(env, 1, MMIX_POOL_SEGMENT_BASE + MMIX_ARG_OCTA_SIZE);
+}
+
+static void mmix_setup_semihosting_arguments(MachineState *machine,
+                                             CPUState *cpu)
 {
     Error *err = NULL;
 
@@ -133,6 +142,8 @@ static void mmix_setup_semihosting_arguments(MachineState *machine)
                           "could not set up MMIX semihosting arguments: ");
         exit(1);
     }
+
+    mmix_apply_semihosting_startup_state(cpu);
 }
 
 static void mmix_apply_kernel_load_info(CPUState *cpu,
@@ -187,7 +198,7 @@ static void mmix_virt_init(MachineState *machine)
         mmix_apply_kernel_load_info(cpu, &load_info);
     }
 
-    mmix_setup_semihosting_arguments(machine);
+    mmix_setup_semihosting_arguments(machine, cpu);
 }
 
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)

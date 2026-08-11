@@ -6,6 +6,19 @@ from .common import *
 
 ISA_TESTS = [
     MMIXTest(
+        "raw-image-startup-registers",
+        b"".join(
+            [
+                insn(ADDI, R32, R0, 0),
+                insn(ADDI, R33, R1, 0),
+                insn(GET, R34, 0, SR_L),
+                halt(),
+            ]
+        ),
+        pc=0x0c,
+        regs={R32: 0, R33: 0, R34: 0},
+    ),
+    MMIXTest(
         "alu-logical",
         b"".join(
             [
