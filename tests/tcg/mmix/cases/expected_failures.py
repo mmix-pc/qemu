@@ -104,12 +104,12 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
         "semihosting-fputs-invalid-string-address",
         b"".join(
             [
-                *set_octa(R255, 0x4000000000000000),
+                *set_octa(R255, 0x6000000000000000),
                 insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
                      MMIX_SEMIHOSTING_STDOUT),
             ]
         ),
-        ("MMIX hosted Fputs invalid string address 0x4000000000000000",
+        ("MMIX hosted Fputs invalid string address 0x6000000000000000",
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(

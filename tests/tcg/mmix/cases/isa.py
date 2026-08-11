@@ -489,6 +489,20 @@ ISA_TESTS = [
         regs={R2: 0x1122334455667788, R3: 0x1122334455667788},
     ),
     MMIXTest(
+        "pool-segment-runtime-load-store",
+        b"".join(
+            [
+                *set_octa(R1, MMIX_POOL_SEGMENT_BASE + 0x100),
+                *set_octa(R2, 0xaabbccddeeff0011),
+                insn(STOU, R2, R1, R0),
+                insn(LDOU, R3, R1, R0),
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={R2: 0xaabbccddeeff0011, R3: 0xaabbccddeeff0011},
+    ),
+    MMIXTest(
         "unsupported-high-segment-runtime-trap",
         program_with_handler(
             [
@@ -496,7 +510,7 @@ ISA_TESTS = [
                 insn(PUT, SR_TT, 0, R1),
                 *set_octa(R2, RQ_PROGRAM_K),
                 insn(PUT, SR_K, 0, R2),
-                *set_octa(R3, 0x4000000000000000),
+                *set_octa(R3, 0x6000000000000000),
                 insn(LDOU, R4, R3, R0),
                 wyde(SETL, R5, 0x00ff),    # skipped after dynamic trap
             ],

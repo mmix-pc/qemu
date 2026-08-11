@@ -143,6 +143,20 @@ MMO_LOADER_TESTS = [
         regs={R3: 0x8877665544332211},
     ),
     MMIXMMOTest(
+        "mmo-pool-segment-load",
+        mmo_image(
+            [
+                *set_octa(R1, MMIX_POOL_SEGMENT_BASE + 0x100),
+                insn(LDOU, R2, R1, R0),
+                halt(),
+                mmo_loc(MMIX_POOL_SEGMENT_BASE + 0x100),
+                struct.pack(">Q", 0x0102030405060708),
+            ]
+        ),
+        pc=0x14,
+        regs={R2: 0x0102030405060708},
+    ),
+    MMIXMMOTest(
         "mmo-fixo-load",
         mmo_image(
             [

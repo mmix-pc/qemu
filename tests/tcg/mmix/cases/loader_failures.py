@@ -27,10 +27,11 @@ LOADER_FAILURE_TESTS = [
          "0x2000000004000000",),
     ),
     MMIXLoaderFailure(
-        "mmo-unsupported-pool-segment",
-        mmo_image([mmo_loc(0x4000000000000000), halt()]),
+        "mmo-unsupported-pool-segment-range",
+        mmo_image([mmo_loc(MMIX_POOL_SEGMENT_BASE + MMIX_POOL_SEGMENT_SIZE),
+                   halt()]),
         ("unsupported MMIX .mmo high-segment tetrabyte address "
-         "0x4000000000000000",),
+         "0x4000000000100000",),
     ),
     MMIXLoaderFailure(
         "mmo-fixr-target-before-zero",
