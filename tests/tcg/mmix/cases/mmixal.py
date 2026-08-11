@@ -84,6 +84,21 @@ Main    SET     $2,11
         TRAP    0,Halt,0
 """
 
+MMIXAL_STDIN_FGETS_SOURCE = """\
+        LOC     Data_Segment
+Read    OCTA    Buffer,16
+Buffer  OCTA    0,0
+ReadPtr GREG    Read
+BufPtr  GREG    Buffer
+        LOC     #100
+Main    ADDU    $255,ReadPtr,0
+        TRAP    0,Fgets,StdIn
+        ADDU    $255,BufPtr,0
+        TRAP    0,Fputs,StdOut
+        SET     $255,0
+        TRAP    0,Halt,0
+"""
+
 
 def mmixal_file_read_source(size):
     return f"""\
@@ -279,6 +294,14 @@ MMIXAL_SEMIHOSTING_SERIAL_TESTS = [
         output=b"MMIX stdin\n",
         source=MMIXAL_STDIN_READ_SOURCE,
         stdin_data=b"MMIX stdin\n",
+    ),
+    MMIXALSerialCase(
+        "mmixal-mmo-stdin-fgets",
+        "stdin_fgets",
+        pc=0x114,
+        output=b"MMIX fgets\n",
+        source=MMIXAL_STDIN_FGETS_SOURCE,
+        stdin_data=b"MMIX fgets\nignored",
     ),
 ]
 

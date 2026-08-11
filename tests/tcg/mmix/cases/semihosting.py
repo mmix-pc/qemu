@@ -220,6 +220,119 @@ def fread_standard_handle_failure_test(name, handle, size):
     )
 
 
+def _fgets_check_program(handle, request_size, expected_bytes):
+    arg_address = 0x100
+    buffer_address = 0x140
+    instructions = [
+        *_set_args3(arg_address, buffer_address, request_size),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FGETS, handle),
+        insn(ADDI, R32, R255, 0),
+        *set_octa(R4, buffer_address),
+    ]
+
+    for i in range(len(expected_bytes)):
+        instructions.append(insn(LDBUI, R33 + i, R4, i))
+
+    return instructions, arg_address, buffer_address
+
+
+def fgets_stdin_test(name, request_size, input_data, expected_bytes,
+                     expected_return):
+    instructions, _, _ = _fgets_check_program(
+        MMIX_SEMIHOSTING_STDIN,
+        request_size,
+        expected_bytes,
+    )
+    instructions.extend([*set_octa(R255, 0), halt()])
+
+    prefix = b"".join(instructions)
+    regs = {R32: expected_return}
+    regs.update({R33 + i: byte for i, byte in enumerate(expected_bytes)})
+
+    return MMIXTest(
+        name,
+        prefix,
+        pc=len(prefix) - 4,
+        regs=regs,
+        stdin_data=input_data,
+    )
+
+
+def fgets_file_test(name, pathname, request_size, expected_bytes,
+                    expected_return):
+    arg_address = 0x180
+    buffer_address = 0x1c0
+    pathname_address = 0x200
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+
+    instructions = [
+        *_set_args3(arg_address, pathname_address,
+                    MMIX_SEMIHOSTING_TEXT_READ),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R40, R255, 0),
+        *_set_args3(arg_address, buffer_address, request_size),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FGETS,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R32, R255, 0),
+        *set_octa(R4, buffer_address),
+    ]
+    for i in range(len(expected_bytes)):
+        instructions.append(insn(LDBUI, R33 + i, R4, i))
+    instructions.extend(
+        [
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE,
+                 MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+            insn(ADDI, R41, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, pathname_address) + pathname_bytes
+    regs = {R32: expected_return, R40: 0, R41: 0}
+    regs.update({R33 + i: byte for i, byte in enumerate(expected_bytes)})
+
+    return MMIXTest(
+        name,
+        program,
+        pc=len(prefix) - 4,
+        regs=regs,
+    )
+
+
+def fgets_failure_test(name, handle, buffer_address, size):
+    arg_address = 0x100
+    prefix = b"".join(
+        [
+            *_set_args3(arg_address, buffer_address, size),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FGETS, handle),
+            insn(ADDI, R32, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    return MMIXTest(
+        name,
+        prefix,
+        pc=len(prefix) - 4,
+        regs={R32: MASK64},
+    )
+
+
+def fgets_stdin_bad_buffer_test(buffer_address, size, input_data):
+    test = fgets_failure_test(
+        "semihosting-fgets-stdin-bad-buffer",
+        MMIX_SEMIHOSTING_STDIN,
+        buffer_address,
+        size,
+    )
+
+    return dataclasses.replace(test, stdin_data=input_data)
+
+
 def fread_bad_buffer_test(pathname, buffer_address, size):
     arg_address = 0x180
     pathname_address = 0x200

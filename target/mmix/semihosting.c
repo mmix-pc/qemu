@@ -31,6 +31,7 @@ typedef enum MMIXSemihostingService {
     MMIX_SEMIHOSTING_SERVICE_FOPEN = 1,
     MMIX_SEMIHOSTING_SERVICE_FCLOSE = 2,
     MMIX_SEMIHOSTING_SERVICE_FREAD = 3,
+    MMIX_SEMIHOSTING_SERVICE_FGETS = 4,
     MMIX_SEMIHOSTING_SERVICE_FWRITE = 6,
     MMIX_SEMIHOSTING_SERVICE_FPUTS = 7,
     MMIX_SEMIHOSTING_SERVICE_FSEEK = 9,
@@ -57,6 +58,7 @@ typedef enum MMIXSemihostingAction {
     MMIX_SEMIHOSTING_ACTION_FOPEN,
     MMIX_SEMIHOSTING_ACTION_FCLOSE,
     MMIX_SEMIHOSTING_ACTION_FREAD,
+    MMIX_SEMIHOSTING_ACTION_FGETS,
     MMIX_SEMIHOSTING_ACTION_FWRITE,
     MMIX_SEMIHOSTING_ACTION_FPUTS_CONSOLE,
     MMIX_SEMIHOSTING_ACTION_FPUTS_BAD_HANDLE,
@@ -110,6 +112,9 @@ static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
     case MMIX_SEMIHOSTING_SERVICE_FREAD:
         call.action = MMIX_SEMIHOSTING_ACTION_FREAD;
         break;
+    case MMIX_SEMIHOSTING_SERVICE_FGETS:
+        call.action = MMIX_SEMIHOSTING_ACTION_FGETS;
+        break;
     case MMIX_SEMIHOSTING_SERVICE_FWRITE:
         call.action = MMIX_SEMIHOSTING_ACTION_FWRITE;
         break;
@@ -145,6 +150,8 @@ static const char *mmix_semihosting_service_name(uint32_t service)
         return "Fclose";
     case MMIX_SEMIHOSTING_SERVICE_FREAD:
         return "Fread";
+    case MMIX_SEMIHOSTING_SERVICE_FGETS:
+        return "Fgets";
     case MMIX_SEMIHOSTING_SERVICE_FWRITE:
         return "Fwrite";
     case MMIX_SEMIHOSTING_SERVICE_FPUTS:
@@ -712,6 +719,33 @@ static bool mmix_semihosting_read_counted_buffer(CPUMMIXState *env,
     return true;
 }
 
+static bool mmix_semihosting_write_byte(CPUMMIXState *env, uint64_t address,
+                                        const char *service_name,
+                                        const char *operand_name,
+                                        uint8_t byte)
+{
+    CPUState *cs = env_cpu(env);
+    MemTxResult result;
+    hwaddr physical;
+
+    if (!mmix_semihosting_translate_byte(env, address, MMU_DATA_STORE,
+                                         service_name, operand_name,
+                                         &physical)) {
+        return false;
+    }
+
+    address_space_stb(cs->as, physical, byte, MEMTXATTRS_UNSPECIFIED,
+                      &result);
+    if (result != MEMTX_OK) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s could not write %s address 0x%016"
+                      PRIx64 "\n",
+                      service_name, operand_name, address);
+        return false;
+    }
+    return true;
+}
+
 static const char *mmix_semihosting_console_name(uint32_t handle)
 {
     switch (handle) {
@@ -871,6 +905,87 @@ static void mmix_semihosting_fread(CPUMMIXState *env,
                       guestfd, args.arg2, args.arg3);
 }
 
+static bool mmix_semihosting_read_guestfd_byte(CPUMMIXState *env,
+                                               int guestfd, bool need_bql,
+                                               uint64_t address,
+                                               uint8_t *byte)
+{
+    env->semihosting_pending_io_length = 1;
+    if (need_bql) {
+        BQL_LOCK_GUARD();
+        semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
+                          guestfd, address, 1);
+    } else {
+        semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
+                          guestfd, address, 1);
+    }
+
+    if (mmix_cpu_read_reg(env, 255) != 0) {
+        return false;
+    }
+    return mmix_semihosting_read_byte(env, address, "Fgets", "buffer", byte);
+}
+
+static bool mmix_semihosting_read_handle_guestfd(
+    CPUMMIXState *env, const MMIXSemihostingCall *call,
+    int *guestfd, bool *need_bql)
+{
+    if (call->handle == MMIX_SEMIHOSTING_HANDLE_STDIN) {
+        *guestfd = MMIX_SEMIHOSTING_HANDLE_STDIN;
+        *need_bql = true;
+        return true;
+    }
+
+    *need_bql = false;
+    return mmix_semihosting_file_handle_guestfd(env, call, guestfd) &&
+           mmix_semihosting_mode_can_read(
+               mmix_semihosting_file_handle_mode(env, call->handle));
+}
+
+static void mmix_semihosting_fgets(CPUMMIXState *env,
+                                   const MMIXSemihostingCall *call)
+{
+    MMIXSemihostingArgs3 args;
+    const char *service_name = mmix_semihosting_service_name(call->service);
+    int guestfd;
+    bool need_bql;
+    uint64_t count;
+    uint8_t byte;
+
+    if (!mmix_semihosting_read_args3(env, call, &args)) {
+        helper_raise_illegal_instruction(env);
+    }
+    if (args.arg3 == 0 ||
+        !mmix_semihosting_read_handle_guestfd(env, call, &guestfd,
+                                              &need_bql) ||
+        !mmix_semihosting_check_counted_buffer(env, args.arg2, args.arg3,
+                                               MMU_DATA_STORE, service_name,
+                                               "buffer")) {
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
+    }
+
+    for (count = 0; count + 1 < args.arg3; count++) {
+        if (!mmix_semihosting_read_guestfd_byte(env, guestfd, need_bql,
+                                                args.arg2 + count, &byte)) {
+            mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+            return;
+        }
+        if (byte == '\n') {
+            count++;
+            break;
+        }
+    }
+
+    if (!mmix_semihosting_write_byte(env, args.arg2 + count, service_name,
+                                     "buffer", 0)) {
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
+    }
+
+    mmix_cpu_write_reg(env, 255, count);
+}
+
 static void mmix_semihosting_fwrite(CPUMMIXState *env,
                                     const MMIXSemihostingCall *call)
 {
@@ -988,6 +1103,9 @@ static void mmix_semihosting_file_service(CPUMMIXState *env,
     case MMIX_SEMIHOSTING_ACTION_FREAD:
         mmix_semihosting_fread(env, call);
         return;
+    case MMIX_SEMIHOSTING_ACTION_FGETS:
+        mmix_semihosting_fgets(env, call);
+        return;
     case MMIX_SEMIHOSTING_ACTION_FWRITE:
         mmix_semihosting_fwrite(env, call);
         return;
@@ -1011,6 +1129,7 @@ void helper_mmix_semihosting_trap(CPUMMIXState *env, uint32_t service,
     case MMIX_SEMIHOSTING_ACTION_FOPEN:
     case MMIX_SEMIHOSTING_ACTION_FCLOSE:
     case MMIX_SEMIHOSTING_ACTION_FREAD:
+    case MMIX_SEMIHOSTING_ACTION_FGETS:
     case MMIX_SEMIHOSTING_ACTION_FWRITE:
     case MMIX_SEMIHOSTING_ACTION_FSEEK:
     case MMIX_SEMIHOSTING_ACTION_FTELL:

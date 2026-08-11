@@ -19,6 +19,10 @@ from cases.expected_failures import (
 from cases.semihosting import (
     SEMIHOSTING_TESTS,
     fclose_failure_test,
+    fgets_failure_test,
+    fgets_file_test,
+    fgets_stdin_bad_buffer_test,
+    fgets_stdin_test,
     fread_bad_buffer_test,
     fread_failure_test,
     fread_file_test,
@@ -211,6 +215,89 @@ def test_semihosting_fread_bad_buffer(qemu, workdir):
         qemu,
         workdir,
         fread_bad_buffer_test(host_file, 0x6000000000000000, 4),
+    )
+
+
+def test_semihosting_fgets_stdin_newline(qemu, workdir):
+    run_semihosting_stdin_one(
+        qemu,
+        workdir,
+        fgets_stdin_test(
+            "semihosting-fgets-stdin-newline",
+            8,
+            b"hello\nextra",
+            b"hello\n\0",
+            6,
+        ),
+    )
+
+
+def test_semihosting_fgets_stdin_size_limit(qemu, workdir):
+    run_semihosting_stdin_one(
+        qemu,
+        workdir,
+        fgets_stdin_test(
+            "semihosting-fgets-stdin-size-limit",
+            4,
+            b"abcdef",
+            b"abc\0",
+            3,
+        ),
+    )
+
+
+def test_semihosting_fgets_stdin_bad_buffer(qemu, workdir):
+    run_semihosting_stdin_one(
+        qemu,
+        workdir,
+        fgets_stdin_bad_buffer_test(0x6000000000000000, 4, b"input\n"),
+    )
+
+
+def test_semihosting_fgets_file_newline(qemu, workdir):
+    host_file = workdir / "semihosting-fgets-file-newline.txt"
+    host_file.write_bytes(b"line\nnext")
+
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fgets_file_test(
+            "semihosting-fgets-file-newline",
+            host_file,
+            8,
+            b"line\n\0",
+            5,
+        ),
+    )
+
+
+def test_semihosting_fgets_file_eof(qemu, workdir):
+    host_file = workdir / "semihosting-fgets-file-eof.txt"
+    host_file.write_bytes(b"abc")
+
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fgets_file_test(
+            "semihosting-fgets-file-eof",
+            host_file,
+            8,
+            b"",
+            MASK64,
+        ),
+    )
+
+
+def test_semihosting_fgets_stdout_bad_handle(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fgets_failure_test(
+            "semihosting-fgets-stdout-bad-handle",
+            MMIX_SEMIHOSTING_STDOUT,
+            0x140,
+            4,
+        ),
     )
 
 
