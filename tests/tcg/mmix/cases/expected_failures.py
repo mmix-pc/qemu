@@ -91,6 +91,19 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
         ("MMIX semihosting disabled for hosted TRAP service 7 handle 2",
          "MMIX illegal instruction"),
     ),
+    MMIXExpectedFailure(
+        "semihosting-fread-disabled",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        ("MMIX semihosting disabled for hosted TRAP service 3 handle 3",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "semihosting-fwrite-stdout-disabled",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, MMIX_SEMIHOSTING_STDOUT),
+        ("MMIX semihosting disabled for hosted TRAP service 6 handle 1",
+         "MMIX illegal instruction"),
+    ),
 ]
 
 SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
@@ -137,13 +150,6 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
             ]
         ),
         ("MMIX hosted Fputs unsupported handle 0",
-         "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "semihosting-fread-unopened-file-handle",
-        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
-             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
-        ("MMIX hosted Fread unopened file handle 3",
          "MMIX illegal instruction"),
     ),
 ]

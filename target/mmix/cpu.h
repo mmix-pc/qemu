@@ -173,6 +173,7 @@ typedef struct CPUArchState {
     uint8_t semihosting_file_modes[MMIX_SEMIHOSTING_HANDLES];
     uint8_t semihosting_pending_open_handle;
     uint8_t semihosting_pending_open_mode;
+    uint64_t semihosting_pending_io_length;
 
     struct {} end_reset_fields;
 } CPUMMIXState;

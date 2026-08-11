@@ -13,6 +13,17 @@ def _pad_to_address(image, address):
     return image + insn(SWYM, 0, 0, 0) * ((address - len(image)) // 4)
 
 
+def _set_args3(arg_address, arg2, arg3):
+    return [
+        *set_octa(R1, arg_address),
+        *set_octa(R2, arg2),
+        *set_octa(R3, arg3),
+        insn(STOUI, R2, R1, 0),
+        insn(STOUI, R3, R1, 8),
+        *set_octa(R255, arg_address),
+    ]
+
+
 def argv_layout_program(argv_indices, byte_checks=()):
     program = [
         insn(ADDI, R32, R0, 0),
@@ -95,6 +106,212 @@ def fclose_failure_test(name, handle):
         program,
         pc=0x18,
         regs={R32: MASK64},
+    )
+
+
+def fread_file_test(pathname, request_size, expected_bytes, expected_return):
+    arg_address = 0x180
+    buffer_address = 0x1c0
+    pathname_address = 0x200
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+
+    instructions = [
+        *_set_args3(arg_address, pathname_address,
+                    MMIX_SEMIHOSTING_TEXT_READ),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R32, R255, 0),
+        *_set_args3(arg_address, buffer_address, request_size),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R33, R255, 0),
+        *set_octa(R4, buffer_address),
+    ]
+    for i in range(len(expected_bytes)):
+        instructions.append(insn(LDBUI, R34 + i, R4, i))
+    instructions.extend(
+        [
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE,
+                 MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+            insn(ADDI, R40, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, pathname_address) + pathname_bytes
+    regs = {R32: 0, R33: expected_return, R40: 0}
+    regs.update({R34 + i: byte for i, byte in enumerate(expected_bytes)})
+
+    return MMIXTest(
+        f"semihosting-fread-{request_size}",
+        program,
+        pc=len(prefix) - 4,
+        regs=regs,
+    )
+
+
+def fread_failure_test(name, handle, buffer_address, size):
+    arg_address = 0x100
+    prefix = b"".join(
+        [
+            *_set_args3(arg_address, buffer_address, size),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, handle),
+            insn(ADDI, R32, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    return MMIXTest(
+        name,
+        prefix,
+        pc=len(prefix) - 4,
+        regs={R32: (MASK64 - size)},
+    )
+
+
+def fread_bad_buffer_test(pathname, buffer_address, size):
+    arg_address = 0x180
+    pathname_address = 0x200
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+
+    instructions = [
+        *_set_args3(arg_address, pathname_address,
+                    MMIX_SEMIHOSTING_TEXT_READ),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R32, R255, 0),
+        *_set_args3(arg_address, buffer_address, size),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R33, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R34, R255, 0),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, pathname_address) + pathname_bytes
+
+    return MMIXTest(
+        "semihosting-fread-bad-buffer",
+        program,
+        pc=len(prefix) - 4,
+        regs={R32: 0, R33: MASK64 - size, R34: 0},
+    )
+
+
+def fwrite_file_test(pathname, data):
+    arg_address = 0x180
+    buffer_address = 0x1c0
+    pathname_address = 0x200
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+
+    instructions = [
+        *_set_args3(arg_address, pathname_address,
+                    MMIX_SEMIHOSTING_TEXT_WRITE),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R32, R255, 0),
+        *_set_args3(arg_address, buffer_address, len(data)),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R33, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R34, R255, 0),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, buffer_address) + data
+    program = _pad_to_address(program, pathname_address) + pathname_bytes
+
+    return MMIXTest(
+        "semihosting-fwrite-file",
+        program,
+        pc=len(prefix) - 4,
+        regs={R32: 0, R33: 0, R34: 0},
+    )
+
+
+def fwrite_readonly_file_test(pathname, data):
+    arg_address = 0x180
+    buffer_address = 0x1c0
+    pathname_address = 0x200
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+
+    instructions = [
+        *_set_args3(arg_address, pathname_address,
+                    MMIX_SEMIHOSTING_TEXT_READ),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R32, R255, 0),
+        *_set_args3(arg_address, buffer_address, len(data)),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R33, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R34, R255, 0),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, buffer_address) + data
+    program = _pad_to_address(program, pathname_address) + pathname_bytes
+
+    return MMIXTest(
+        "semihosting-fwrite-readonly-file",
+        program,
+        pc=len(prefix) - 4,
+        regs={R32: 0, R33: MASK64 - len(data), R34: 0},
+    )
+
+
+def fwrite_console_test(name, handle, data):
+    arg_address = 0x100
+    buffer_address = 0x140
+    instructions = [
+        *_set_args3(arg_address, buffer_address, len(data)),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, handle),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, buffer_address) + data
+
+    return MMIXSerialTest(
+        name,
+        program,
+        pc=len(prefix) - 4,
+        output=data,
+    )
+
+
+def fwrite_failure_test(name, handle, buffer_address, size):
+    arg_address = 0x100
+    prefix = b"".join(
+        [
+            *_set_args3(arg_address, buffer_address, size),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, handle),
+            insn(ADDI, R32, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    return MMIXTest(
+        name,
+        prefix,
+        pc=len(prefix) - 4,
+        regs={R32: (MASK64 - size)},
     )
 
 

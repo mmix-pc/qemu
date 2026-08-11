@@ -4,7 +4,14 @@
 
 import pytest
 
-from cases.common import MMIX_SEMIHOSTING_STDOUT, case_id
+from cases.common import (
+    MMIX_SEMIHOSTING_FIRST_FILE_HANDLE,
+    MMIX_SEMIHOSTING_STDERR,
+    MMIX_SEMIHOSTING_STDIN,
+    MMIX_SEMIHOSTING_STDOUT,
+    MASK64,
+    case_id,
+)
 from cases.expected_failures import (
     SEMIHOSTING_DISABLED_FAILURE_TESTS,
     SEMIHOSTING_EXPECTED_FAILURE_TESTS,
@@ -13,6 +20,13 @@ from cases.expected_failures import (
 from cases.semihosting import (
     SEMIHOSTING_TESTS,
     fclose_failure_test,
+    fread_bad_buffer_test,
+    fread_failure_test,
+    fread_file_test,
+    fwrite_console_test,
+    fwrite_failure_test,
+    fwrite_file_test,
+    fwrite_readonly_file_test,
     fopen_failure_test,
     fopen_fclose_test,
 )
@@ -91,6 +105,132 @@ def test_semihosting_fclose_unopened_handle(qemu, workdir):
         qemu,
         workdir,
         fclose_failure_test("semihosting-fclose-unopened-handle", 3),
+    )
+
+
+def test_semihosting_fread_file(qemu, workdir):
+    host_file = workdir / "semihosting-fread-file.txt"
+    host_file.write_bytes(b"abcdef")
+
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_file_test(host_file, 3, b"abc", 0),
+    )
+
+
+def test_semihosting_fread_short_eof(qemu, workdir):
+    host_file = workdir / "semihosting-fread-short-eof.txt"
+    host_file.write_bytes(b"xyz")
+
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_file_test(host_file, 8, b"xyz", MASK64 - 4),
+    )
+
+
+def test_semihosting_fread_unopened_handle(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_failure_test(
+            "semihosting-fread-unopened-handle",
+            MMIX_SEMIHOSTING_FIRST_FILE_HANDLE,
+            0x140,
+            4,
+        ),
+    )
+
+
+def test_semihosting_fread_stdin_deferred(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_failure_test(
+            "semihosting-fread-stdin-deferred",
+            MMIX_SEMIHOSTING_STDIN,
+            0x140,
+            4,
+        ),
+    )
+
+
+def test_semihosting_fread_bad_buffer(qemu, workdir):
+    host_file = workdir / "semihosting-fread-bad-buffer.txt"
+    host_file.write_bytes(b"input")
+
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_bad_buffer_test(host_file, 0x6000000000000000, 4),
+    )
+
+
+def test_semihosting_fwrite_file(qemu, workdir):
+    host_file = workdir / "semihosting-fwrite-file.txt"
+    data = b"written by MMIX\n"
+
+    run_semihosting_one(qemu, workdir, fwrite_file_test(host_file, data))
+
+    actual = host_file.read_bytes()
+    if actual != data:
+        raise AssertionError(
+            f"semihosting-fwrite-file: expected {data!r}, got {actual!r}"
+        )
+
+
+def test_semihosting_fwrite_readonly_file(qemu, workdir):
+    host_file = workdir / "semihosting-fwrite-readonly-file.txt"
+    host_file.write_bytes(b"original")
+
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fwrite_readonly_file_test(host_file, b"new!"),
+    )
+
+    actual = host_file.read_bytes()
+    if actual != b"original":
+        raise AssertionError(
+            "semihosting-fwrite-readonly-file: read-only test changed file"
+        )
+
+
+def test_semihosting_fwrite_stdout(qemu, workdir):
+    run_semihosting_serial_test(
+        qemu,
+        workdir,
+        fwrite_console_test(
+            "semihosting-fwrite-stdout",
+            MMIX_SEMIHOSTING_STDOUT,
+            b"counted stdout\n",
+        ),
+    )
+
+
+def test_semihosting_fwrite_stderr(qemu, workdir):
+    run_semihosting_serial_test(
+        qemu,
+        workdir,
+        fwrite_console_test(
+            "semihosting-fwrite-stderr",
+            MMIX_SEMIHOSTING_STDERR,
+            b"counted stderr\n",
+        ),
+    )
+
+
+def test_semihosting_fwrite_bad_buffer(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fwrite_failure_test(
+            "semihosting-fwrite-bad-buffer",
+            MMIX_SEMIHOSTING_STDOUT,
+            0x6000000000000000,
+            4,
+        ),
     )
 
 
