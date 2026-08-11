@@ -5,6 +5,14 @@
 from .common import *
 
 
+def _pad_to_address(image, address):
+    if len(image) > address:
+        raise ValueError("image prefix overlaps data")
+    if (address - len(image)) % 4 != 0:
+        raise ValueError("data address is not instruction-aligned")
+    return image + insn(SWYM, 0, 0, 0) * ((address - len(image)) // 4)
+
+
 def argv_layout_program(argv_indices, byte_checks=()):
     program = [
         insn(ADDI, R32, R0, 0),
@@ -20,6 +28,74 @@ def argv_layout_program(argv_indices, byte_checks=()):
         program.append(insn(LDBUI, reg, base_reg, offset))
     program.extend([wyde(SETL, R255, 0), halt()])
     return b"".join(program)
+
+
+def _fopen_program(pathname, mode, *, handle=MMIX_SEMIHOSTING_FIRST_FILE_HANDLE,
+                   close=False):
+    arg_address = 0x100
+    pathname_address = 0x120
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+    arg_block = struct.pack(">QQ", pathname_address, mode)
+
+    instructions = [
+        *set_octa(R255, arg_address),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN, handle),
+        insn(ADDI, R32, R255, 0),
+    ]
+    if close:
+        instructions.extend(
+            [
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE, handle),
+                insn(ADDI, R33, R255, 0),
+            ]
+        )
+    instructions.extend([*set_octa(R255, 0), halt()])
+
+    program = b"".join(instructions)
+    program = _pad_to_address(program, arg_address) + arg_block
+    program = _pad_to_address(program, pathname_address) + pathname_bytes
+    return program
+
+
+def fopen_fclose_test(pathname):
+    program = _fopen_program(pathname, MMIX_SEMIHOSTING_TEXT_READ, close=True)
+
+    return MMIXTest(
+        "semihosting-fopen-fclose",
+        program,
+        pc=0x30,
+        regs={R32: 0, R33: 0},
+    )
+
+
+def fopen_failure_test(name, pathname, mode,
+                       handle=MMIX_SEMIHOSTING_FIRST_FILE_HANDLE):
+    program = _fopen_program(pathname, mode, handle=handle)
+
+    return MMIXTest(
+        name,
+        program,
+        pc=0x28,
+        regs={R32: MASK64},
+    )
+
+
+def fclose_failure_test(name, handle):
+    program = b"".join(
+        [
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE, handle),
+            insn(ADDI, R32, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    return MMIXTest(
+        name,
+        program,
+        pc=0x18,
+        regs={R32: MASK64},
+    )
 
 
 SEMIHOSTING_TESTS = [

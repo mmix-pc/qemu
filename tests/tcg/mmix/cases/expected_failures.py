@@ -140,12 +140,6 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "semihosting-fopen-stdout-handle",
-        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN, MMIX_SEMIHOSTING_STDOUT),
-        ("MMIX hosted Fopen unsupported standard handle StdOut",
-         "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
         "semihosting-fread-unopened-file-handle",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
              MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),

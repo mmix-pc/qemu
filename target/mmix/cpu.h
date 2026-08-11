@@ -171,6 +171,8 @@ typedef struct CPUArchState {
     bool flat_translation;
     uint32_t semihosting_file_guestfds[MMIX_SEMIHOSTING_HANDLES];
     uint8_t semihosting_file_modes[MMIX_SEMIHOSTING_HANDLES];
+    uint8_t semihosting_pending_open_handle;
+    uint8_t semihosting_pending_open_mode;
 
     struct {} end_reset_fields;
 } CPUMMIXState;

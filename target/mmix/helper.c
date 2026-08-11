@@ -24,6 +24,8 @@
 #define MMIX_SEMIHOSTING_STRING_MAX 256
 #define MMIX_SEMIHOSTING_BUFFER_MAX (1024 * 1024)
 #define MMIX_SEMIHOSTING_GUESTFD_NONE 0
+#define MMIX_SEMIHOSTING_SUCCESS 0
+#define MMIX_SEMIHOSTING_FAILURE UINT64_MAX
 /*
  * Keep the current UART-backed output sink behind the MMIX semihosting
  * console boundary. Later console work can route this through QEMU's
@@ -1605,6 +1607,29 @@ static void mmix_semihosting_set_file_handle(CPUMMIXState *env,
     env->semihosting_file_modes[handle] = mode;
 }
 
+static bool mmix_semihosting_file_mode_flags(uint64_t mode, int *flags)
+{
+    /*
+     * semihost_sys_open() takes GDB File-I/O open flags; the generic
+     * semihosting layer converts them for the selected backend.
+     */
+    switch (mode) {
+    case MMIX_SEMIHOSTING_MODE_TEXT_READ:
+    case MMIX_SEMIHOSTING_MODE_BINARY_READ:
+        *flags = GDB_O_RDONLY;
+        return true;
+    case MMIX_SEMIHOSTING_MODE_TEXT_WRITE:
+    case MMIX_SEMIHOSTING_MODE_BINARY_WRITE:
+        *flags = GDB_O_WRONLY | GDB_O_CREAT | GDB_O_TRUNC;
+        return true;
+    case MMIX_SEMIHOSTING_MODE_BINARY_READ_WRITE:
+        *flags = GDB_O_RDWR | GDB_O_CREAT | GDB_O_TRUNC;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool mmix_semihosting_validate_regular_file_handle(
     CPUMMIXState *env, const MMIXSemihostingCall *call)
 {
@@ -1629,6 +1654,13 @@ static bool mmix_semihosting_validate_regular_file_handle(
     }
 
     return true;
+}
+
+static void mmix_semihosting_fail_bad_file_handle(
+    CPUMMIXState *env, const MMIXSemihostingCall *call)
+{
+    mmix_semihosting_validate_regular_file_handle(env, call);
+    mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
 }
 
 static bool mmix_semihosting_file_handle_guestfd(CPUMMIXState *env,
@@ -1668,6 +1700,23 @@ static void mmix_semihosting_close_complete(CPUState *cs, uint64_t ret,
     }
 }
 
+static void mmix_semihosting_fclose_complete(CPUState *cs, uint64_t ret,
+                                             int err)
+{
+    CPUMMIXState *env = cpu_env(cs);
+
+    if (ret == (uint64_t)-1) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted Fclose failed at 0x%016" PRIx64
+                      ": errno %d\n",
+                      env->pc, err);
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
+    }
+
+    mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_SUCCESS);
+}
+
 static void mmix_semihosting_release_file_handle(CPUMMIXState *env,
                                                  uint32_t handle)
 {
@@ -1694,6 +1743,32 @@ void mmix_cpu_release_semihosting_file_handles(CPUMMIXState *env)
          handle < MMIX_SEMIHOSTING_HANDLES; handle++) {
         mmix_semihosting_release_file_handle(env, handle);
     }
+}
+
+static void mmix_semihosting_fopen_complete(CPUState *cs, uint64_t ret,
+                                            int err)
+{
+    CPUMMIXState *env = cpu_env(cs);
+    uint8_t handle = env->semihosting_pending_open_handle;
+    uint8_t mode = env->semihosting_pending_open_mode;
+
+    env->semihosting_pending_open_handle = 0;
+    env->semihosting_pending_open_mode = 0;
+
+    if (ret == (uint64_t)-1) {
+        if (err != 0) {
+            qemu_log_mask(LOG_UNIMP,
+                          "MMIX hosted Fopen failed for handle %u at 0x%016"
+                          PRIx64 ": errno %d\n",
+                          handle, env->pc, err);
+        }
+        mmix_semihosting_set_file_handle(env, handle, -1, 0);
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
+    }
+
+    mmix_semihosting_set_file_handle(env, handle, ret, mode);
+    mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_SUCCESS);
 }
 
 static G_NORETURN void
@@ -2014,6 +2089,7 @@ static void mmix_semihosting_file_service(CPUMMIXState *env,
     MMIXSemihostingArgs3 args3;
     GByteArray *bytes;
     const char *service_name = mmix_semihosting_service_name(call->service);
+    int flags;
     int guestfd;
 
     if (!semihosting_enabled(false)) {
@@ -2023,21 +2099,42 @@ static void mmix_semihosting_file_service(CPUMMIXState *env,
     switch (call->action) {
     case MMIX_SEMIHOSTING_ACTION_FOPEN:
         bytes = g_byte_array_new();
-        if (!mmix_semihosting_validate_regular_file_handle(env, call) ||
-            !mmix_semihosting_read_args3(env, call, &args3) ||
+        if (!mmix_semihosting_validate_regular_file_handle(env, call)) {
+            g_byte_array_free(bytes, true);
+            mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+            return;
+        }
+        if (!mmix_semihosting_read_args3(env, call, &args3) ||
             !mmix_semihosting_read_cstring(env, args3.arg2, service_name,
                                            "pathname", bytes)) {
             g_byte_array_free(bytes, true);
             helper_raise_illegal_instruction(env);
         }
-        g_byte_array_free(bytes, true);
-        break;
-    case MMIX_SEMIHOSTING_ACTION_FCLOSE:
-        if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd)) {
-            helper_raise_illegal_instruction(env);
+        if (!mmix_semihosting_file_mode_flags(args3.arg3, &flags)) {
+            qemu_log_mask(LOG_UNIMP,
+                          "MMIX hosted Fopen unsupported mode %" PRIu64
+                          " for handle %u at 0x%016" PRIx64 "\n",
+                          args3.arg3, call->handle, env->pc);
+            g_byte_array_free(bytes, true);
+            mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+            return;
         }
         mmix_semihosting_release_file_handle(env, call->handle);
-        break;
+        env->semihosting_pending_open_handle = call->handle;
+        env->semihosting_pending_open_mode = args3.arg3;
+        semihost_sys_open(env_cpu(env), mmix_semihosting_fopen_complete,
+                          args3.arg2, bytes->len + 1, flags, 0644);
+        g_byte_array_free(bytes, true);
+        return;
+    case MMIX_SEMIHOSTING_ACTION_FCLOSE:
+        if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd)) {
+            mmix_semihosting_fail_bad_file_handle(env, call);
+            return;
+        }
+        mmix_semihosting_set_file_handle(env, call->handle, -1, 0);
+        semihost_sys_close(env_cpu(env), mmix_semihosting_fclose_complete,
+                           guestfd);
+        return;
     case MMIX_SEMIHOSTING_ACTION_FTELL:
         if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd)) {
             helper_raise_illegal_instruction(env);
