@@ -22,11 +22,11 @@
 #define MMIX_DEFAULT_NAN   0x7ff8000000000000ULL
 #define MMIX_SEMIHOSTING_STRING_MAX 256
 /*
- * Keep the legacy UART-backed output path behind the MMIX semihosting
- * dispatch boundary. This can later be gated by QEMU semihosting policy and
- * routed through QEMU's semihosting console.
+ * Keep the current UART-backed output sink behind the MMIX semihosting
+ * console boundary. Later console work can route this through QEMU's
+ * semihosting backend without changing the TRAP dispatch shape.
  */
-#define MMIX_SEMIHOSTING_STDOUT_TX 0x100000004ULL
+#define MMIX_SEMIHOSTING_CONSOLE_TX 0x100000004ULL
 
 typedef enum MMIXSemihostingService {
     MMIX_SEMIHOSTING_SERVICE_HALT = 0,
@@ -34,12 +34,14 @@ typedef enum MMIXSemihostingService {
 } MMIXSemihostingService;
 
 typedef enum MMIXSemihostingHandle {
+    MMIX_SEMIHOSTING_HANDLE_STDIN = 0,
     MMIX_SEMIHOSTING_HANDLE_STDOUT = 1,
+    MMIX_SEMIHOSTING_HANDLE_STDERR = 2,
 } MMIXSemihostingHandle;
 
 typedef enum MMIXSemihostingAction {
     MMIX_SEMIHOSTING_ACTION_HALT,
-    MMIX_SEMIHOSTING_ACTION_FPUTS_STDOUT,
+    MMIX_SEMIHOSTING_ACTION_FPUTS_CONSOLE,
     MMIX_SEMIHOSTING_ACTION_FPUTS_BAD_HANDLE,
     MMIX_SEMIHOSTING_ACTION_UNSUPPORTED,
 } MMIXSemihostingAction;
@@ -48,7 +50,6 @@ typedef struct MMIXSemihostingCall {
     MMIXSemihostingAction action;
     uint32_t service;
     uint32_t handle;
-    bool requires_semihosting;
 } MMIXSemihostingCall;
 
 static unsigned mmix_cpu_get_rg(CPUMMIXState *env)
@@ -1445,20 +1446,17 @@ static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
         .action = MMIX_SEMIHOSTING_ACTION_UNSUPPORTED,
         .service = service,
         .handle = handle,
-        .requires_semihosting = false,
     };
 
     switch (service) {
     case MMIX_SEMIHOSTING_SERVICE_HALT:
         if (handle == 0) {
             call.action = MMIX_SEMIHOSTING_ACTION_HALT;
-            call.requires_semihosting = false;
         }
         break;
     case MMIX_SEMIHOSTING_SERVICE_FPUTS:
         if (handle == MMIX_SEMIHOSTING_HANDLE_STDOUT) {
-            call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_STDOUT;
-            call.requires_semihosting = true;
+            call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_CONSOLE;
         } else {
             call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_BAD_HANDLE;
         }
@@ -1468,6 +1466,39 @@ static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
     }
 
     return call;
+}
+
+static G_NORETURN void
+mmix_semihosting_raise_disabled(CPUMMIXState *env,
+                                const MMIXSemihostingCall *call)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX semihosting disabled for hosted TRAP service %u "
+                  "handle %u at 0x%016" PRIx64 "\n",
+                  call->service, call->handle, env->pc);
+    helper_raise_illegal_instruction(env);
+}
+
+static G_NORETURN void
+mmix_semihosting_raise_fputs_bad_handle(CPUMMIXState *env,
+                                        const MMIXSemihostingCall *call)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX hosted Fputs unsupported handle %u at 0x%016"
+                  PRIx64 "\n",
+                  call->handle, env->pc);
+    helper_raise_illegal_instruction(env);
+}
+
+static G_NORETURN void
+mmix_semihosting_raise_unsupported(CPUMMIXState *env,
+                                   const MMIXSemihostingCall *call)
+{
+    qemu_log_mask(LOG_UNIMP,
+                  "MMIX unsupported hosted TRAP service %u handle %u at "
+                  "0x%016" PRIx64 "\n",
+                  call->service, call->handle, env->pc);
+    helper_raise_illegal_instruction(env);
 }
 
 static bool mmix_semihosting_read_byte(CPUMMIXState *env, uint64_t address,
@@ -1530,21 +1561,33 @@ static bool mmix_semihosting_read_cstring(CPUMMIXState *env, uint64_t address,
     return false;
 }
 
-static bool mmix_semihosting_write_stdout(CPUMMIXState *env,
-                                          const GByteArray *bytes)
+static const char *mmix_semihosting_console_name(uint32_t handle)
+{
+    switch (handle) {
+    case MMIX_SEMIHOSTING_HANDLE_STDOUT:
+        return "StdOut";
+    case MMIX_SEMIHOSTING_HANDLE_STDERR:
+        return "StdErr";
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static bool mmix_semihosting_write_console(CPUMMIXState *env, uint32_t handle,
+                                           const GByteArray *bytes)
 {
     CPUState *cs = env_cpu(env);
     MemTxResult result;
     size_t i;
 
     for (i = 0; i < bytes->len; i++) {
-        address_space_stb(cs->as, MMIX_SEMIHOSTING_STDOUT_TX, bytes->data[i],
+        address_space_stb(cs->as, MMIX_SEMIHOSTING_CONSOLE_TX, bytes->data[i],
                           MEMTXATTRS_UNSPECIFIED, &result);
         if (result != MEMTX_OK) {
             qemu_log_mask(LOG_UNIMP,
-                          "MMIX hosted Fputs could not write StdOut at "
+                          "MMIX hosted Fputs could not write %s at "
                           "0x%016" PRIx64 "\n",
-                          env->pc);
+                          mmix_semihosting_console_name(handle), env->pc);
             return false;
         }
     }
@@ -1552,17 +1595,25 @@ static bool mmix_semihosting_write_stdout(CPUMMIXState *env,
     return true;
 }
 
-static void mmix_semihosting_fputs_stdout(CPUMMIXState *env)
+static void mmix_semihosting_fputs_console(CPUMMIXState *env,
+                                           const MMIXSemihostingCall *call)
 {
-    GByteArray *bytes = g_byte_array_new();
-    uint64_t address = mmix_cpu_read_reg(env, 255);
+    GByteArray *bytes;
+    uint64_t address;
+
+    if (!semihosting_enabled(false)) {
+        mmix_semihosting_raise_disabled(env, call);
+    }
+
+    bytes = g_byte_array_new();
+    address = mmix_cpu_read_reg(env, 255);
 
     if (!mmix_semihosting_read_cstring(env, address, bytes)) {
         g_byte_array_free(bytes, true);
         helper_raise_illegal_instruction(env);
     }
 
-    if (!mmix_semihosting_write_stdout(env, bytes)) {
+    if (!mmix_semihosting_write_console(env, call->handle, bytes)) {
         g_byte_array_free(bytes, true);
         helper_raise_illegal_instruction(env);
     }
@@ -1575,35 +1626,17 @@ void helper_mmix_semihosting_trap(CPUMMIXState *env, uint32_t service,
 {
     MMIXSemihostingCall call = mmix_semihosting_decode_call(service, handle);
 
-    if (call.requires_semihosting && !semihosting_enabled(false)) {
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX semihosting disabled for hosted TRAP service %u "
-                      "handle %u at 0x%016" PRIx64 "\n",
-                      call.service, call.handle, env->pc);
-        helper_raise_illegal_instruction(env);
-    }
-
     switch (call.action) {
     case MMIX_SEMIHOSTING_ACTION_HALT:
         mmix_shutdown_with_cpu_log(env, "MMIX hosted Halt");
         break;
-    case MMIX_SEMIHOSTING_ACTION_FPUTS_STDOUT:
-        mmix_semihosting_fputs_stdout(env);
+    case MMIX_SEMIHOSTING_ACTION_FPUTS_CONSOLE:
+        mmix_semihosting_fputs_console(env, &call);
         return;
     case MMIX_SEMIHOSTING_ACTION_FPUTS_BAD_HANDLE:
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX hosted Fputs unsupported handle %u at 0x%016"
-                      PRIx64 "\n",
-                      call.handle, env->pc);
-        helper_raise_illegal_instruction(env);
-        break;
+        mmix_semihosting_raise_fputs_bad_handle(env, &call);
     case MMIX_SEMIHOSTING_ACTION_UNSUPPORTED:
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX unsupported hosted TRAP service %u handle %u at "
-                      "0x%016" PRIx64 "\n",
-                      call.service, call.handle, env->pc);
-        helper_raise_illegal_instruction(env);
-        break;
+        mmix_semihosting_raise_unsupported(env, &call);
     default:
         g_assert_not_reached();
     }
