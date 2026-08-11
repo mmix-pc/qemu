@@ -350,6 +350,8 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
         mcc->parent_phases.hold(obj, type);
     }
 
+    mmix_cpu_release_semihosting_file_handles(&cpu->env);
+
     memset(&cpu->env, 0, offsetof(CPUMMIXState, end_reset_fields));
     cpu->env.pc = 0;
     cpu->env.npc = 4;

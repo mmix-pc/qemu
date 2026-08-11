@@ -25,6 +25,7 @@
 #define MMIX_REGS 256
 #define MMIX_SREGS 32
 #define MMIX_LOCAL_REGS 256
+#define MMIX_SEMIHOSTING_HANDLES 256
 
 #define MMIX_INITIAL_RK 0
 #define MMIX_INITIAL_RT 0x8000000500000000ULL
@@ -168,6 +169,8 @@ typedef struct CPUArchState {
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
     bool flat_translation;
+    uint32_t semihosting_file_guestfds[MMIX_SEMIHOSTING_HANDLES];
+    uint8_t semihosting_file_modes[MMIX_SEMIHOSTING_HANDLES];
 
     struct {} end_reset_fields;
 } CPUMMIXState;
@@ -207,6 +210,7 @@ void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_is_privileged(CPUMMIXState *env);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);
+void mmix_cpu_release_semihosting_file_handles(CPUMMIXState *env);
 bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                             MMUAccessType access_type, bool debug,
                             bool allow_traps,

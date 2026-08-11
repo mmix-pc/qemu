@@ -139,6 +139,19 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
         ("MMIX hosted Fputs unsupported handle 0",
          "MMIX illegal instruction"),
     ),
+    MMIXExpectedFailure(
+        "semihosting-fopen-stdout-handle",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN, MMIX_SEMIHOSTING_STDOUT),
+        ("MMIX hosted Fopen unsupported standard handle StdOut",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "semihosting-fread-unopened-file-handle",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        ("MMIX hosted Fread unopened file handle 3",
+         "MMIX illegal instruction"),
+    ),
 ]
 
 SEMIHOSTING_PROCESS_FAILURE_TESTS = [
