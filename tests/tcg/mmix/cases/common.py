@@ -58,7 +58,6 @@ MMIX_SEMIHOSTING_STDOUT = 1
 MMIX_SEMIHOSTING_FPUTS = 7
 MMIX_SEMIHOSTING_FPUTWS = 8
 MMIX_SEMIHOSTING_STRING_MAX = 256
-MMIX_SEMIHOSTING_ARGS = ("-semihosting",)
 
 
 def serial_tx_program():
@@ -331,7 +330,6 @@ class MMIXExpectedFailure:
     program: bytes
     patterns: tuple[str, ...]
     absent: tuple[str, ...] = ("MMIX test exit",)
-    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -340,7 +338,6 @@ class MMIXSerialTest:
     program: bytes
     pc: int
     output: bytes
-    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

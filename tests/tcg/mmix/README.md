@@ -6,6 +6,10 @@ The tests run `qemu-system-mmix` with small raw instruction images or `.mmo`
 images and check CPU state, loader failures, and serial output. Some fixtures
 are generated from MMIXAL sources when `mmixal` is available.
 
+Semihosted runtime tests use separate pytest entry points and pass
+`-semihosting` explicitly. Other raw-image, serial, and loader tests do not
+enable semihosting by default.
+
 ## Dependencies
 
 Required Python packages:

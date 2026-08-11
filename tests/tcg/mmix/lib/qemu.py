@@ -10,6 +10,8 @@ import re
 import subprocess
 from typing import Dict
 
+QEMU_SEMIHOSTING_ARGS = ("-semihosting",)
+
 
 @dataclasses.dataclass(frozen=True)
 class QemuLog:

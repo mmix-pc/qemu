@@ -12,13 +12,6 @@ SERIAL_TESTS = [
         output=b"MMIX\n",
     ),
     MMIXSerialTest(
-        "hosted-fputs-stdout",
-        hosted_fputs_program(),
-        pc=0x14,
-        output=b"Hosted MMIX\n",
-        qemu_args=MMIX_SEMIHOSTING_ARGS,
-    ),
-    MMIXSerialTest(
         "mmo-serial-tx-output",
         mmo_image(
             [
@@ -31,5 +24,14 @@ SERIAL_TESTS = [
         ),
         pc=0x38,
         output=b"MMIX\n",
+    ),
+]
+
+SEMIHOSTING_SERIAL_TESTS = [
+    MMIXSerialTest(
+        "hosted-fputs-stdout",
+        hosted_fputs_program(),
+        pc=0x14,
+        output=b"Hosted MMIX\n",
     ),
 ]

@@ -64,6 +64,9 @@ EXPECTED_FAILURE_TESTS = [
         jump(SYNC, 8),
         ("MMIX invalid SYNC 8", "MMIX illegal instruction"),
     ),
+]
+
+SEMIHOSTING_DISABLED_FAILURE_TESTS = [
     MMIXExpectedFailure(
         "hosted-fputs-semihosting-disabled",
         b"".join(
@@ -76,6 +79,9 @@ EXPECTED_FAILURE_TESTS = [
         ("MMIX semihosting disabled for hosted TRAP service 7 handle 1",
          "MMIX illegal instruction"),
     ),
+]
+
+SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
         "unsupported-hosted-trap-service",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTWS, MMIX_SEMIHOSTING_STDOUT),
@@ -93,7 +99,6 @@ EXPECTED_FAILURE_TESTS = [
         ),
         ("MMIX hosted Fputs invalid string address 0x4000000000000000",
          "MMIX illegal instruction"),
-        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
     MMIXExpectedFailure(
         "hosted-fputs-unterminated-string",
@@ -109,7 +114,6 @@ EXPECTED_FAILURE_TESTS = [
         ("MMIX hosted Fputs string at 0x0000000000000100 exceeds 256 bytes "
          "without NUL",
          "MMIX illegal instruction"),
-        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
     MMIXExpectedFailure(
         "hosted-fputs-unsupported-handle",
@@ -121,6 +125,5 @@ EXPECTED_FAILURE_TESTS = [
         ),
         ("MMIX hosted Fputs unsupported handle 2",
          "MMIX illegal instruction"),
-        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
 ]

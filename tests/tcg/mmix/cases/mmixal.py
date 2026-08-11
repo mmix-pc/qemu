@@ -72,7 +72,6 @@ class MMIXALSerialCase:
     output: bytes
     source: str = None
     source_path: pathlib.Path = None
-    qemu_args: tuple[str, ...] = ()
 
     def build(self, mmixal, workdir):
         return MMIXSerialTest(
@@ -81,7 +80,6 @@ class MMIXALSerialCase:
                                 self.source, self.source_path),
             pc=self.pc,
             output=self.output,
-            qemu_args=self.qemu_args,
         )
 
 
@@ -134,13 +132,15 @@ MMIXAL_SERIAL_TESTS = [
         output=b"QEMU\n",
         source=MMIXAL_UART_SOURCE,
     ),
+]
+
+MMIXAL_SEMIHOSTING_SERIAL_TESTS = [
     MMIXALSerialCase(
         "mmixal-mmo-hosted-fputs-output",
         "hosted",
         pc=0x08,
         output=b"Hosted MMIXAL\n",
         source=MMIXAL_HOSTED_SOURCE,
-        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
     MMIXALSerialCase(
         "mmixal-mmo-prime-table",
@@ -148,7 +148,6 @@ MMIXAL_SERIAL_TESTS = [
         pc=0x1b8,
         output=MMIXAL_PRIME_TABLE_OUTPUT.read_bytes(),
         source_path=MMIXAL_PRIME_TABLE_SOURCE,
-        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
 ]
 

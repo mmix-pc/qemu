@@ -15,7 +15,7 @@ from lib.asserts import (
     assert_serial_output,
 )
 from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE
-from lib.qemu import read_log, run_kernel
+from lib.qemu import QEMU_SEMIHOSTING_ARGS, read_log, run_kernel
 
 
 def run_one(qemu, workdir, test):
@@ -33,7 +33,7 @@ def run_one(qemu, workdir, test):
     assert_regs(test.name, result, test.regs)
 
 
-def run_expected_failure(qemu, workdir, test):
+def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
     image = workdir / f"{test.name}.bin"
     log = workdir / f"{test.name}.log"
 
@@ -43,7 +43,7 @@ def run_expected_failure(qemu, workdir, test):
 
     try:
         run_kernel(qemu, image, trace="unimp,int", log=log,
-                   qemu_args=getattr(test, "qemu_args", ()),
+                   qemu_args=qemu_args,
                    check=False, timeout=2)
     except subprocess.TimeoutExpired:
         pass
@@ -55,9 +55,15 @@ def run_expected_failure(qemu, workdir, test):
     assert_log_patterns(test.name, log_text, test.patterns, test.absent)
 
 
-def run_serial_test(qemu, workdir, test):
-    suffix = ".mmo" if test.program.startswith(bytes((MMIX_MMO_ESCAPE,
-                                                      MMIX_MMO_LOP_PRE))) else ".bin"
+def run_semihosting_expected_failure(qemu, workdir, test):
+    run_expected_failure(qemu, workdir, test,
+                         qemu_args=QEMU_SEMIHOSTING_ARGS)
+
+
+def run_serial_test(qemu, workdir, test, *, qemu_args=()):
+    is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
+                                            MMIX_MMO_LOP_PRE)))
+    suffix = ".mmo" if is_mmo else ".bin"
     image = workdir / f"{test.name}{suffix}"
     log = workdir / f"{test.name}.log"
     serial = workdir / f"{test.name}.serial"
@@ -73,7 +79,7 @@ def run_serial_test(qemu, workdir, test):
         serial=f"file:{serial}",
         trace="int",
         log=log,
-        qemu_args=getattr(test, "qemu_args", ()),
+        qemu_args=qemu_args,
         check=True,
         timeout=10,
     )
@@ -83,6 +89,10 @@ def run_serial_test(qemu, workdir, test):
 
     actual = serial.read_bytes()
     assert_serial_output(test.name, actual, test.output)
+
+
+def run_semihosting_serial_test(qemu, workdir, test):
+    run_serial_test(qemu, workdir, test, qemu_args=QEMU_SEMIHOSTING_ARGS)
 
 
 def run_loader_failure(qemu, workdir, test):
