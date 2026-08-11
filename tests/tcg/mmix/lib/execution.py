@@ -16,10 +16,19 @@ from lib.asserts import (
     assert_serial_output,
 )
 from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE
-from lib.qemu import QEMU_SEMIHOSTING_ARGS, read_log, run_kernel
+from lib.qemu import (
+    QEMU_SEMIHOSTING_ARGS,
+    QEMU_SEMIHOSTING_STDIN_ARGS,
+    read_log,
+    run_kernel,
+)
 
 
-def run_one(qemu, workdir, test, *, qemu_args=()):
+def _test_stdin_data(test, stdin_data):
+    return test.stdin_data if stdin_data is None else stdin_data
+
+
+def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
     image = workdir / f"{test.name}.bin"
     log = workdir / f"{test.name}.log"
 
@@ -28,7 +37,8 @@ def run_one(qemu, workdir, test, *, qemu_args=()):
         log.unlink()
 
     completed = run_kernel(qemu, image, trace="int", log=log,
-                           qemu_args=qemu_args, check=False, timeout=10)
+                           qemu_args=qemu_args, check=False, timeout=10,
+                           stdin_data=_test_stdin_data(test, stdin_data))
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
@@ -38,6 +48,12 @@ def run_one(qemu, workdir, test, *, qemu_args=()):
 
 def run_semihosting_one(qemu, workdir, test):
     qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_ARGS
+
+    run_one(qemu, workdir, test, qemu_args=qemu_args)
+
+
+def run_semihosting_stdin_one(qemu, workdir, test):
+    qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_STDIN_ARGS
 
     run_one(qemu, workdir, test, qemu_args=qemu_args)
 
@@ -89,7 +105,7 @@ def run_process_failure(qemu, workdir, test):
     assert_output_patterns(test.name, text, test.patterns)
 
 
-def run_serial_test(qemu, workdir, test, *, qemu_args=()):
+def run_serial_test(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
     is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
                                             MMIX_MMO_LOP_PRE)))
     suffix = ".mmo" if is_mmo else ".bin"
@@ -111,6 +127,7 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=()):
         qemu_args=qemu_args,
         check=False,
         timeout=10,
+        stdin_data=_test_stdin_data(test, stdin_data),
     )
 
     result = read_log(log)
@@ -123,6 +140,12 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=()):
 
 def run_semihosting_serial_test(qemu, workdir, test):
     qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_ARGS
+
+    run_serial_test(qemu, workdir, test, qemu_args=qemu_args)
+
+
+def run_semihosting_stdin_serial_test(qemu, workdir, test):
+    qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_STDIN_ARGS
 
     run_serial_test(qemu, workdir, test, qemu_args=qemu_args)
 

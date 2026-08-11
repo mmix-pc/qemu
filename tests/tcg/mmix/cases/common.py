@@ -6,6 +6,7 @@
 
 import dataclasses
 import struct
+from typing import Optional
 
 from lib.mmix_asm import *
 from lib.mmo import (
@@ -342,6 +343,7 @@ class MMIXTest:
     regs: dict[int, int]
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
+    stdin_data: Optional[bytes] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -360,6 +362,7 @@ class MMIXSerialTest:
     output: bytes
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
+    stdin_data: Optional[bytes] = None
 
 
 @dataclasses.dataclass(frozen=True)

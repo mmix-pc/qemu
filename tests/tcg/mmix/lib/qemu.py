@@ -8,9 +8,16 @@ import dataclasses
 import pathlib
 import re
 import subprocess
-from typing import Dict
+from typing import Dict, Optional
 
 QEMU_SEMIHOSTING_ARGS = ("-semihosting",)
+QEMU_SEMIHOSTING_STDIN_CHARDEV = "mmix-semihosting-stdin"
+QEMU_SEMIHOSTING_STDIN_ARGS = (
+    "-chardev",
+    f"stdio,id={QEMU_SEMIHOSTING_STDIN_CHARDEV},signal=off",
+    "-semihosting-config",
+    f"enable=on,chardev={QEMU_SEMIHOSTING_STDIN_CHARDEV}",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,11 +61,14 @@ def run_kernel(
     check=True,
     timeout=10,
     capture_output=False,
+    stdin_data: Optional[bytes] = None,
 ):
     kwargs = {}
     if capture_output:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.PIPE
+    if stdin_data is not None:
+        kwargs["input"] = stdin_data
 
     return subprocess.run(
         build_kernel_command(qemu, kernel, serial=serial, trace=trace, log=log,

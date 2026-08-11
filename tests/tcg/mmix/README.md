@@ -10,6 +10,10 @@ Semihosted runtime tests use separate pytest entry points and pass
 `-semihosting` explicitly. Other raw-image, serial, and loader tests do not
 enable semihosting by default.
 
+Tests that need deterministic semihosting `StdIn` should use the stdio chardev
+helper in `lib.qemu` and pass input bytes through the test case. This keeps
+stdin setup explicit and avoids manual terminal interaction.
+
 ## Dependencies
 
 Required Python packages:
