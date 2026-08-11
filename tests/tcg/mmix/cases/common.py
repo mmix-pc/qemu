@@ -87,6 +87,7 @@ def hosted_fputs_program():
         [
             *set_octa(R255, message_address),
             insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, MMIX_SEMIHOSTING_STDOUT),
+            wyde(SETL, R255, 0),
             halt(),
         ]
     )
@@ -323,6 +324,7 @@ class MMIXTest:
     program: bytes
     pc: int
     regs: dict[int, int]
+    exit_status: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -339,6 +341,7 @@ class MMIXSerialTest:
     program: bytes
     pc: int
     output: bytes
+    exit_status: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -354,6 +357,7 @@ class MMIXMMOTest:
     image: bytes
     pc: int
     regs: dict[int, int]
+    exit_status: int = 0
 
 
 def case_id(test):

@@ -102,6 +102,8 @@ MMO_LOADER_TESTS = [
             [
                 mmo_loc(0x20),
                 wyde(SETL, R3, 0x33),
+                insn(ADDI, R4, R255, 0),
+                wyde(SETL, R255, 0),
                 halt(),
                 mmo_spec(3),
                 struct.pack(">I", 0x99aabbcc),
@@ -109,8 +111,8 @@ MMO_LOADER_TESTS = [
                 mmo_stab_end(),
             ]
         ),
-        pc=0x24,
-        regs={R3: 0x33, R255: 0x20},
+        pc=0x2c,
+        regs={R3: 0x33, R4: 0x20},
     ),
     MMIXMMOTest(
         "mmo-data-segment-load",
@@ -238,12 +240,12 @@ MMO_LOADER_TESTS = [
                 mmo_fixrx(24, 0x01fffffe),
                 wyde(SETL, R4, 0x77),  # target
                 halt(),
-                mmo_post(R255, {R255: 0x08}),
+                mmo_post(R255, {R255: 0}),
                 mmo_stab_end(),
             ]
         ),
         pc=0x04,
-        regs={R4: 0x77, R255: 0x08},
+        regs={R4: 0x77},
     ),
     MMIXMMOTest(
         "mmo-post-entry-globals",
@@ -252,13 +254,13 @@ MMO_LOADER_TESTS = [
                 mmo_loc(0x40),
                 insn(GET, R1, 0, SR_G),
                 insn(ADDI, R3, R255, 0),
+                wyde(SETL, R255, 0),
                 halt(),
                 mmo_post(R254, {R254: 0x123456789ABCDEF0, R255: 0x40}),
                 mmo_stab_end(),
             ]
         ),
-        pc=0x48,
-        regs={R1: 254, R3: 0x40, R254: 0x123456789ABCDEF0, R255: 0x40,
-        },
+        pc=0x4c,
+        regs={R1: 254, R3: 0x40, R254: 0x123456789ABCDEF0},
     ),
 ]

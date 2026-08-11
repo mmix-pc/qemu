@@ -8,6 +8,7 @@ import subprocess
 
 from lib.asserts import (
     assert_exit_pc,
+    assert_exit_status,
     assert_log_patterns,
     assert_output_patterns,
     assert_process_failed,
@@ -26,11 +27,12 @@ def run_one(qemu, workdir, test, *, qemu_args=()):
     if log.exists():
         log.unlink()
 
-    run_kernel(qemu, image, trace="int", log=log, qemu_args=qemu_args,
-               check=True, timeout=10)
+    completed = run_kernel(qemu, image, trace="int", log=log,
+                           qemu_args=qemu_args, check=False, timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
+    assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)
 
 
@@ -78,19 +80,20 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=()):
         if path.exists():
             path.unlink()
 
-    run_kernel(
+    completed = run_kernel(
         qemu,
         image,
         serial=f"file:{serial}",
         trace="int",
         log=log,
         qemu_args=qemu_args,
-        check=True,
+        check=False,
         timeout=10,
     )
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
+    assert_exit_status(test.name, completed, test.exit_status)
 
     actual = serial.read_bytes()
     assert_serial_output(test.name, actual, test.output)
@@ -127,8 +130,10 @@ def run_mmo_test(qemu, workdir, test):
     if log.exists():
         log.unlink()
 
-    run_kernel(qemu, image, trace="int", log=log, check=True, timeout=10)
+    completed = run_kernel(qemu, image, trace="int", log=log, check=False,
+                           timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
+    assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)

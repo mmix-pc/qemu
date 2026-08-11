@@ -31,7 +31,7 @@ SEMIHOSTING_SERIAL_TESTS = [
     MMIXSerialTest(
         "hosted-fputs-stdout",
         hosted_fputs_program(),
-        pc=0x14,
+        pc=0x18,
         output=b"Hosted MMIX\n",
     ),
 ]

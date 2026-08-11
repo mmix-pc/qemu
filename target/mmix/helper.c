@@ -1414,7 +1414,8 @@ void helper_mmix_resume(CPUMMIXState *env, uint32_t x, uint32_t y, uint32_t z)
 }
 
 static G_NORETURN void mmix_shutdown_with_cpu_log(CPUMMIXState *env,
-                                                  const char *reason)
+                                                  const char *reason,
+                                                  int exit_code)
 {
     CPUState *cs = env_cpu(env);
 
@@ -1428,7 +1429,7 @@ static G_NORETURN void mmix_shutdown_with_cpu_log(CPUMMIXState *env,
                       env->pc);
         log_cpu_state_mask(CPU_LOG_INT, cs, 0);
         qemu_system_shutdown_request_with_code(SHUTDOWN_CAUSE_GUEST_SHUTDOWN,
-                                               0);
+                                               exit_code);
     }
     cs->halted = 1;
     cpu_loop_exit_noexc(cs);
@@ -1436,7 +1437,13 @@ static G_NORETURN void mmix_shutdown_with_cpu_log(CPUMMIXState *env,
 
 void helper_mmix_test_exit(CPUMMIXState *env)
 {
-    mmix_shutdown_with_cpu_log(env, "MMIX test exit");
+    mmix_shutdown_with_cpu_log(env, "MMIX test exit", 0);
+}
+
+static G_NORETURN void mmix_semihosting_halt(CPUMMIXState *env)
+{
+    mmix_shutdown_with_cpu_log(env, "MMIX hosted Halt",
+                               mmix_cpu_read_reg(env, 255) & 0xff);
 }
 
 static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
@@ -1628,7 +1635,7 @@ void helper_mmix_semihosting_trap(CPUMMIXState *env, uint32_t service,
 
     switch (call.action) {
     case MMIX_SEMIHOSTING_ACTION_HALT:
-        mmix_shutdown_with_cpu_log(env, "MMIX hosted Halt");
+        mmix_semihosting_halt(env);
         break;
     case MMIX_SEMIHOSTING_ACTION_FPUTS_CONSOLE:
         mmix_semihosting_fputs_console(env, &call);

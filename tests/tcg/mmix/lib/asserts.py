@@ -18,6 +18,14 @@ def assert_exit_pc(name, result, expected_pc):
         )
 
 
+def assert_exit_status(name, result, expected_status):
+    if result.returncode != expected_status:
+        raise AssertionError(
+            f"{name}: exit status expected {expected_status}, "
+            f"got {result.returncode}"
+        )
+
+
 def assert_regs(name, result, expected_regs):
     for reg, expected in expected_regs.items():
         actual = result.regs.get(reg)

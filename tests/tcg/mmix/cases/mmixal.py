@@ -60,6 +60,7 @@ Ptr     GREG    Msg
         LOC     #0
 Main    ADDU    $255,Ptr,0
         TRAP    0,Fputs,StdOut
+        SET     $255,0
         TRAP    0,Halt,0
 """
 
@@ -138,7 +139,7 @@ MMIXAL_SEMIHOSTING_SERIAL_TESTS = [
     MMIXALSerialCase(
         "mmixal-mmo-hosted-fputs-output",
         "hosted",
-        pc=0x08,
+        pc=0x0c,
         output=b"Hosted MMIXAL\n",
         source=MMIXAL_HOSTED_SOURCE,
     ),
