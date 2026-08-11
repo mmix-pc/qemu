@@ -27,6 +27,8 @@ SERIAL_TESTS = [
     ),
 ]
 
+LLVM_SMOKE_CONTRACT = hosted_llvm_smoke_program()
+
 SEMIHOSTING_SERIAL_TESTS = [
     MMIXSerialTest(
         "semihosting-fputs-stdout",
@@ -42,5 +44,11 @@ SEMIHOSTING_SERIAL_TESTS = [
         ),
         pc=0x18,
         output=b"Hosted MMIX stderr\n",
+    ),
+    MMIXSerialTest(
+        "semihosting-llvm-smoke-contract",
+        LLVM_SMOKE_CONTRACT[0],
+        pc=LLVM_SMOKE_CONTRACT[1],
+        output=b"LLVM smoke\n",
     ),
 ]

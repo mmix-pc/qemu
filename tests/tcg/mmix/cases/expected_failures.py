@@ -134,6 +134,13 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
 
 SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
+        "semihosting-unsupported-fgetws",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FGETWS,
+             MMIX_SEMIHOSTING_STDIN),
+        ("MMIX unsupported hosted TRAP service 5 handle 0",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
         "semihosting-unsupported-trap-service",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTWS, MMIX_SEMIHOSTING_STDOUT),
         ("MMIX unsupported hosted TRAP service 8 handle 1",

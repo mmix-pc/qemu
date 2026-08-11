@@ -62,6 +62,7 @@ MMIX_SEMIHOSTING_FOPEN = 1
 MMIX_SEMIHOSTING_FCLOSE = 2
 MMIX_SEMIHOSTING_FREAD = 3
 MMIX_SEMIHOSTING_FGETS = 4
+MMIX_SEMIHOSTING_FGETWS = 5
 MMIX_SEMIHOSTING_FWRITE = 6
 MMIX_SEMIHOSTING_FPUTS = 7
 MMIX_SEMIHOSTING_FPUTWS = 8
@@ -111,6 +112,27 @@ def hosted_fputs_program(handle=MMIX_SEMIHOSTING_STDOUT,
     )
     padding = insn(SWYM, 0, 0, 0) * ((message_address - len(prefix)) // 4)
     return prefix + padding + message + b"\0"
+
+
+def hosted_llvm_smoke_program(message=b"LLVM smoke\n"):
+    arg_address = 0x100
+    buffer_address = 0x140
+    prefix = b"".join(
+        [
+            *set_octa(R1, arg_address),
+            *set_octa(R2, buffer_address),
+            *set_octa(R3, len(message)),
+            insn(STOUI, R2, R1, 0),
+            insn(STOUI, R3, R1, 8),
+            *set_octa(R255, arg_address),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE,
+                 MMIX_SEMIHOSTING_STDOUT),
+            wyde(SETL, R255, 0),
+            halt(),
+        ]
+    )
+    padding = insn(SWYM, 0, 0, 0) * ((buffer_address - len(prefix)) // 4)
+    return prefix + padding + message, len(prefix) - 4
 
 
 def program_with_handler(prefix, handler_addr, handler):
