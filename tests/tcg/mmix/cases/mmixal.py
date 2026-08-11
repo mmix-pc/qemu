@@ -65,6 +65,25 @@ Main    ADDU    $255,Ptr,0
         TRAP    0,Halt,0
 """
 
+MMIXAL_STDIN_READ_SOURCE = """\
+        LOC     Data_Segment
+Read    OCTA    Buffer,0
+Write   OCTA    Buffer,0
+Buffer  OCTA    0,0
+ReadPtr GREG    Read
+WritePtr GREG   Write
+        LOC     #100
+Main    SET     $2,11
+        STOU    $2,ReadPtr,8
+        STOU    $2,WritePtr,8
+        ADDU    $255,ReadPtr,0
+        TRAP    0,Fread,StdIn
+        ADDU    $255,WritePtr,0
+        TRAP    0,Fwrite,StdOut
+        SET     $255,0
+        TRAP    0,Halt,0
+"""
+
 
 def mmixal_file_read_source(size):
     return f"""\
@@ -141,6 +160,7 @@ class MMIXALSerialCase:
     source_path: pathlib.Path = None
     qemu_args: tuple[str, ...] = ()
     exit_status: int = 0
+    stdin_data: bytes = None
 
     def build(self, mmixal, workdir):
         return MMIXSerialTest(
@@ -151,6 +171,7 @@ class MMIXALSerialCase:
             output=self.output,
             qemu_args=self.qemu_args,
             exit_status=self.exit_status,
+            stdin_data=self.stdin_data,
         )
 
 
@@ -250,6 +271,14 @@ MMIXAL_SEMIHOSTING_SERIAL_TESTS = [
         pc=0x1b8,
         output=MMIXAL_PRIME_TABLE_OUTPUT.read_bytes(),
         source_path=MMIXAL_PRIME_TABLE_SOURCE,
+    ),
+    MMIXALSerialCase(
+        "mmixal-mmo-stdin-fread",
+        "stdin_fread",
+        pc=0x120,
+        output=b"MMIX stdin\n",
+        source=MMIXAL_STDIN_READ_SOURCE,
+        stdin_data=b"MMIX stdin\n",
     ),
 ]
 

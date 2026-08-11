@@ -15,6 +15,7 @@ from cases.mmixal import (
 from lib.execution import (
     run_mmo_test,
     run_semihosting_serial_test,
+    run_semihosting_stdin_serial_test,
     run_serial_test,
 )
 
@@ -27,8 +28,11 @@ def test_mmixal_serial(qemu, mmixal, workdir, test_case):
 @pytest.mark.parametrize("test_case", MMIXAL_SEMIHOSTING_SERIAL_TESTS,
                          ids=case_id)
 def test_mmixal_semihosting_serial(qemu, mmixal, workdir, test_case):
-    run_semihosting_serial_test(qemu, workdir,
-                                test_case.build(mmixal, workdir))
+    test = test_case.build(mmixal, workdir)
+    if test.stdin_data is None:
+        run_semihosting_serial_test(qemu, workdir, test)
+    else:
+        run_semihosting_stdin_serial_test(qemu, workdir, test)
 
 
 def test_mmixal_semihosting_file_read(qemu, mmixal, workdir):
