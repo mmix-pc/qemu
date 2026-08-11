@@ -14,12 +14,126 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/core/sysbus.h"
+#include "semihosting/semihost.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
 #include "mmo-loader.h"
 
 #define MMIX_VIRT_UART_BASE 0x100000000ULL
+#define MMIX_ARG_OCTA_SIZE 8
+
+static size_t mmix_arg_octa_align(size_t size)
+{
+    return QEMU_ALIGN_UP(size, MMIX_ARG_OCTA_SIZE);
+}
+
+static bool mmix_add_arg_layout_size(size_t *layout_size, size_t size,
+                                     Error **errp)
+{
+    if (size > MMIX_POOL_SEGMENT_SIZE - *layout_size) {
+        error_setg(errp, "MMIX semihosting argument block exceeds "
+                   "Pool Segment size 0x%" PRIx64,
+                   (uint64_t)MMIX_POOL_SEGMENT_SIZE);
+        return false;
+    }
+
+    *layout_size += size;
+    return true;
+}
+
+static bool mmix_argument_layout_size(int argc, size_t *layout_size,
+                                      Error **errp)
+{
+    size_t size;
+    int i;
+
+    if (argc < 0 ||
+        argc > (MMIX_POOL_SEGMENT_SIZE / MMIX_ARG_OCTA_SIZE) - 2) {
+        error_setg(errp, "MMIX semihosting argument count %d exceeds "
+                   "Pool Segment capacity", argc);
+        return false;
+    }
+
+    size = ((size_t)argc + 2) * MMIX_ARG_OCTA_SIZE;
+    for (i = 0; i < argc; i++) {
+        const char *arg = semihosting_get_arg(i);
+        size_t arg_size;
+
+        if (arg == NULL) {
+            error_setg(errp, "MMIX semihosting argument %d is NULL", i);
+            return false;
+        }
+
+        arg_size = mmix_arg_octa_align(strlen(arg) + 1);
+        if (!mmix_add_arg_layout_size(&size, arg_size, errp)) {
+            return false;
+        }
+    }
+
+    *layout_size = size;
+    return true;
+}
+
+static bool mmix_write_semihosting_arguments(MachineState *machine,
+                                             Error **errp)
+{
+    int argc = semihosting_get_argc();
+    size_t layout_size;
+    size_t string_offset;
+    g_autofree uint8_t *layout = NULL;
+    MemTxResult result;
+    int i;
+
+    if (!mmix_argument_layout_size(argc, &layout_size, errp)) {
+        return false;
+    }
+    if (machine->ram_size < MMIX_POOL_SEGMENT_PHYS_BASE ||
+        machine->ram_size - MMIX_POOL_SEGMENT_PHYS_BASE < layout_size) {
+        error_setg(errp, "MMIX semihosting argument block does not fit "
+                   "in machine RAM");
+        return false;
+    }
+
+    layout = g_malloc0(layout_size);
+    string_offset = ((size_t)argc + 2) * MMIX_ARG_OCTA_SIZE;
+
+    stq_be_p(layout, MMIX_POOL_SEGMENT_BASE + layout_size);
+    for (i = 0; i < argc; i++) {
+        const char *arg = semihosting_get_arg(i);
+        size_t arg_size = strlen(arg) + 1;
+
+        stq_be_p(layout + ((size_t)i + 1) * MMIX_ARG_OCTA_SIZE,
+                 MMIX_POOL_SEGMENT_BASE + string_offset);
+        memcpy(layout + string_offset, arg, arg_size);
+        string_offset += mmix_arg_octa_align(arg_size);
+    }
+
+    result = address_space_write(&address_space_memory,
+                                 MMIX_POOL_SEGMENT_PHYS_BASE,
+                                 MEMTXATTRS_UNSPECIFIED, layout, layout_size);
+    if (result != MEMTX_OK) {
+        error_setg(errp, "could not write MMIX semihosting argument block");
+        return false;
+    }
+
+    return true;
+}
+
+static void mmix_setup_semihosting_arguments(MachineState *machine)
+{
+    Error *err = NULL;
+
+    if (!semihosting_enabled(false)) {
+        return;
+    }
+
+    if (!mmix_write_semihosting_arguments(machine, &err)) {
+        error_reportf_err(err,
+                          "could not set up MMIX semihosting arguments: ");
+        exit(1);
+    }
+}
 
 static void mmix_apply_kernel_load_info(CPUState *cpu,
                                         const MMIXKernelLoadInfo *info)
@@ -72,6 +186,8 @@ static void mmix_virt_init(MachineState *machine)
         }
         mmix_apply_kernel_load_info(cpu, &load_info);
     }
+
+    mmix_setup_semihosting_arguments(machine);
 }
 
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)

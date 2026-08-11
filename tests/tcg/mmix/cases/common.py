@@ -329,6 +329,7 @@ class MMIXTest:
     pc: int
     regs: dict[int, int]
     exit_status: int = 0
+    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

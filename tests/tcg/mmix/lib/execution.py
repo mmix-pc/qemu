@@ -37,7 +37,9 @@ def run_one(qemu, workdir, test, *, qemu_args=()):
 
 
 def run_semihosting_one(qemu, workdir, test):
-    run_one(qemu, workdir, test, qemu_args=QEMU_SEMIHOSTING_ARGS)
+    qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_ARGS
+
+    run_one(qemu, workdir, test, qemu_args=qemu_args)
 
 
 def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
