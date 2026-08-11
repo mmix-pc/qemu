@@ -68,7 +68,7 @@ EXPECTED_FAILURE_TESTS = [
 
 SEMIHOSTING_DISABLED_FAILURE_TESTS = [
     MMIXExpectedFailure(
-        "hosted-fputs-semihosting-disabled",
+        "semihosting-fputs-stdout-disabled",
         b"".join(
             [
                 *set_octa(R255, 0x40),
@@ -79,17 +79,29 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
         ("MMIX semihosting disabled for hosted TRAP service 7 handle 1",
          "MMIX illegal instruction"),
     ),
+    MMIXExpectedFailure(
+        "semihosting-fputs-stderr-disabled",
+        b"".join(
+            [
+                *set_octa(R255, 0x40),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
+                     MMIX_SEMIHOSTING_STDERR),
+            ]
+        ),
+        ("MMIX semihosting disabled for hosted TRAP service 7 handle 2",
+         "MMIX illegal instruction"),
+    ),
 ]
 
 SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
-        "unsupported-hosted-trap-service",
+        "semihosting-unsupported-trap-service",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTWS, MMIX_SEMIHOSTING_STDOUT),
         ("MMIX unsupported hosted TRAP service 8 handle 1",
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "hosted-fputs-invalid-string-address",
+        "semihosting-fputs-invalid-string-address",
         b"".join(
             [
                 *set_octa(R255, 0x4000000000000000),
@@ -101,7 +113,7 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "hosted-fputs-unterminated-string",
+        "semihosting-fputs-unterminated-string",
         b"".join(
             [
                 *set_octa(R255, 0x100),
@@ -116,14 +128,15 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "hosted-fputs-unsupported-handle",
+        "semihosting-fputs-stdin-handle",
         b"".join(
             [
                 *set_octa(R255, 0x40),
-                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, 2),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
+                     MMIX_SEMIHOSTING_STDIN),
             ]
         ),
-        ("MMIX hosted Fputs unsupported handle 2",
+        ("MMIX hosted Fputs unsupported handle 0",
          "MMIX illegal instruction"),
     ),
 ]

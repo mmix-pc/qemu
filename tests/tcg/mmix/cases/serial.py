@@ -29,9 +29,18 @@ SERIAL_TESTS = [
 
 SEMIHOSTING_SERIAL_TESTS = [
     MMIXSerialTest(
-        "hosted-fputs-stdout",
+        "semihosting-fputs-stdout",
         hosted_fputs_program(),
         pc=0x18,
         output=b"Hosted MMIX\n",
+    ),
+    MMIXSerialTest(
+        "semihosting-fputs-stderr",
+        hosted_fputs_program(
+            handle=MMIX_SEMIHOSTING_STDERR,
+            message=b"Hosted MMIX stderr\n",
+        ),
+        pc=0x18,
+        output=b"Hosted MMIX stderr\n",
     ),
 ]

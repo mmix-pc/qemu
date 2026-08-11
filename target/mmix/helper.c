@@ -1462,7 +1462,8 @@ static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
         }
         break;
     case MMIX_SEMIHOSTING_SERVICE_FPUTS:
-        if (handle == MMIX_SEMIHOSTING_HANDLE_STDOUT) {
+        if (handle == MMIX_SEMIHOSTING_HANDLE_STDOUT ||
+            handle == MMIX_SEMIHOSTING_HANDLE_STDERR) {
             call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_CONSOLE;
         } else {
             call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_BAD_HANDLE;

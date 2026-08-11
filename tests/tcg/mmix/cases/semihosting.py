@@ -6,13 +6,13 @@ from .common import *
 
 SEMIHOSTING_TESTS = [
     MMIXTest(
-        "hosted-halt",
+        "semihosting-halt",
         insn(TRAP, 0, MMIX_SEMIHOSTING_HALT, 0),
         pc=0x00,
         regs={},
     ),
     MMIXTest(
-        "hosted-halt-exit-status",
+        "semihosting-halt-exit-status",
         b"".join(
             [
                 wyde(SETL, R255, 42),

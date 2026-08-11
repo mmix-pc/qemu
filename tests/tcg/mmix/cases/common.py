@@ -55,7 +55,9 @@ MMIX_VIRT_UART_TX = 0x04
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
 MMIX_SEMIHOSTING_HALT = 0
+MMIX_SEMIHOSTING_STDIN = 0
 MMIX_SEMIHOSTING_STDOUT = 1
+MMIX_SEMIHOSTING_STDERR = 2
 MMIX_SEMIHOSTING_FPUTS = 7
 MMIX_SEMIHOSTING_FPUTWS = 8
 MMIX_SEMIHOSTING_STRING_MAX = 256
@@ -80,13 +82,13 @@ def serial_tx_program():
     )
 
 
-def hosted_fputs_program():
+def hosted_fputs_program(handle=MMIX_SEMIHOSTING_STDOUT,
+                         message=b"Hosted MMIX\n"):
     message_address = 0x40
-    message = b"Hosted MMIX\n"
     prefix = b"".join(
         [
             *set_octa(R255, message_address),
-            insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, MMIX_SEMIHOSTING_STDOUT),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, handle),
             wyde(SETL, R255, 0),
             halt(),
         ]
