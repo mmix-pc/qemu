@@ -140,3 +140,13 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
          "MMIX illegal instruction"),
     ),
 ]
+
+SEMIHOSTING_PROCESS_FAILURE_TESTS = [
+    MMIXProcessFailure(
+        "semihosting-argv-block-outside-ram",
+        halt(),
+        ("-m", "16M", "-semihosting-config", "enable=on,arg=prog"),
+        ("could not set up MMIX semihosting arguments",
+         "MMIX semihosting argument block does not fit in machine RAM"),
+    ),
+]

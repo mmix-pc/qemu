@@ -1626,6 +1626,7 @@ static void mmix_semihosting_fputs_console(CPUMMIXState *env,
         helper_raise_illegal_instruction(env);
     }
 
+    mmix_cpu_write_reg(env, 255, bytes->len);
     g_byte_array_free(bytes, true);
 }
 

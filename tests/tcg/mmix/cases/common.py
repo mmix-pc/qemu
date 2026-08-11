@@ -347,12 +347,21 @@ class MMIXSerialTest:
     pc: int
     output: bytes
     exit_status: int = 0
+    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
 class MMIXLoaderFailure:
     name: str
     image: bytes
+    patterns: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class MMIXProcessFailure:
+    name: str
+    program: bytes
+    qemu_args: tuple[str, ...]
     patterns: tuple[str, ...]
 
 

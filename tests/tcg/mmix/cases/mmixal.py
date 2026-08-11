@@ -11,6 +11,7 @@ from .common import *
 
 MMIX_TEST_DIR = pathlib.Path(__file__).resolve().parents[1]
 MMIXAL_DATA_DIR = MMIX_TEST_DIR / "data" / "mmixal"
+MMIXAL_HELLO_SOURCE = MMIXAL_DATA_DIR / "hello.mms"
 MMIXAL_PRIME_TABLE_SOURCE = MMIXAL_DATA_DIR / "prime_table.mms"
 MMIXAL_PRIME_TABLE_OUTPUT = MMIXAL_DATA_DIR / "prime_table.out"
 
@@ -73,6 +74,8 @@ class MMIXALSerialCase:
     output: bytes
     source: str = None
     source_path: pathlib.Path = None
+    qemu_args: tuple[str, ...] = ()
+    exit_status: int = 0
 
     def build(self, mmixal, workdir):
         return MMIXSerialTest(
@@ -81,6 +84,8 @@ class MMIXALSerialCase:
                                 self.source, self.source_path),
             pc=self.pc,
             output=self.output,
+            qemu_args=self.qemu_args,
+            exit_status=self.exit_status,
         )
 
 
@@ -142,6 +147,15 @@ MMIXAL_SEMIHOSTING_SERIAL_TESTS = [
         pc=0x0c,
         output=b"Hosted MMIXAL\n",
         source=MMIXAL_HOSTED_SOURCE,
+    ),
+    MMIXALSerialCase(
+        "mmixal-mmo-hello-argv",
+        "hello",
+        pc=0x110,
+        output=b"hello, world\n",
+        source_path=MMIXAL_HELLO_SOURCE,
+        qemu_args=("-semihosting-config", "enable=on,arg=hello"),
+        exit_status=8,
     ),
     MMIXALSerialCase(
         "mmixal-mmo-prime-table",

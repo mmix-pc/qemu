@@ -69,6 +69,26 @@ def run_semihosting_expected_failure(qemu, workdir, test):
                          qemu_args=QEMU_SEMIHOSTING_ARGS)
 
 
+def run_process_failure(qemu, workdir, test):
+    image = workdir / f"{test.name}.bin"
+
+    image.write_bytes(test.program)
+
+    result = run_kernel(
+        qemu,
+        image,
+        qemu_args=test.qemu_args,
+        check=False,
+        timeout=10,
+        capture_output=True,
+    )
+    assert_process_failed(test.name, result)
+
+    output = result.stdout + result.stderr
+    text = output.decode("utf-8", errors="replace")
+    assert_output_patterns(test.name, text, test.patterns)
+
+
 def run_serial_test(qemu, workdir, test, *, qemu_args=()):
     is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
                                             MMIX_MMO_LOP_PRE)))
@@ -102,7 +122,9 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=()):
 
 
 def run_semihosting_serial_test(qemu, workdir, test):
-    run_serial_test(qemu, workdir, test, qemu_args=QEMU_SEMIHOSTING_ARGS)
+    qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_ARGS
+
+    run_serial_test(qemu, workdir, test, qemu_args=qemu_args)
 
 
 def run_loader_failure(qemu, workdir, test):
