@@ -7,7 +7,6 @@ import pytest
 from cases.common import (
     MMIX_SEMIHOSTING_FIRST_FILE_HANDLE,
     MMIX_SEMIHOSTING_STDERR,
-    MMIX_SEMIHOSTING_STDIN,
     MMIX_SEMIHOSTING_STDOUT,
     MASK64,
     case_id,
@@ -23,6 +22,7 @@ from cases.semihosting import (
     fread_bad_buffer_test,
     fread_failure_test,
     fread_file_test,
+    fread_stdin_test,
     fwrite_console_test,
     fseek_failure_test,
     fseek_ftell_test,
@@ -40,6 +40,7 @@ from lib.execution import (
     run_semihosting_expected_failure,
     run_semihosting_one,
     run_semihosting_serial_test,
+    run_semihosting_stdin_one,
 )
 
 
@@ -146,17 +147,8 @@ def test_semihosting_fread_unopened_handle(qemu, workdir):
     )
 
 
-def test_semihosting_fread_stdin_deferred(qemu, workdir):
-    run_semihosting_one(
-        qemu,
-        workdir,
-        fread_failure_test(
-            "semihosting-fread-stdin-deferred",
-            MMIX_SEMIHOSTING_STDIN,
-            0x140,
-            4,
-        ),
-    )
+def test_semihosting_fread_stdin(qemu, workdir):
+    run_semihosting_stdin_one(qemu, workdir, fread_stdin_test(b"input"))
 
 
 def test_semihosting_fread_bad_buffer(qemu, workdir):

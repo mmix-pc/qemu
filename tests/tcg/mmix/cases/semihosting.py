@@ -172,6 +172,33 @@ def fread_failure_test(name, handle, buffer_address, size):
     )
 
 
+def fread_stdin_test(data):
+    arg_address = 0x100
+    buffer_address = 0x140
+    instructions = [
+        *_set_args3(arg_address, buffer_address, len(data)),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, MMIX_SEMIHOSTING_STDIN),
+        insn(ADDI, R32, R255, 0),
+        *set_octa(R4, buffer_address),
+    ]
+
+    for i in range(len(data)):
+        instructions.append(insn(LDBUI, R33 + i, R4, i))
+    instructions.extend([*set_octa(R255, 0), halt()])
+
+    prefix = b"".join(instructions)
+    regs = {R32: 0}
+    regs.update({R33 + i: byte for i, byte in enumerate(data)})
+
+    return MMIXTest(
+        "semihosting-fread-stdin",
+        prefix,
+        pc=len(prefix) - 4,
+        regs=regs,
+        stdin_data=data,
+    )
+
+
 def fread_bad_buffer_test(pathname, buffer_address, size):
     arg_address = 0x180
     pathname_address = 0x200

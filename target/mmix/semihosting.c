@@ -9,6 +9,7 @@
 #include "semihosting.h"
 #include "exec/helper-proto.h"
 #include "exec/log.h"
+#include "qemu/main-loop.h"
 #include "semihosting/semihost.h"
 #include "semihosting/syscalls.h"
 #include "system/memory.h"
@@ -837,6 +838,22 @@ static void mmix_semihosting_fread(CPUMMIXState *env,
 
     if (!mmix_semihosting_read_args3(env, call, &args)) {
         helper_raise_illegal_instruction(env);
+    }
+    if (call->handle == MMIX_SEMIHOSTING_HANDLE_STDIN) {
+        if (!mmix_semihosting_check_counted_buffer(env, args.arg2, args.arg3,
+                                                   MMU_DATA_STORE,
+                                                   service_name, "buffer")) {
+            mmix_cpu_write_reg(env, 255,
+                               mmix_semihosting_io_failure(args.arg3));
+            return;
+        }
+
+        env->semihosting_pending_io_length = args.arg3;
+        BQL_LOCK_GUARD();
+        semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
+                          MMIX_SEMIHOSTING_HANDLE_STDIN, args.arg2,
+                          args.arg3);
+        return;
     }
     if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd) ||
         !mmix_semihosting_mode_can_read(
