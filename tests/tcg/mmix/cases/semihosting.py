@@ -172,30 +172,51 @@ def fread_failure_test(name, handle, buffer_address, size):
     )
 
 
-def fread_stdin_test(data):
+def fread_stdin_test(name, request_size, input_data, expected_bytes,
+                     expected_return):
     arg_address = 0x100
     buffer_address = 0x140
     instructions = [
-        *_set_args3(arg_address, buffer_address, len(data)),
+        *_set_args3(arg_address, buffer_address, request_size),
         insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, MMIX_SEMIHOSTING_STDIN),
         insn(ADDI, R32, R255, 0),
         *set_octa(R4, buffer_address),
     ]
 
-    for i in range(len(data)):
+    for i in range(len(expected_bytes)):
         instructions.append(insn(LDBUI, R33 + i, R4, i))
     instructions.extend([*set_octa(R255, 0), halt()])
 
     prefix = b"".join(instructions)
-    regs = {R32: 0}
-    regs.update({R33 + i: byte for i, byte in enumerate(data)})
+    regs = {R32: expected_return}
+    regs.update({R33 + i: byte for i, byte in enumerate(expected_bytes)})
 
     return MMIXTest(
-        "semihosting-fread-stdin",
+        name,
         prefix,
         pc=len(prefix) - 4,
         regs=regs,
-        stdin_data=data,
+        stdin_data=input_data,
+    )
+
+
+def fread_stdin_bad_buffer_test(buffer_address, size, input_data):
+    test = fread_failure_test(
+        "semihosting-fread-stdin-bad-buffer",
+        MMIX_SEMIHOSTING_STDIN,
+        buffer_address,
+        size,
+    )
+
+    return dataclasses.replace(test, stdin_data=input_data)
+
+
+def fread_standard_handle_failure_test(name, handle, size):
+    return fread_failure_test(
+        name,
+        handle,
+        0x140,
+        size,
     )
 
 

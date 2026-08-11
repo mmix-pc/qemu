@@ -22,6 +22,8 @@ from cases.semihosting import (
     fread_bad_buffer_test,
     fread_failure_test,
     fread_file_test,
+    fread_standard_handle_failure_test,
+    fread_stdin_bad_buffer_test,
     fread_stdin_test,
     fwrite_console_test,
     fseek_failure_test,
@@ -148,7 +150,57 @@ def test_semihosting_fread_unopened_handle(qemu, workdir):
 
 
 def test_semihosting_fread_stdin(qemu, workdir):
-    run_semihosting_stdin_one(qemu, workdir, fread_stdin_test(b"input"))
+    run_semihosting_stdin_one(
+        qemu,
+        workdir,
+        fread_stdin_test("semihosting-fread-stdin", 5, b"input", b"input", 0),
+    )
+
+
+def test_semihosting_fread_stdin_short(qemu, workdir):
+    run_semihosting_stdin_one(
+        qemu,
+        workdir,
+        fread_stdin_test(
+            "semihosting-fread-stdin-short",
+            8,
+            b"abc",
+            b"abc",
+            MASK64 - 4,
+        ),
+    )
+
+
+def test_semihosting_fread_stdin_bad_buffer(qemu, workdir):
+    run_semihosting_stdin_one(
+        qemu,
+        workdir,
+        fread_stdin_bad_buffer_test(0x6000000000000000, 4, b"input"),
+    )
+
+
+def test_semihosting_fread_stdout_bad_handle(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_standard_handle_failure_test(
+            "semihosting-fread-stdout-bad-handle",
+            MMIX_SEMIHOSTING_STDOUT,
+            4,
+        ),
+    )
+
+
+def test_semihosting_fread_stderr_bad_handle(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fread_standard_handle_failure_test(
+            "semihosting-fread-stderr-bad-handle",
+            MMIX_SEMIHOSTING_STDERR,
+            4,
+        ),
+    )
 
 
 def test_semihosting_fread_bad_buffer(qemu, workdir):

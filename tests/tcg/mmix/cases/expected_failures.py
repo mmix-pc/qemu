@@ -99,6 +99,12 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
+        "semihosting-fread-stdin-disabled",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, MMIX_SEMIHOSTING_STDIN),
+        ("MMIX semihosting disabled for hosted TRAP service 3 handle 0",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
         "semihosting-fwrite-stdout-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, MMIX_SEMIHOSTING_STDOUT),
         ("MMIX semihosting disabled for hosted TRAP service 6 handle 1",
