@@ -1,7 +1,7 @@
 /*
- * This file is intentionally not protected by an include guard. QEMU includes
- * target helper definition lists multiple times with different DEF_HELPER_*
- * macro definitions to generate helper prototypes, TCG glue, and metadata.
+ * This file is intentionally not protected by an include guard. It is QEMU's
+ * DEF_HELPER_* list for generated helper prototypes, TCG glue, and metadata;
+ * target/mmix/mmix-helper.h carries normal internal helper declarations.
  */
 
 DEF_HELPER_1(raise_illegal_instruction, noreturn, env)

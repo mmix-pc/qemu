@@ -211,8 +211,8 @@ uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_is_privileged(CPUMMIXState *env);
-void mmix_cpu_shutdown_with_log(CPUMMIXState *env, const char *reason,
-                                int exit_code);
+G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
+                                           const char *reason, int exit_code);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);
 bool mmix_translate_address(CPUMMIXState *env, vaddr address,

@@ -4,7 +4,10 @@ mmix_ss = ss.source_set()
 mmix_ss.add(gen)
 mmix_ss.add(files(
   'cpu.c',
-  'helper.c',
+  'excp_helper.c',
+  'fpu_helper.c',
+  'int_helper.c',
+  'reg_helper.c',
   'semihosting.c',
   'translate.c',
 ))
