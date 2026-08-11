@@ -5,6 +5,7 @@ mmix_ss.add(gen)
 mmix_ss.add(files(
   'cpu.c',
   'helper.c',
+  'semihosting.c',
   'translate.c',
 ))
 
