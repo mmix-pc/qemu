@@ -436,6 +436,32 @@ static void mmix_semihosting_io_complete(CPUState *cs, uint64_t ret, int err)
                        mmix_semihosting_short_count(ret, requested));
 }
 
+static void mmix_semihosting_fseek_complete(CPUState *cs, uint64_t ret,
+                                            int err)
+{
+    CPUMMIXState *env = cpu_env(cs);
+
+    if (ret == (uint64_t)-1 || err != 0) {
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
+    }
+
+    mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_SUCCESS);
+}
+
+static void mmix_semihosting_ftell_complete(CPUState *cs, uint64_t ret,
+                                            int err)
+{
+    CPUMMIXState *env = cpu_env(cs);
+
+    if (ret == (uint64_t)-1 || err != 0) {
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
+    }
+
+    mmix_cpu_write_reg(env, 255, ret);
+}
+
 static G_NORETURN void
 mmix_semihosting_raise_disabled(CPUMMIXState *env,
                                 const MMIXSemihostingCall *call)
@@ -886,14 +912,29 @@ static void mmix_semihosting_fseek(CPUMMIXState *env,
                                    const MMIXSemihostingCall *call)
 {
     MMIXSemihostingArgs2 args;
+    int64_t offset;
+    int whence;
     int guestfd;
 
-    if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd) ||
-        !mmix_semihosting_read_args2(env, call, &args)) {
-        helper_raise_illegal_instruction(env);
+    if (!mmix_semihosting_read_args2(env, call, &args) ||
+        !mmix_semihosting_file_handle_guestfd(env, call, &guestfd)) {
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
     }
 
-    mmix_semihosting_raise_unsupported(env, call);
+    offset = args.arg2;
+    if (offset < 0) {
+        /*
+         * MMIXware uses -1 for end-of-file, -2 for one byte before EOF, etc.
+         */
+        offset++;
+        whence = GDB_SEEK_END;
+    } else {
+        whence = GDB_SEEK_SET;
+    }
+
+    semihost_sys_lseek(env_cpu(env), mmix_semihosting_fseek_complete,
+                       guestfd, offset, whence);
 }
 
 static void mmix_semihosting_ftell(CPUMMIXState *env,
@@ -902,10 +943,12 @@ static void mmix_semihosting_ftell(CPUMMIXState *env,
     int guestfd;
 
     if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd)) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_FAILURE);
+        return;
     }
 
-    mmix_semihosting_raise_unsupported(env, call);
+    semihost_sys_lseek(env_cpu(env), mmix_semihosting_ftell_complete,
+                       guestfd, 0, GDB_SEEK_CUR);
 }
 
 static void mmix_semihosting_file_service(CPUMMIXState *env,

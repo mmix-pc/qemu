@@ -104,6 +104,20 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
         ("MMIX semihosting disabled for hosted TRAP service 6 handle 1",
          "MMIX illegal instruction"),
     ),
+    MMIXExpectedFailure(
+        "semihosting-fseek-disabled",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FSEEK,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        ("MMIX semihosting disabled for hosted TRAP service 9 handle 3",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
+        "semihosting-ftell-disabled",
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        ("MMIX semihosting disabled for hosted TRAP service 10 handle 3",
+         "MMIX illegal instruction"),
+    ),
 ]
 
 SEMIHOSTING_EXPECTED_FAILURE_TESTS = [

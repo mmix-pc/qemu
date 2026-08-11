@@ -315,6 +315,115 @@ def fwrite_failure_test(name, handle, buffer_address, size):
     )
 
 
+def fseek_ftell_test(pathname):
+    arg_address = 0x180
+    buffer_address = 0x1c0
+    pathname_address = 0x200
+    pathname_bytes = str(pathname).encode("utf-8") + b"\0"
+
+    instructions = [
+        *_set_args3(arg_address, pathname_address,
+                    MMIX_SEMIHOSTING_TEXT_READ),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R32, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R33, R255, 0),
+        *set_octa(R255, 3),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FSEEK,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R34, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R35, R255, 0),
+        *_set_args3(arg_address, buffer_address, 1),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R36, R255, 0),
+        *set_octa(R4, buffer_address),
+        insn(LDBUI, R37, R4, 0),
+        *set_octa(R255, MASK64),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FSEEK,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R38, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R39, R255, 0),
+        *set_octa(R255, MASK64 - 1),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FSEEK,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R40, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R41, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE,
+             MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
+        insn(ADDI, R42, R255, 0),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+
+    prefix = b"".join(instructions)
+    program = _pad_to_address(prefix, pathname_address) + pathname_bytes
+
+    return MMIXTest(
+        "semihosting-fseek-ftell",
+        program,
+        pc=len(prefix) - 4,
+        regs={
+            R32: 0,
+            R33: 0,
+            R34: 0,
+            R35: 3,
+            R36: 0,
+            R37: ord("d"),
+            R38: 0,
+            R39: 6,
+            R40: 0,
+            R41: 5,
+            R42: 0,
+        },
+    )
+
+
+def fseek_failure_test(name, handle, offset):
+    prefix = b"".join(
+        [
+            *set_octa(R255, offset),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FSEEK, handle),
+            insn(ADDI, R32, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    return MMIXTest(
+        name,
+        prefix,
+        pc=len(prefix) - 4,
+        regs={R32: MASK64},
+    )
+
+
+def ftell_failure_test(name, handle):
+    prefix = b"".join(
+        [
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL, handle),
+            insn(ADDI, R32, R255, 0),
+            *set_octa(R255, 0),
+            halt(),
+        ]
+    )
+
+    return MMIXTest(
+        name,
+        prefix,
+        pc=len(prefix) - 4,
+        regs={R32: MASK64},
+    )
+
+
 SEMIHOSTING_TESTS = [
     MMIXTest(
         "semihosting-halt",

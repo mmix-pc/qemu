@@ -24,6 +24,9 @@ from cases.semihosting import (
     fread_failure_test,
     fread_file_test,
     fwrite_console_test,
+    fseek_failure_test,
+    fseek_ftell_test,
+    ftell_failure_test,
     fwrite_failure_test,
     fwrite_file_test,
     fwrite_readonly_file_test,
@@ -230,6 +233,36 @@ def test_semihosting_fwrite_bad_buffer(qemu, workdir):
             MMIX_SEMIHOSTING_STDOUT,
             0x6000000000000000,
             4,
+        ),
+    )
+
+
+def test_semihosting_fseek_ftell(qemu, workdir):
+    host_file = workdir / "semihosting-fseek-ftell.txt"
+    host_file.write_bytes(b"abcdef")
+
+    run_semihosting_one(qemu, workdir, fseek_ftell_test(host_file))
+
+
+def test_semihosting_fseek_unopened_handle(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        fseek_failure_test(
+            "semihosting-fseek-unopened-handle",
+            MMIX_SEMIHOSTING_FIRST_FILE_HANDLE,
+            0,
+        ),
+    )
+
+
+def test_semihosting_ftell_standard_handle(qemu, workdir):
+    run_semihosting_one(
+        qemu,
+        workdir,
+        ftell_failure_test(
+            "semihosting-ftell-standard-handle",
+            MMIX_SEMIHOSTING_STDOUT,
         ),
     )
 
