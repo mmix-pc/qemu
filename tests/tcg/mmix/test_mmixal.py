@@ -9,6 +9,8 @@ from cases.mmixal import (
     MMIXAL_MMO_TESTS,
     MMIXAL_SEMIHOSTING_SERIAL_TESTS,
     MMIXAL_SERIAL_TESTS,
+    mmixal_file_read_case,
+    mmixal_file_write_case,
 )
 from lib.execution import (
     run_mmo_test,
@@ -27,6 +29,35 @@ def test_mmixal_serial(qemu, mmixal, workdir, test_case):
 def test_mmixal_semihosting_serial(qemu, mmixal, workdir, test_case):
     run_semihosting_serial_test(qemu, workdir,
                                 test_case.build(mmixal, workdir))
+
+
+def test_mmixal_semihosting_file_read(qemu, mmixal, workdir):
+    input_file = workdir / "mmixal-file-read-input.txt"
+    data = b"MMIX file read\n"
+
+    input_file.write_bytes(data)
+    run_semihosting_serial_test(
+        qemu,
+        workdir,
+        mmixal_file_read_case(input_file, data).build(mmixal, workdir),
+    )
+
+
+def test_mmixal_semihosting_file_write(qemu, mmixal, workdir):
+    output_file = workdir / "mmixal-file-write-output.txt"
+    data = b"MMIX file write\n"
+
+    run_semihosting_serial_test(
+        qemu,
+        workdir,
+        mmixal_file_write_case(output_file, data).build(mmixal, workdir),
+    )
+
+    actual = output_file.read_bytes()
+    if actual != data:
+        raise AssertionError(
+            f"mmixal-mmo-file-write: expected {data!r}, got {actual!r}"
+        )
 
 
 @pytest.mark.parametrize("test_case", MMIXAL_MMO_TESTS, ids=case_id)

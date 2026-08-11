@@ -66,6 +66,71 @@ Main    ADDU    $255,Ptr,0
 """
 
 
+def mmixal_file_read_source(size):
+    return f"""\
+argv    IS      $1
+File    IS      3
+        LOC     Data_Segment
+Open    OCTA    0,TextRead
+Read    OCTA    Buffer,{size}
+Buffer  OCTA    0,0
+OpenPtr GREG    Open
+ReadPtr GREG    Read
+BufPtr  GREG    Buffer
+        LOC     #100
+Main    LDOU    $2,argv,0
+        STOU    $2,OpenPtr,0
+        ADDU    $255,OpenPtr,0
+        TRAP    0,Fopen,File
+        ADDU    $255,ReadPtr,0
+        TRAP    0,Fread,File
+        ADDU    $255,BufPtr,0
+        TRAP    0,Fputs,StdOut
+        TRAP    0,Fclose,File
+        SET     $255,0
+        TRAP    0,Halt,0
+"""
+
+
+def _byte_operands(data):
+    return ",".join(f"#{byte:02x}" for byte in data)
+
+
+def _byte_directives(label, data):
+    chunks = [data[i:i + 8] for i in range(0, len(data), 8)]
+    lines = []
+
+    for i, chunk in enumerate(chunks):
+        prefix = f"{label:<8}BYTE    " if i == 0 else "        BYTE    "
+        lines.append(prefix + _byte_operands(chunk))
+    return "\n".join(lines)
+
+
+def mmixal_file_write_source(data):
+    buffer = _byte_directives("Buffer", data)
+
+    return f"""\
+argv    IS      $1
+File    IS      3
+        LOC     Data_Segment
+Open    OCTA    0,TextWrite
+Write   OCTA    Buffer,{len(data)}
+{buffer}
+OpenPtr GREG    Open
+WritePtr GREG   Write
+        LOC     #100
+Main    LDOU    $2,argv,0
+        STOU    $2,OpenPtr,0
+        ADDU    $255,OpenPtr,0
+        TRAP    0,Fopen,File
+        ADDU    $255,WritePtr,0
+        TRAP    0,Fwrite,File
+        TRAP    0,Fclose,File
+        SET     $255,0
+        TRAP    0,Halt,0
+"""
+
+
 @dataclasses.dataclass(frozen=True)
 class MMIXALSerialCase:
     name: str
@@ -128,6 +193,28 @@ def assemble_mmixal_mmo(mmixal, workdir, name, source=None, source_path=None):
         timeout=10,
     )
     return object_path.read_bytes()
+
+
+def mmixal_file_read_case(pathname, data):
+    return MMIXALSerialCase(
+        "mmixal-mmo-file-read",
+        "file_read",
+        pc=0x128,
+        output=data,
+        source=mmixal_file_read_source(len(data)),
+        qemu_args=("-semihosting-config", f"enable=on,arg={pathname}"),
+    )
+
+
+def mmixal_file_write_case(pathname, data):
+    return MMIXALSerialCase(
+        "mmixal-mmo-file-write",
+        "file_write",
+        pc=0x120,
+        output=b"",
+        source=mmixal_file_write_source(data),
+        qemu_args=("-semihosting-config", f"enable=on,arg={pathname}"),
+    )
 
 
 MMIXAL_SERIAL_TESTS = [
