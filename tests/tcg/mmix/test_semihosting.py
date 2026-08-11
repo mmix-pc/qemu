@@ -9,12 +9,19 @@ from cases.expected_failures import (
     SEMIHOSTING_DISABLED_FAILURE_TESTS,
     SEMIHOSTING_EXPECTED_FAILURE_TESTS,
 )
+from cases.semihosting import SEMIHOSTING_TESTS
 from cases.serial import SEMIHOSTING_SERIAL_TESTS
 from lib.execution import (
     run_expected_failure,
     run_semihosting_expected_failure,
+    run_semihosting_one,
     run_semihosting_serial_test,
 )
+
+
+@pytest.mark.parametrize("test", SEMIHOSTING_TESTS, ids=case_id)
+def test_semihosting(qemu, workdir, test):
+    run_semihosting_one(qemu, workdir, test)
 
 
 @pytest.mark.parametrize("test", SEMIHOSTING_SERIAL_TESTS, ids=case_id)

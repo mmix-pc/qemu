@@ -18,7 +18,7 @@ from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE
 from lib.qemu import QEMU_SEMIHOSTING_ARGS, read_log, run_kernel
 
 
-def run_one(qemu, workdir, test):
+def run_one(qemu, workdir, test, *, qemu_args=()):
     image = workdir / f"{test.name}.bin"
     log = workdir / f"{test.name}.log"
 
@@ -26,11 +26,16 @@ def run_one(qemu, workdir, test):
     if log.exists():
         log.unlink()
 
-    run_kernel(qemu, image, trace="int", log=log, check=True, timeout=10)
+    run_kernel(qemu, image, trace="int", log=log, qemu_args=qemu_args,
+               check=True, timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
     assert_regs(test.name, result, test.regs)
+
+
+def run_semihosting_one(qemu, workdir, test):
+    run_one(qemu, workdir, test, qemu_args=QEMU_SEMIHOSTING_ARGS)
 
 
 def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
