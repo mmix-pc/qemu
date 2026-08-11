@@ -42,7 +42,9 @@ def run_expected_failure(qemu, workdir, test):
         log.unlink()
 
     try:
-        run_kernel(qemu, image, trace="unimp,int", log=log, check=False, timeout=2)
+        run_kernel(qemu, image, trace="unimp,int", log=log,
+                   qemu_args=getattr(test, "qemu_args", ()),
+                   check=False, timeout=2)
     except subprocess.TimeoutExpired:
         pass
 
@@ -71,6 +73,7 @@ def run_serial_test(qemu, workdir, test):
         serial=f"file:{serial}",
         trace="int",
         log=log,
+        qemu_args=getattr(test, "qemu_args", ()),
         check=True,
         timeout=10,
     )

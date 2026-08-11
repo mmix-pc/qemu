@@ -13,6 +13,7 @@
 #include "exec/cputlb.h"
 #include "exec/helper-proto.h"
 #include "fpu/softfloat.h"
+#include "semihosting/semihost.h"
 #include "system/memory.h"
 #include "system/runstate.h"
 #include <math.h>
@@ -1444,7 +1445,7 @@ static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
         .action = MMIX_SEMIHOSTING_ACTION_UNSUPPORTED,
         .service = service,
         .handle = handle,
-        .requires_semihosting = true,
+        .requires_semihosting = false,
     };
 
     switch (service) {
@@ -1457,6 +1458,7 @@ static MMIXSemihostingCall mmix_semihosting_decode_call(uint32_t service,
     case MMIX_SEMIHOSTING_SERVICE_FPUTS:
         if (handle == MMIX_SEMIHOSTING_HANDLE_STDOUT) {
             call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_STDOUT;
+            call.requires_semihosting = true;
         } else {
             call.action = MMIX_SEMIHOSTING_ACTION_FPUTS_BAD_HANDLE;
         }
@@ -1572,6 +1574,14 @@ void helper_mmix_semihosting_trap(CPUMMIXState *env, uint32_t service,
                                   uint32_t handle)
 {
     MMIXSemihostingCall call = mmix_semihosting_decode_call(service, handle);
+
+    if (call.requires_semihosting && !semihosting_enabled(false)) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX semihosting disabled for hosted TRAP service %u "
+                      "handle %u at 0x%016" PRIx64 "\n",
+                      call.service, call.handle, env->pc);
+        helper_raise_illegal_instruction(env);
+    }
 
     switch (call.action) {
     case MMIX_SEMIHOSTING_ACTION_HALT:

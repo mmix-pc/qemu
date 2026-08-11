@@ -54,10 +54,11 @@ MMIX_VIRT_UART_BASE = 0x0000000100000000
 MMIX_VIRT_UART_TX = 0x04
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
-MMIX_HOSTED_STDOUT = 1
-MMIX_HOSTED_FPUTS = 7
-MMIX_HOSTED_FPUTWS = 8
-MMIX_HOSTED_STRING_MAX = 256
+MMIX_SEMIHOSTING_STDOUT = 1
+MMIX_SEMIHOSTING_FPUTS = 7
+MMIX_SEMIHOSTING_FPUTWS = 8
+MMIX_SEMIHOSTING_STRING_MAX = 256
+MMIX_SEMIHOSTING_ARGS = ("-semihosting",)
 
 
 def serial_tx_program():
@@ -85,7 +86,7 @@ def hosted_fputs_program():
     prefix = b"".join(
         [
             *set_octa(R255, message_address),
-            insn(TRAP, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+            insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, MMIX_SEMIHOSTING_STDOUT),
             halt(),
         ]
     )
@@ -330,6 +331,7 @@ class MMIXExpectedFailure:
     program: bytes
     patterns: tuple[str, ...]
     absent: tuple[str, ...] = ("MMIX test exit",)
+    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -338,6 +340,7 @@ class MMIXSerialTest:
     program: bytes
     pc: int
     output: bytes
+    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

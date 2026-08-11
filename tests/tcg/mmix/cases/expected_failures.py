@@ -65,8 +65,20 @@ EXPECTED_FAILURE_TESTS = [
         ("MMIX invalid SYNC 8", "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
+        "hosted-fputs-semihosting-disabled",
+        b"".join(
+            [
+                *set_octa(R255, 0x40),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
+                     MMIX_SEMIHOSTING_STDOUT),
+            ]
+        ),
+        ("MMIX semihosting disabled for hosted TRAP service 7 handle 1",
+         "MMIX illegal instruction"),
+    ),
+    MMIXExpectedFailure(
         "unsupported-hosted-trap-service",
-        insn(TRAP, 0, MMIX_HOSTED_FPUTWS, MMIX_HOSTED_STDOUT),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTWS, MMIX_SEMIHOSTING_STDOUT),
         ("MMIX unsupported hosted TRAP service 8 handle 1",
          "MMIX illegal instruction"),
     ),
@@ -75,35 +87,40 @@ EXPECTED_FAILURE_TESTS = [
         b"".join(
             [
                 *set_octa(R255, 0x4000000000000000),
-                insn(TRAP, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
+                     MMIX_SEMIHOSTING_STDOUT),
             ]
         ),
         ("MMIX hosted Fputs invalid string address 0x4000000000000000",
          "MMIX illegal instruction"),
+        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
     MMIXExpectedFailure(
         "hosted-fputs-unterminated-string",
         b"".join(
             [
                 *set_octa(R255, 0x100),
-                insn(TRAP, 0, MMIX_HOSTED_FPUTS, MMIX_HOSTED_STDOUT),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
+                     MMIX_SEMIHOSTING_STDOUT),
                 insn(SWYM, 0, 0, 0) * ((0x100 - 0x14) // 4),
-                b"A" * MMIX_HOSTED_STRING_MAX,
+                b"A" * MMIX_SEMIHOSTING_STRING_MAX,
             ]
         ),
         ("MMIX hosted Fputs string at 0x0000000000000100 exceeds 256 bytes "
          "without NUL",
          "MMIX illegal instruction"),
+        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
     MMIXExpectedFailure(
         "hosted-fputs-unsupported-handle",
         b"".join(
             [
                 *set_octa(R255, 0x40),
-                insn(TRAP, 0, MMIX_HOSTED_FPUTS, 2),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, 2),
             ]
         ),
         ("MMIX hosted Fputs unsupported handle 2",
          "MMIX illegal instruction"),
+        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
 ]

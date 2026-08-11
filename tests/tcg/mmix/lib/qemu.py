@@ -18,7 +18,8 @@ class QemuLog:
     regs: Dict[int, int]
 
 
-def build_kernel_command(qemu, kernel, *, serial="none", trace=None, log=None):
+def build_kernel_command(qemu, kernel, *, serial="none", trace=None, log=None,
+                         qemu_args=()):
     cmd = [
         str(qemu),
         "-machine",
@@ -29,6 +30,7 @@ def build_kernel_command(qemu, kernel, *, serial="none", trace=None, log=None):
         "none",
         "-serial",
         str(serial),
+        *qemu_args,
         "-kernel",
         str(kernel),
     ]
@@ -46,6 +48,7 @@ def run_kernel(
     serial="none",
     trace=None,
     log=None,
+    qemu_args=(),
     check=True,
     timeout=10,
     capture_output=False,
@@ -56,7 +59,8 @@ def run_kernel(
         kwargs["stderr"] = subprocess.PIPE
 
     return subprocess.run(
-        build_kernel_command(qemu, kernel, serial=serial, trace=trace, log=log),
+        build_kernel_command(qemu, kernel, serial=serial, trace=trace, log=log,
+                             qemu_args=qemu_args),
         check=check,
         timeout=timeout,
         **kwargs,

@@ -16,6 +16,7 @@ SERIAL_TESTS = [
         hosted_fputs_program(),
         pc=0x14,
         output=b"Hosted MMIX\n",
+        qemu_args=MMIX_SEMIHOSTING_ARGS,
     ),
     MMIXSerialTest(
         "mmo-serial-tx-output",
