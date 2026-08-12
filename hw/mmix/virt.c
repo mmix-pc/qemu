@@ -20,9 +20,24 @@
 #include "target/mmix/cpu-qom.h"
 #include "bootinfo.h"
 #include "kernel-loader.h"
+#include "virt.h"
 
-#define MMIX_VIRT_UART_BASE 0x100000000ULL
 #define MMIX_ARG_OCTA_SIZE 8
+
+const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
+    [MMIX_VIRT_LOW_RAM] =      { 0, MMIX_POOL_SEGMENT_PHYS_BASE },
+    [MMIX_VIRT_POOL] =         { MMIX_POOL_SEGMENT_PHYS_BASE,
+                                 MMIX_POOL_SEGMENT_SIZE },
+    [MMIX_VIRT_DATA] =         { MMIX_DATA_SEGMENT_PHYS_BASE,
+                                 MMIX_DATA_SEGMENT_SIZE },
+    [MMIX_VIRT_STACK] =        { MMIX_STACK_SEGMENT_PHYS_BASE,
+                                 MMIX_STACK_SEGMENT_SIZE },
+    [MMIX_VIRT_PLATFORM_RAM] = { 0x000000000e800000ULL, 0x0000000000800000ULL },
+    [MMIX_VIRT_BOOTINFO] =     { 0x000000000e800000ULL, MMIX_BOOTINFO_SIZE },
+    [MMIX_VIRT_FRAMEBUFFER] =  { 0x000000000f000000ULL, 0x0000000001000000ULL },
+    [MMIX_VIRT_MMIO] =         { 0x0000000010000000ULL, 0 },
+    [MMIX_VIRT_UARTLITE] =     { 0x0000000100000000ULL, 0x1000 },
+};
 
 static void mmix_bootinfo_store(uint8_t *bootinfo, MMIXBootInfoField field,
                                 uint64_t value)
@@ -36,13 +51,14 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
     g_autofree uint8_t *bootinfo = NULL;
     MemTxResult result;
 
-    if (machine->ram_size < MMIX_BOOTINFO_PHYS_BASE ||
-        machine->ram_size - MMIX_BOOTINFO_PHYS_BASE < MMIX_BOOTINFO_SIZE) {
+    if (machine->ram_size < mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base ||
+        machine->ram_size - mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base <
+        mmix_virt_memmap[MMIX_VIRT_BOOTINFO].size) {
         error_setg(errp, "MMIX boot info does not fit in machine RAM");
         return false;
     }
 
-    bootinfo = g_malloc0(MMIX_BOOTINFO_SIZE);
+    bootinfo = g_malloc0(mmix_virt_memmap[MMIX_VIRT_BOOTINFO].size);
 
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_MAGIC,
                         MMIX_BOOTINFO_MAGIC);
@@ -56,34 +72,36 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_RAM_BASE, 0);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_RAM_SIZE,
                         machine->ram_size);
-    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_LOW_RAM_BASE, 0);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_LOW_RAM_BASE,
+                        mmix_virt_memmap[MMIX_VIRT_LOW_RAM].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_LOW_RAM_SIZE,
-                        MMIX_POOL_SEGMENT_PHYS_BASE);
+                        mmix_virt_memmap[MMIX_VIRT_LOW_RAM].size);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_POOL_LOGICAL_BASE,
                         MMIX_POOL_SEGMENT_BASE);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_POOL_PHYS_BASE,
-                        MMIX_POOL_SEGMENT_PHYS_BASE);
+                        mmix_virt_memmap[MMIX_VIRT_POOL].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_POOL_SIZE,
-                        MMIX_POOL_SEGMENT_SIZE);
+                        mmix_virt_memmap[MMIX_VIRT_POOL].size);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_DATA_LOGICAL_BASE,
                         MMIX_DATA_SEGMENT_BASE);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_DATA_PHYS_BASE,
-                        MMIX_DATA_SEGMENT_PHYS_BASE);
+                        mmix_virt_memmap[MMIX_VIRT_DATA].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_DATA_SIZE,
-                        MMIX_DATA_SEGMENT_SIZE);
+                        mmix_virt_memmap[MMIX_VIRT_DATA].size);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_STACK_LOGICAL_BASE,
                         MMIX_STACK_SEGMENT_BASE);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_STACK_PHYS_BASE,
-                        MMIX_STACK_SEGMENT_PHYS_BASE);
+                        mmix_virt_memmap[MMIX_VIRT_STACK].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_STACK_SIZE,
-                        MMIX_STACK_SEGMENT_SIZE);
+                        mmix_virt_memmap[MMIX_VIRT_STACK].size);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_MMIO_BASE,
-                        MMIX_BOOTINFO_MMIO_BASE);
+                        mmix_virt_memmap[MMIX_VIRT_MMIO].base);
 
     result = address_space_write(&address_space_memory,
-                                 MMIX_BOOTINFO_PHYS_BASE,
+                                 mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base,
                                  MEMTXATTRS_UNSPECIFIED,
-                                 bootinfo, MMIX_BOOTINFO_SIZE);
+                                 bootinfo,
+                                 mmix_virt_memmap[MMIX_VIRT_BOOTINFO].size);
     if (result != MEMTX_OK) {
         error_setg(errp, "could not write MMIX boot info");
         return false;
@@ -230,7 +248,8 @@ static void mmix_apply_kernel_load_info(CPUState *cpu,
 
     if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
         mmix_cpu_write_reg(env, 0, info->boot_cpu_id);
-        mmix_cpu_write_reg(env, 1, MMIX_BOOTINFO_PHYS_BASE);
+        mmix_cpu_write_reg(env, 1,
+                           mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base);
     }
 
     cpu_set_pc(cpu, info->entry);
@@ -256,7 +275,8 @@ static void mmix_virt_init(MachineState *machine)
     qdev_prop_set_enum(dev, "endianness", ENDIAN_MODE_BIG);
     qdev_prop_set_chr(dev, "chardev", serial_hd(0));
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, MMIX_VIRT_UART_BASE);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0,
+                    mmix_virt_memmap[MMIX_VIRT_UARTLITE].base);
 
     if (machine->kernel_filename) {
         Error *err = NULL;

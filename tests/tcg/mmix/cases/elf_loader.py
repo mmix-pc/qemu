@@ -39,7 +39,7 @@ def bootinfo_probe_program():
     program.append(halt())
     regs = {
         R2: 0,
-        R3: MMIX_BOOTINFO_PHYS_BASE,
+        R3: MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
         **{reg: bootinfo[field] for reg, field in fields.items()},
     }
     return b"".join(program), (len(program) - 1) * 4, regs
@@ -87,7 +87,7 @@ ELF_LOADER_TESTS = [
             entry=0x100,
         ),
         pc=0x10c,
-        regs={R2: 0, R3: MMIX_BOOTINFO_PHYS_BASE, R4: 0x7e},
+        regs={R2: 0, R3: MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0], R4: 0x7e},
     ),
     MMIXMMOTest(
         "elf-bootinfo",
