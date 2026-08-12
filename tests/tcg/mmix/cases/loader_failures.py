@@ -41,9 +41,19 @@ LOADER_FAILURE_TESTS = [
         ("unsupported MMIX ELF machine 62",),
     ),
     MMIXLoaderFailure(
-        "elf-valid-header-not-loaded-yet",
+        "elf-no-loadable-segments",
         elf64_header(),
-        ("MMIX ELF kernel loading is not implemented yet",),
+        ("could not load MMIX ELF kernel",),
+    ),
+    MMIXLoaderFailure(
+        "elf-truncated-program-header-table",
+        elf64_header(phnum=1),
+        ("could not load MMIX ELF kernel",),
+    ),
+    MMIXLoaderFailure(
+        "elf-load-segment-outside-low-ram",
+        elf64_image(0x06000000, halt()),
+        ("MMIX ELF kernel", "loads outside Low RAM"),
     ),
     MMIXLoaderFailure(
         "mmo-fixo-invalid-z",

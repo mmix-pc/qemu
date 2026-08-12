@@ -89,6 +89,7 @@ ET_REL = 1
 ET_EXEC = 2
 EM_X86_64 = 62
 EM_MMIX = 80
+PT_LOAD = 1
 
 
 def serial_tx_program():
@@ -370,7 +371,8 @@ def f32(value):
 
 
 def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
-                 elf_type=ET_EXEC, machine=EM_MMIX):
+                 elf_type=ET_EXEC, machine=EM_MMIX, entry=0, phnum=0,
+                 phoff=64):
     e_ident = bytes((
         0x7f, ord("E"), ord("L"), ord("F"),
         elf_class, elf_data, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -380,17 +382,44 @@ def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
         elf_type,
         machine,
         1,
-        0,
-        0,
+        entry,
+        phoff if phnum else 0,
         0,
         0,
         64,
         56,
-        0,
+        phnum,
         64,
         0,
         0,
     )
+
+
+def elf64_phdr(load_address, data, mem_size=None, offset=0x100,
+               ph_type=PT_LOAD, flags=5, virtual_address=None):
+    if mem_size is None:
+        mem_size = len(data)
+    if virtual_address is None:
+        virtual_address = load_address
+    return struct.pack(
+        ">IIQQQQQQ",
+        ph_type,
+        flags,
+        offset,
+        virtual_address,
+        load_address,
+        len(data),
+        mem_size,
+        0x1000,
+    )
+
+
+def elf64_image(load_address, data, mem_size=None, entry=0, offset=0x100):
+    phdr = elf64_phdr(load_address, data, mem_size=mem_size, offset=offset)
+    prefix = elf64_header(entry=entry, phnum=1) + phdr
+    if offset < len(prefix):
+        raise ValueError("ELF segment offset overlaps the program header table")
+    return prefix + bytes(offset - len(prefix)) + data
 
 
 @dataclasses.dataclass(frozen=True)

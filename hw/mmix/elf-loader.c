@@ -8,6 +8,7 @@
 #include "qapi/error.h"
 #include "elf.h"
 #include "hw/core/loader.h"
+#include "target/mmix/cpu.h"
 #include "elf-loader.h"
 
 #ifndef EM_MMIX
@@ -81,16 +82,68 @@ static bool mmix_validate_elf_header(const char *filename, Error **errp)
     return true;
 }
 
+static bool mmix_load_elf_segments(const char *filename, uint64_t *entry,
+                                   uint64_t *lowaddr, uint64_t *highaddr,
+                                   ssize_t *loaded_size, Error **errp)
+{
+    ssize_t size;
+
+    size = load_elf_ram_sym(filename, NULL, NULL, NULL, entry, lowaddr,
+                            highaddr, NULL, ELFDATA2MSB, EM_MMIX, 0, 0,
+                            NULL, false, NULL);
+    if (size < 0) {
+        error_setg(errp, "could not load MMIX ELF kernel '%s': %s", filename,
+                   load_elf_strerror(size));
+        return false;
+    }
+
+    *loaded_size = size;
+    return true;
+}
+
+static bool mmix_validate_elf_low_ram_range(const char *filename,
+                                            uint64_t lowaddr,
+                                            uint64_t highaddr,
+                                            Error **errp)
+{
+    if (lowaddr < MMIX_POOL_SEGMENT_PHYS_BASE &&
+        highaddr <= MMIX_POOL_SEGMENT_PHYS_BASE) {
+        return true;
+    }
+
+    error_setg(errp, "MMIX ELF kernel '%s' loads outside Low RAM", filename);
+    return false;
+}
+
+static void mmix_apply_elf_load_info(MMIXKernelLoadInfo *info, uint64_t entry)
+{
+    info->entry = entry;
+    info->has_mmo_globals = false;
+}
+
 ssize_t mmix_load_elf(const char *filename, uint64_t ram_size,
                       MMIXKernelLoadInfo *info, Error **errp)
 {
-    (void)ram_size;
-    (void)info;
+    uint64_t entry;
+    uint64_t lowaddr;
+    uint64_t highaddr;
+    ssize_t loaded_size;
 
     if (!mmix_validate_elf_header(filename, errp)) {
         return -1;
     }
+    if (ram_size < MMIX_POOL_SEGMENT_PHYS_BASE) {
+        error_setg(errp, "MMIX ELF Low RAM window does not fit in machine RAM");
+        return -1;
+    }
+    if (!mmix_load_elf_segments(filename, &entry, &lowaddr, &highaddr,
+                                &loaded_size, errp)) {
+        return -1;
+    }
+    if (!mmix_validate_elf_low_ram_range(filename, lowaddr, highaddr, errp)) {
+        return -1;
+    }
 
-    error_setg(errp, "MMIX ELF kernel loading is not implemented yet");
-    return -1;
+    mmix_apply_elf_load_info(info, entry);
+    return loaded_size;
 }

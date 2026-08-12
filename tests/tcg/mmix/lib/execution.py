@@ -184,3 +184,20 @@ def run_mmo_test(qemu, workdir, test):
     assert_exit_pc(test.name, result, test.pc)
     assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)
+
+
+def run_elf_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    log = workdir / f"{test.name}.log"
+
+    image.write_bytes(test.image)
+    if log.exists():
+        log.unlink()
+
+    completed = run_kernel(qemu, image, trace="int", log=log, check=False,
+                           timeout=10)
+
+    result = read_log(log)
+    assert_exit_pc(test.name, result, test.pc)
+    assert_exit_status(test.name, completed, test.exit_status)
+    assert_regs(test.name, result, test.regs)
