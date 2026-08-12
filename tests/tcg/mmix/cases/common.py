@@ -77,6 +77,7 @@ MMIX_VIRT_UART0_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_UART0][0]
 MMIX_VIRT_UART0_THR = 0x00
 MMIX_VIRT_UART0_LSR = 0x05
 MMIX_VIRT_UART0_LSR_THRE = 0x20
+MMIX_VIRT_UART0_IRQ = 1
 MMIX_BOOTINFO_MAGIC = 0x4D4D4958424F4F54
 MMIX_BOOTINFO_VERSION = 1
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
@@ -193,8 +194,8 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "stack_phys_base": MMIX_STACK_SEGMENT_PHYS_BASE,
         "stack_size": MMIX_STACK_SEGMENT_SIZE,
         "mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_MMIO][0],
-        "uart_base": 0,
-        "uart_irq": 0,
+        "uart_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_UART0][0],
+        "uart_irq": MMIX_VIRT_UART0_IRQ,
         "timer_base": 0,
         "intc_base": 0,
         "virtio_mmio_base": 0,

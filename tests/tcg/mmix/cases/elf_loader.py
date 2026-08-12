@@ -21,8 +21,9 @@ def bootinfo_probe_program():
         R14: "stack_phys_base",
         R15: "mmio_base",
         R16: "uart_base",
-        R17: "timer_base",
-        R18: "framebuffer_base",
+        R17: "uart_irq",
+        R18: "timer_base",
+        R19: "framebuffer_base",
     }
     program = [
         insn(ADDI, R2, R0, 0),
@@ -32,8 +33,8 @@ def bootinfo_probe_program():
     for reg, field in fields.items():
         offset = MMIX_BOOTINFO_FIELDS.index(field) * 8
         program.extend([
-            wyde(SETL, R19, offset),
-            insn(LDOU, reg, R1, R19),
+            wyde(SETL, R20, offset),
+            insn(LDOU, reg, R1, R20),
         ])
 
     program.append(halt())
