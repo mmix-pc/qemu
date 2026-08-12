@@ -40,13 +40,13 @@ from cases.semihosting import (
     fopen_failure_test,
     fopen_fclose_test,
 )
-from cases.serial import SEMIHOSTING_SERIAL_TESTS
+from cases.serial import SEMIHOSTING_CONSOLE_TESTS
 from lib.execution import (
     run_expected_failure,
     run_process_failure,
     run_semihosting_expected_failure,
     run_semihosting_one,
-    run_semihosting_serial_test,
+    run_semihosting_console_test,
     run_semihosting_stdin_one,
 )
 
@@ -336,7 +336,7 @@ def test_semihosting_fwrite_readonly_file(qemu, workdir):
 
 
 def test_semihosting_fwrite_stdout(qemu, workdir):
-    run_semihosting_serial_test(
+    run_semihosting_console_test(
         qemu,
         workdir,
         fwrite_console_test(
@@ -348,7 +348,7 @@ def test_semihosting_fwrite_stdout(qemu, workdir):
 
 
 def test_semihosting_fwrite_stderr(qemu, workdir):
-    run_semihosting_serial_test(
+    run_semihosting_console_test(
         qemu,
         workdir,
         fwrite_console_test(
@@ -402,9 +402,9 @@ def test_semihosting_ftell_standard_handle(qemu, workdir):
     )
 
 
-@pytest.mark.parametrize("test", SEMIHOSTING_SERIAL_TESTS, ids=case_id)
-def test_semihosting_serial(qemu, workdir, test):
-    run_semihosting_serial_test(qemu, workdir, test)
+@pytest.mark.parametrize("test", SEMIHOSTING_CONSOLE_TESTS, ids=case_id)
+def test_semihosting_console(qemu, workdir, test):
+    run_semihosting_console_test(qemu, workdir, test)
 
 
 @pytest.mark.parametrize("test", SEMIHOSTING_EXPECTED_FAILURE_TESTS,

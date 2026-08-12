@@ -3,8 +3,9 @@
 This directory contains pytest-based softmmu tests for the MMIX target.
 
 The tests run `qemu-system-mmix` with small raw instruction images or `.mmo`
-images and check CPU state, loader failures, and serial output. Some fixtures
-are generated from MMIXAL sources when `mmixal` is available.
+images and check CPU state, loader failures, serial output, and semihosting
+console output. Some fixtures are generated from MMIXAL sources when `mmixal`
+is available.
 
 Semihosted runtime tests use separate pytest entry points and pass
 `-semihosting` explicitly. Other raw-image, serial, and loader tests do not
@@ -48,4 +49,5 @@ tests/tcg/mmix/run-mmix-tests.py \
     --workdir build/tests/tcg/mmix-softmmu/mmix-tests
 ```
 
-The `--workdir` directory is used for generated images, logs, and serial output.
+The `--workdir` directory is used for generated images, logs, serial output,
+and semihosting console output.

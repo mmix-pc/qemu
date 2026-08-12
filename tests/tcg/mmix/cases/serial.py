@@ -31,7 +31,7 @@ SERIAL_TESTS = [
 
 LLVM_SMOKE_CONTRACT = hosted_llvm_smoke_program()
 
-SEMIHOSTING_SERIAL_TESTS = [
+SEMIHOSTING_CONSOLE_TESTS = [
     MMIXSerialTest(
         "semihosting-fputs-stdout",
         hosted_fputs_program(),

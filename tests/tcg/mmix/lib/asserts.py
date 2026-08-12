@@ -63,6 +63,13 @@ def assert_serial_output(name, actual, expected):
         )
 
 
+def assert_console_output(name, actual, expected):
+    if actual != expected:
+        raise AssertionError(
+            f"{name}: console output expected {expected!r}, got {actual!r}"
+        )
+
+
 def assert_process_failed(name, result):
     if result.returncode == 0:
         raise AssertionError(f"{name}: expected loader failure")

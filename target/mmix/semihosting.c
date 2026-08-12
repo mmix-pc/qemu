@@ -10,6 +10,7 @@
 #include "exec/helper-proto.h"
 #include "exec/log.h"
 #include "qemu/main-loop.h"
+#include "semihosting/console.h"
 #include "semihosting/semihost.h"
 #include "semihosting/syscalls.h"
 #include "system/memory.h"
@@ -19,13 +20,6 @@
 #define MMIX_SEMIHOSTING_GUESTFD_NONE 0
 #define MMIX_SEMIHOSTING_SUCCESS 0
 #define MMIX_SEMIHOSTING_FAILURE UINT64_MAX
-/*
- * Keep the current UART-backed output sink behind the MMIX semihosting
- * console boundary. The sink writes the MMIX virt UART0 THR byte register.
- * Later console work can route this through QEMU's semihosting backend
- * without changing the TRAP dispatch shape.
- */
-#define MMIX_SEMIHOSTING_CONSOLE_TX 0x10000000ULL
 
 typedef enum MMIXSemihostingService {
     MMIX_SEMIHOSTING_SERVICE_HALT = 0,
@@ -764,21 +758,26 @@ static bool mmix_semihosting_write_console(CPUMMIXState *env,
                                            uint32_t handle,
                                            const GByteArray *bytes)
 {
-    CPUState *cs = env_cpu(env);
-    MemTxResult result;
-    size_t i;
+    int written;
 
-    for (i = 0; i < bytes->len; i++) {
-        address_space_stb(cs->as, MMIX_SEMIHOSTING_CONSOLE_TX, bytes->data[i],
-                          MEMTXATTRS_UNSPECIFIED, &result);
-        if (result != MEMTX_OK) {
-            qemu_log_mask(LOG_UNIMP,
-                          "MMIX hosted %s could not write %s at "
-                          "0x%016" PRIx64 "\n",
-                          service_name,
-                          mmix_semihosting_console_name(handle), env->pc);
-            return false;
-        }
+    if (bytes->len > INT_MAX) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s %s output length %u is too large at "
+                      "0x%016" PRIx64 "\n",
+                      service_name,
+                      mmix_semihosting_console_name(handle), bytes->len,
+                      env->pc);
+        return false;
+    }
+
+    written = qemu_semihosting_console_write(bytes->data, bytes->len);
+    if (written != bytes->len) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s could not write %s at "
+                      "0x%016" PRIx64 "\n",
+                      service_name,
+                      mmix_semihosting_console_name(handle), env->pc);
+        return false;
     }
 
     return true;

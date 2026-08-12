@@ -263,7 +263,7 @@ MMIXAL_SERIAL_TESTS = [
     ),
 ]
 
-MMIXAL_SEMIHOSTING_SERIAL_TESTS = [
+MMIXAL_SEMIHOSTING_CONSOLE_TESTS = [
     MMIXALSerialCase(
         "mmixal-mmo-hosted-fputs-output",
         "hosted",
