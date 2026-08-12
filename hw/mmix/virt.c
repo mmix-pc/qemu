@@ -326,6 +326,8 @@ static void mmix_virt_init(MachineState *machine)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(virtio_mmio), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(virtio_mmio), 0,
                     mmix_virt_memmap[MMIX_VIRT_VIRTIO_MMIO].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(virtio_mmio), 0,
+                       qdev_get_gpio_in(intc, MMIX_VIRT_VIRTIO_BLOCK0_IRQ));
 
     serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
                    115200, serial_hd(0), DEVICE_BIG_ENDIAN);

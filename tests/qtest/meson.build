@@ -304,6 +304,7 @@ qtests_hexagon = ['boot-serial-test']
 qtests_mmix = [
   'mmix-intc-test',
   'mmix-timer-test',
+  'mmix-virtio-mmio-test',
 ]
 
 qos_test_ss = ss.source_set()
