@@ -196,4 +196,11 @@ SEMIHOSTING_PROCESS_FAILURE_TESTS = [
         ("could not set up MMIX semihosting arguments",
          "MMIX semihosting argument block does not fit in machine RAM"),
     ),
+    MMIXProcessFailure(
+        "semihosting-argv-pool-backing-outside-ram",
+        halt(),
+        ("-m", "64M", "-semihosting-config", "enable=on,arg=prog"),
+        ("could not set up MMIX semihosting arguments",
+         "MMIX semihosting argument block does not fit in machine RAM"),
+    ),
 ]

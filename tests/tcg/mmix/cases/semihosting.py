@@ -624,6 +624,26 @@ SEMIHOSTING_TESTS = [
         qemu_args=("-semihosting-config", "enable=on,arg=prog"),
     ),
     MMIXTest(
+        "semihosting-argv-minimal-pool-ram",
+        argv_layout_program(
+            [(R3, 0), (R4, 1)],
+            [(R10, R3, 0), (R11, R3, 4)],
+        ),
+        pc=0x34,
+        regs={
+            R32: 1,
+            R33: MMIX_POOL_SEGMENT_BASE + 8,
+            R34: 2,
+            R2: MMIX_POOL_SEGMENT_BASE + 0x20,
+            R3: MMIX_POOL_SEGMENT_BASE + 0x18,
+            R4: 0,
+            R10: ord("p"),
+            R11: 0,
+        },
+        qemu_args=("-m", "97M",
+                   "-semihosting-config", "enable=on,arg=prog"),
+    ),
+    MMIXTest(
         "semihosting-argv-multiple-arguments",
         argv_layout_program(
             [(R3, 0), (R4, 1), (R5, 2), (R6, 3)],
