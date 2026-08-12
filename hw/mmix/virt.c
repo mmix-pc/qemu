@@ -24,6 +24,74 @@
 #define MMIX_VIRT_UART_BASE 0x100000000ULL
 #define MMIX_ARG_OCTA_SIZE 8
 
+static void mmix_bootinfo_store(uint8_t *bootinfo, MMIXBootInfoField field,
+                                uint64_t value)
+{
+    stq_be_p(bootinfo + mmix_bootinfo_field_offset(field), value);
+}
+
+static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
+                                Error **errp)
+{
+    g_autofree uint8_t *bootinfo = NULL;
+    MemTxResult result;
+
+    if (machine->ram_size < MMIX_BOOTINFO_PHYS_BASE ||
+        machine->ram_size - MMIX_BOOTINFO_PHYS_BASE < MMIX_BOOTINFO_SIZE) {
+        error_setg(errp, "MMIX boot info does not fit in machine RAM");
+        return false;
+    }
+
+    bootinfo = g_malloc0(MMIX_BOOTINFO_SIZE);
+
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_MAGIC,
+                        MMIX_BOOTINFO_MAGIC);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_VERSION,
+                        MMIX_BOOTINFO_VERSION);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_SIZE,
+                        MMIX_BOOTINFO_SIZE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_CPU_COUNT, 1);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_BOOT_CPU_ID,
+                        boot_cpu_id);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_RAM_BASE, 0);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_RAM_SIZE,
+                        machine->ram_size);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_LOW_RAM_BASE, 0);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_LOW_RAM_SIZE,
+                        MMIX_POOL_SEGMENT_PHYS_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_POOL_LOGICAL_BASE,
+                        MMIX_POOL_SEGMENT_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_POOL_PHYS_BASE,
+                        MMIX_POOL_SEGMENT_PHYS_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_POOL_SIZE,
+                        MMIX_POOL_SEGMENT_SIZE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_DATA_LOGICAL_BASE,
+                        MMIX_DATA_SEGMENT_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_DATA_PHYS_BASE,
+                        MMIX_DATA_SEGMENT_PHYS_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_DATA_SIZE,
+                        MMIX_DATA_SEGMENT_SIZE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_STACK_LOGICAL_BASE,
+                        MMIX_STACK_SEGMENT_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_STACK_PHYS_BASE,
+                        MMIX_STACK_SEGMENT_PHYS_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_STACK_SIZE,
+                        MMIX_STACK_SEGMENT_SIZE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_MMIO_BASE,
+                        MMIX_BOOTINFO_MMIO_BASE);
+
+    result = address_space_write(&address_space_memory,
+                                 MMIX_BOOTINFO_PHYS_BASE,
+                                 MEMTXATTRS_UNSPECIFIED,
+                                 bootinfo, MMIX_BOOTINFO_SIZE);
+    if (result != MEMTX_OK) {
+        error_setg(errp, "could not write MMIX boot info");
+        return false;
+    }
+
+    return true;
+}
+
 static size_t mmix_arg_octa_align(size_t size)
 {
     return QEMU_ALIGN_UP(size, MMIX_ARG_OCTA_SIZE);
@@ -162,6 +230,7 @@ static void mmix_apply_kernel_load_info(CPUState *cpu,
 
     if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
         mmix_cpu_write_reg(env, 0, info->boot_cpu_id);
+        mmix_cpu_write_reg(env, 1, MMIX_BOOTINFO_PHYS_BASE);
     }
 
     cpu_set_pc(cpu, info->entry);
@@ -200,10 +269,19 @@ static void mmix_virt_init(MachineState *machine)
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
+        if (load_info.image_type == MMIX_KERNEL_IMAGE_ELF &&
+            !mmix_write_bootinfo(machine, load_info.boot_cpu_id, &err)) {
+            error_reportf_err(err, "could not set up MMIX boot info: ");
+            exit(1);
+        }
         mmix_apply_kernel_load_info(cpu, &load_info);
-    }
 
-    mmix_setup_semihosting_arguments(machine, cpu);
+        if (load_info.image_type != MMIX_KERNEL_IMAGE_ELF) {
+            mmix_setup_semihosting_arguments(machine, cpu);
+        }
+    } else {
+        mmix_setup_semihosting_arguments(machine, cpu);
+    }
 }
 
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)
