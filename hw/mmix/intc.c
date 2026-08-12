@@ -6,10 +6,29 @@
 
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
+#include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "intc.h"
+
+static uint32_t mmix_intc_irq_mask(unsigned irq)
+{
+    if (irq < MMIX_VIRT_SHARED_IRQ_FIRST || irq >= MMIX_VIRT_INTC_IRQ_COUNT) {
+        return 0;
+    }
+    return 1U << irq;
+}
+
+static uint32_t mmix_intc_valid_irq_mask(void)
+{
+    return UINT32_MAX & ~1U;
+}
+
+static void mmix_intc_update(MMIXIntcState *s)
+{
+    qemu_set_irq(s->irq, !!(s->pending & s->enable[0]));
+}
 
 static bool mmix_intc_context_offset(hwaddr addr, uint32_t *cpu,
                                      hwaddr *reg)
@@ -32,20 +51,19 @@ static bool mmix_intc_context_offset(hwaddr addr, uint32_t *cpu,
 
 static uint64_t mmix_intc_read(void *opaque, hwaddr addr, unsigned size)
 {
+    MMIXIntcState *s = opaque;
     uint32_t cpu;
     hwaddr reg;
 
-    (void)opaque;
     (void)size;
 
     if (addr == MMIX_VIRT_INTC_PENDING) {
-        return 0;
+        return s->pending;
     }
     if (mmix_intc_context_offset(addr, &cpu, &reg)) {
-        (void)cpu;
-
         switch (reg) {
         case MMIX_VIRT_INTC_CONTEXT_ENABLE:
+            return cpu == 0 ? s->enable[cpu] : 0;
         case MMIX_VIRT_INTC_CONTEXT_CLAIM:
             return 0;
         default:
@@ -62,18 +80,20 @@ static uint64_t mmix_intc_read(void *opaque, hwaddr addr, unsigned size)
 static void mmix_intc_write(void *opaque, hwaddr addr,
                             uint64_t value, unsigned size)
 {
+    MMIXIntcState *s = opaque;
     uint32_t cpu;
     hwaddr reg;
 
-    (void)opaque;
-    (void)value;
     (void)size;
 
     if (mmix_intc_context_offset(addr, &cpu, &reg)) {
-        (void)cpu;
-
         switch (reg) {
         case MMIX_VIRT_INTC_CONTEXT_ENABLE:
+            if (cpu == 0) {
+                s->enable[cpu] = value & mmix_intc_valid_irq_mask();
+                mmix_intc_update(s);
+            }
+            return;
         case MMIX_VIRT_INTC_CONTEXT_COMPLETE:
             return;
         default:
@@ -98,14 +118,21 @@ static const MemoryRegionOps mmix_intc_ops = {
 
 static void mmix_intc_set_irq(void *opaque, int irq, int level)
 {
-    (void)opaque;
-    (void)irq;
-    (void)level;
+    MMIXIntcState *s = opaque;
+    uint32_t mask = mmix_intc_irq_mask(irq);
 
-    /*
-     * The device skeleton exposes input lines early so machine wiring and
-     * later interrupt semantics can evolve in separate commits.
-     */
+    if (!mask) {
+        return;
+    }
+
+    if (level) {
+        s->input_level |= mask;
+        s->pending |= mask;
+    } else {
+        s->input_level &= ~mask;
+        s->pending &= ~mask;
+    }
+    mmix_intc_update(s);
 }
 
 static void mmix_intc_reset(DeviceState *dev)
@@ -149,6 +176,7 @@ static void mmix_intc_instance_init(Object *obj)
     MMIXIntcState *s = MMIX_INTC(obj);
 
     sysbus_init_mmio(dev, &s->iomem);
+    sysbus_init_irq(dev, &s->irq);
     qdev_init_gpio_in(DEVICE(obj), mmix_intc_set_irq,
                       MMIX_VIRT_INTC_IRQ_COUNT);
 }
