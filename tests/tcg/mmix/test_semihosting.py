@@ -8,6 +8,7 @@ from cases.common import (
     MMIX_SEMIHOSTING_FIRST_FILE_HANDLE,
     MMIX_SEMIHOSTING_STDERR,
     MMIX_SEMIHOSTING_STDOUT,
+    MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS,
     MASK64,
     case_id,
 )
@@ -179,7 +180,8 @@ def test_semihosting_fread_stdin_bad_buffer(qemu, workdir):
     run_semihosting_stdin_one(
         qemu,
         workdir,
-        fread_stdin_bad_buffer_test(0x6000000000000000, 4, b"input"),
+        fread_stdin_bad_buffer_test(MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS,
+                                    4, b"input"),
     )
 
 
@@ -214,7 +216,8 @@ def test_semihosting_fread_bad_buffer(qemu, workdir):
     run_semihosting_one(
         qemu,
         workdir,
-        fread_bad_buffer_test(host_file, 0x6000000000000000, 4),
+        fread_bad_buffer_test(host_file, MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS,
+                              4),
     )
 
 
@@ -250,7 +253,8 @@ def test_semihosting_fgets_stdin_bad_buffer(qemu, workdir):
     run_semihosting_stdin_one(
         qemu,
         workdir,
-        fgets_stdin_bad_buffer_test(0x6000000000000000, 4, b"input\n"),
+        fgets_stdin_bad_buffer_test(MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS,
+                                    4, b"input\n"),
     )
 
 
@@ -362,7 +366,7 @@ def test_semihosting_fwrite_bad_buffer(qemu, workdir):
         fwrite_failure_test(
             "semihosting-fwrite-bad-buffer",
             MMIX_SEMIHOSTING_STDOUT,
-            0x6000000000000000,
+            MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS,
             4,
         ),
     )

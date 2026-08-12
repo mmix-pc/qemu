@@ -516,6 +516,35 @@ ISA_TESTS = [
         regs={R2: 0xaabbccddeeff0011, R3: 0xaabbccddeeff0011},
     ),
     MMIXTest(
+        "stack-segment-runtime-load-store",
+        b"".join(
+            [
+                *set_octa(R1, MMIX_STACK_SEGMENT_BASE + 0x100),
+                *set_octa(R2, 0x1020304050607080),
+                insn(STOU, R2, R1, R0),
+                insn(LDOU, R3, R1, R0),
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={R2: 0x1020304050607080, R3: 0x1020304050607080},
+    ),
+    MMIXTest(
+        "stack-segment-runtime-last-octa",
+        b"".join(
+            [
+                *set_octa(R1, MMIX_STACK_SEGMENT_BASE +
+                          MMIX_STACK_SEGMENT_SIZE - 8),
+                *set_octa(R2, 0xfeedfacecafebeef),
+                insn(STOU, R2, R1, R0),
+                insn(LDOU, R3, R1, R0),
+                halt(),
+            ]
+        ),
+        pc=0x28,
+        regs={R2: 0xfeedfacecafebeef, R3: 0xfeedfacecafebeef},
+    ),
+    MMIXTest(
         "unsupported-high-segment-runtime-trap",
         program_with_handler(
             [
@@ -523,7 +552,7 @@ ISA_TESTS = [
                 insn(PUT, SR_TT, 0, R1),
                 *set_octa(R2, RQ_PROGRAM_K),
                 insn(PUT, SR_K, 0, R2),
-                *set_octa(R3, 0x6000000000000000),
+                *set_octa(R3, MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS),
                 insn(LDOU, R4, R3, R0),
                 wyde(SETL, R5, 0x00ff),    # skipped after dynamic trap
             ],

@@ -77,6 +77,14 @@ static inline bool mmix_bare_pool_segment_to_phys(uint64_t address,
                                      MMIX_POOL_SEGMENT_SIZE, physical);
 }
 
+static inline bool mmix_bare_stack_segment_to_phys(uint64_t address,
+                                                   hwaddr *physical)
+{
+    return mmix_bare_segment_to_phys(address, MMIX_STACK_SEGMENT_BASE,
+                                     MMIX_STACK_SEGMENT_PHYS_BASE,
+                                     MMIX_STACK_SEGMENT_SIZE, physical);
+}
+
 static inline bool mmix_bare_unsupported_high_segment(uint64_t address)
 {
     hwaddr physical;
@@ -84,7 +92,8 @@ static inline bool mmix_bare_unsupported_high_segment(uint64_t address)
     return address >= MMIX_POSITIVE_HIGH_SEGMENT_BASE &&
            address < MMIX_NEGATIVE_SEGMENT_BASE &&
            !mmix_bare_data_segment_to_phys(address, &physical) &&
-           !mmix_bare_pool_segment_to_phys(address, &physical);
+           !mmix_bare_pool_segment_to_phys(address, &physical) &&
+           !mmix_bare_stack_segment_to_phys(address, &physical);
 }
 
 typedef enum MMIXSpecialReg {
