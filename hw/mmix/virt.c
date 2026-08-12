@@ -114,6 +114,17 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                         mmix_virt_memmap[MMIX_VIRT_UART0].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_UART_IRQ,
                         MMIX_VIRT_UART0_IRQ);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_TIMER_IRQ_BASE,
+                        MMIX_VIRT_TIMER_IRQ_BASE);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_TIMER_IRQ_COUNT, 1);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_INTC_BASE,
+                        mmix_virt_memmap[MMIX_VIRT_INTC].base);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_INTC_IRQ_COUNT,
+                        MMIX_VIRT_INTC_IRQ_COUNT);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_IRQ,
+                        MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_IRQ,
+                        MMIX_VIRT_FRAMEBUFFER_IRQ);
 
     result = address_space_write(&address_space_memory,
                                  mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base,

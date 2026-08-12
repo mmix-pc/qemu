@@ -15,8 +15,9 @@
 /*
  * The boot-info block is a versioned table of unsigned 64-bit fields encoded
  * in big-endian byte order, matching MMIX's natural octa layout.
- * Not-yet-implemented device fields are present in the ABI but must be
- * written as zero until the corresponding device is added to the machine.
+ * Base, size, count, and geometry fields for not-yet-implemented devices
+ * remain zero until the corresponding device exists. IRQ fields may expose
+ * reserved machine ABI numbers before their device sources are implemented.
  */
 typedef enum MMIXBootInfoField {
     MMIX_BOOTINFO_FIELD_MAGIC,
@@ -42,13 +43,17 @@ typedef enum MMIXBootInfoField {
     MMIX_BOOTINFO_FIELD_UART_BASE,
     MMIX_BOOTINFO_FIELD_UART_IRQ,
     MMIX_BOOTINFO_FIELD_TIMER_BASE,
+    MMIX_BOOTINFO_FIELD_TIMER_IRQ_BASE,
+    MMIX_BOOTINFO_FIELD_TIMER_IRQ_COUNT,
     MMIX_BOOTINFO_FIELD_INTC_BASE,
+    MMIX_BOOTINFO_FIELD_INTC_IRQ_COUNT,
     MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_BASE,
     MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_IRQ,
     MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_COUNT,
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_CONTROL_BASE,
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_BASE,
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_SIZE,
+    MMIX_BOOTINFO_FIELD_FRAMEBUFFER_IRQ,
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_WIDTH,
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_HEIGHT,
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_STRIDE,

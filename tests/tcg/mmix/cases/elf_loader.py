@@ -8,22 +8,8 @@ from .common import *
 def bootinfo_probe_program():
     bootinfo = expected_bootinfo()
     fields = {
-        R4: "magic",
-        R5: "version",
-        R6: "size",
-        R7: "ram_size",
-        R8: "low_ram_size",
-        R9: "pool_logical_base",
-        R10: "pool_phys_base",
-        R11: "data_logical_base",
-        R12: "data_phys_base",
-        R13: "stack_logical_base",
-        R14: "stack_phys_base",
-        R15: "mmio_base",
-        R16: "uart_base",
-        R17: "uart_irq",
-        R18: "timer_base",
-        R19: "framebuffer_base",
+        index + R4: field
+        for index, field in enumerate(MMIX_BOOTINFO_FIELDS)
     }
     program = [
         insn(ADDI, R2, R0, 0),
@@ -33,8 +19,8 @@ def bootinfo_probe_program():
     for reg, field in fields.items():
         offset = MMIX_BOOTINFO_FIELDS.index(field) * 8
         program.extend([
-            wyde(SETL, R20, offset),
-            insn(LDOU, reg, R1, R20),
+            wyde(SETL, R50, offset),
+            insn(LDOU, reg, R1, R50),
         ])
 
     program.append(halt())
