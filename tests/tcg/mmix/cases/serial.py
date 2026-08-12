@@ -4,11 +4,13 @@
 
 from .common import *
 
+SERIAL_TX_PROGRAM = serial_tx_program()
+
 SERIAL_TESTS = [
     MMIXSerialTest(
         "serial-tx-output",
-        serial_tx_program(),
-        pc=0x38,
+        SERIAL_TX_PROGRAM[0],
+        pc=SERIAL_TX_PROGRAM[1],
         output=b"MMIX\n",
     ),
     MMIXSerialTest(
@@ -17,12 +19,12 @@ SERIAL_TESTS = [
             [
                 mmo_file(1, "mmo-serial.mms"),
                 mmo_line(1),
-                serial_tx_program(),
+                SERIAL_TX_PROGRAM[0],
                 mmo_post(R255, {R255: 0}),
                 mmo_stab_end(),
             ]
         ),
-        pc=0x38,
+        pc=SERIAL_TX_PROGRAM[1],
         output=b"MMIX\n",
     ),
 ]

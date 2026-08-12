@@ -21,10 +21,11 @@
 #define MMIX_SEMIHOSTING_FAILURE UINT64_MAX
 /*
  * Keep the current UART-backed output sink behind the MMIX semihosting
- * console boundary. Later console work can route this through QEMU's
- * semihosting backend without changing the TRAP dispatch shape.
+ * console boundary. The sink writes the MMIX virt UART0 THR byte register.
+ * Later console work can route this through QEMU's semihosting backend
+ * without changing the TRAP dispatch shape.
  */
-#define MMIX_SEMIHOSTING_CONSOLE_TX 0x100000004ULL
+#define MMIX_SEMIHOSTING_CONSOLE_TX 0x10000000ULL
 
 typedef enum MMIXSemihostingService {
     MMIX_SEMIHOSTING_SERVICE_HALT = 0,

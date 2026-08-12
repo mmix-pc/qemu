@@ -59,6 +59,7 @@ MMIX_VIRT_PLATFORM_RAM = "platform_ram"
 MMIX_VIRT_BOOTINFO = "bootinfo"
 MMIX_VIRT_FRAMEBUFFER = "framebuffer"
 MMIX_VIRT_MMIO = "mmio"
+MMIX_VIRT_UART0 = "uart0"
 MMIX_VIRT_UARTLITE = "uartlite"
 MMIX_VIRT_MEMMAP = {
     MMIX_VIRT_LOW_RAM: (0x00000000, 0x06000000),
@@ -69,10 +70,13 @@ MMIX_VIRT_MEMMAP = {
     MMIX_VIRT_BOOTINFO: (0x0E800000, 0),
     MMIX_VIRT_FRAMEBUFFER: (0x0F000000, 0x01000000),
     MMIX_VIRT_MMIO: (0x10000000, 0),
+    MMIX_VIRT_UART0: (0x10000000, 0x100),
     MMIX_VIRT_UARTLITE: (0x0000000100000000, 0x1000),
 }
-MMIX_VIRT_UART_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_UARTLITE][0]
-MMIX_VIRT_UART_TX = 0x04
+MMIX_VIRT_UART0_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_UART0][0]
+MMIX_VIRT_UART0_THR = 0x00
+MMIX_VIRT_UART0_LSR = 0x05
+MMIX_VIRT_UART0_LSR_THRE = 0x20
 MMIX_BOOTINFO_MAGIC = 0x4D4D4958424F4F54
 MMIX_BOOTINFO_VERSION = 1
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
@@ -206,23 +210,20 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
     }
 
 
-def serial_tx_program():
-    return b"".join(
-        [
-            *set_octa(R1, MMIX_VIRT_UART_BASE),
-            wyde(SETL, R2, ord("M")),
-            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
-            wyde(SETL, R2, ord("M")),
-            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
-            wyde(SETL, R2, ord("I")),
-            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
-            wyde(SETL, R2, ord("X")),
-            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
-            wyde(SETL, R2, ord("\n")),
-            insn(STBI, R2, R1, MMIX_VIRT_UART_TX),
-            halt(),
-        ]
-    )
+def serial_tx_program(message=b"MMIX\n"):
+    program = [*set_octa(R1, MMIX_VIRT_UART0_BASE)]
+
+    for ch in message:
+        program.extend([
+            insn(LDBUI, R3, R1, MMIX_VIRT_UART0_LSR),
+            insn(ANDI, R3, R3, MMIX_VIRT_UART0_LSR_THRE),
+            branch(BZB, R3, 0xfffe),
+            wyde(SETL, R2, ch),
+            insn(STBI, R2, R1, MMIX_VIRT_UART0_THR),
+        ])
+
+    program.append(halt())
+    return b"".join(program), (len(program) - 1) * 4
 
 
 def hosted_fputs_program(handle=MMIX_SEMIHOSTING_STDOUT,
