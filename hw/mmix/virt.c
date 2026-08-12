@@ -16,6 +16,7 @@
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
 #include "bootinfo.h"
+#include "intc.h"
 #include "kernel-loader.h"
 #include "virt.h"
 
@@ -261,10 +262,16 @@ static void mmix_virt_init(MachineState *machine)
 {
     MemoryRegion *sysmem = get_system_memory();
     CPUState *cpu;
+    DeviceState *intc;
 
     memory_region_add_subregion(sysmem, 0, machine->ram);
 
     cpu = cpu_create(machine->cpu_type);
+
+    intc = qdev_new(TYPE_MMIX_INTC);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(intc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(intc), 0,
+                    mmix_virt_memmap[MMIX_VIRT_INTC].base);
 
     serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
                    115200, serial_hd(0), DEVICE_BIG_ENDIAN);
