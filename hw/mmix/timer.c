@@ -10,12 +10,59 @@
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
+#include "qemu/timer.h"
 #include "timer.h"
+
+static uint64_t mmix_timer_control_mask(void)
+{
+    return MMIX_VIRT_TIMER_CONTROL_ENABLE |
+           MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
+}
+
+static bool mmix_timer_context_offset(hwaddr addr, uint32_t *cpu, hwaddr *reg)
+{
+    hwaddr context;
+
+    if (addr < MMIX_VIRT_TIMER_CONTEXT_BASE) {
+        return false;
+    }
+
+    context = addr - MMIX_VIRT_TIMER_CONTEXT_BASE;
+    *cpu = context / MMIX_VIRT_TIMER_CONTEXT_STRIDE;
+    if (*cpu >= MMIX_VIRT_INTC_CONTEXT_COUNT) {
+        return false;
+    }
+
+    *reg = context % MMIX_VIRT_TIMER_CONTEXT_STRIDE;
+    return true;
+}
 
 static uint64_t mmix_timer_read(void *opaque, hwaddr addr, unsigned size)
 {
-    (void)opaque;
+    MMIXTimerState *s = opaque;
+    uint32_t cpu;
+    hwaddr reg;
+
     (void)size;
+
+    if (addr == MMIX_VIRT_TIMER_TIME) {
+        return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    }
+    if (mmix_timer_context_offset(addr, &cpu, &reg)) {
+        if (cpu != 0) {
+            return 0;
+        }
+        switch (reg) {
+        case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
+            return s->compare[cpu];
+        case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
+            return s->control[cpu];
+        case MMIX_VIRT_TIMER_CONTEXT_STATUS:
+            return s->status[cpu];
+        default:
+            break;
+        }
+    }
 
     qemu_log_mask(LOG_UNIMP,
                   "%s: unimplemented register read 0x%02" HWADDR_PRIx "\n",
@@ -26,9 +73,30 @@ static uint64_t mmix_timer_read(void *opaque, hwaddr addr, unsigned size)
 static void mmix_timer_write(void *opaque, hwaddr addr,
                              uint64_t value, unsigned size)
 {
-    (void)opaque;
-    (void)value;
+    MMIXTimerState *s = opaque;
+    uint32_t cpu;
+    hwaddr reg;
+
     (void)size;
+
+    if (mmix_timer_context_offset(addr, &cpu, &reg)) {
+        if (cpu != 0) {
+            return;
+        }
+        switch (reg) {
+        case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
+            s->compare[cpu] = value;
+            return;
+        case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
+            s->control[cpu] = value & mmix_timer_control_mask();
+            return;
+        case MMIX_VIRT_TIMER_CONTEXT_STATUS:
+            s->status[cpu] &= ~(value & MMIX_VIRT_TIMER_STATUS_PENDING);
+            return;
+        default:
+            break;
+        }
+    }
 
     qemu_log_mask(LOG_UNIMP,
                   "%s: unimplemented register write 0x%02" HWADDR_PRIx "\n",
