@@ -25,9 +25,61 @@ static uint32_t mmix_intc_valid_irq_mask(void)
     return UINT32_MAX & ~1U;
 }
 
+static uint32_t mmix_intc_claimable(MMIXIntcState *s, uint32_t cpu)
+{
+    /* CPU1+ contexts are reserved for future SMP support. */
+    if (cpu != 0) {
+        return 0;
+    }
+
+    return s->pending & s->enable[cpu] & ~s->claimed[cpu];
+}
+
 static void mmix_intc_update(MMIXIntcState *s)
 {
-    qemu_set_irq(s->irq, !!(s->pending & s->enable[0]));
+    qemu_set_irq(s->irq, !!mmix_intc_claimable(s, 0));
+}
+
+static uint32_t mmix_intc_claim(MMIXIntcState *s, uint32_t cpu)
+{
+    uint32_t claimable;
+    uint32_t irq;
+    uint32_t mask;
+
+    claimable = mmix_intc_claimable(s, cpu);
+    if (!claimable) {
+        return 0;
+    }
+
+    irq = ctz32(claimable);
+    mask = mmix_intc_irq_mask(irq);
+    g_assert(mask != 0);
+
+    s->pending &= ~mask;
+    s->claimed[cpu] |= mask;
+    mmix_intc_update(s);
+
+    return irq;
+}
+
+static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu, uint32_t irq)
+{
+    uint32_t mask;
+
+    if (cpu != 0) {
+        return;
+    }
+
+    mask = mmix_intc_irq_mask(irq);
+    if (!(mask & s->claimed[cpu])) {
+        return;
+    }
+
+    s->claimed[cpu] &= ~mask;
+    if (s->input_level & mask) {
+        s->pending |= mask;
+    }
+    mmix_intc_update(s);
 }
 
 static bool mmix_intc_context_offset(hwaddr addr, uint32_t *cpu,
@@ -65,7 +117,7 @@ static uint64_t mmix_intc_read(void *opaque, hwaddr addr, unsigned size)
         case MMIX_VIRT_INTC_CONTEXT_ENABLE:
             return cpu == 0 ? s->enable[cpu] : 0;
         case MMIX_VIRT_INTC_CONTEXT_CLAIM:
-            return 0;
+            return mmix_intc_claim(s, cpu);
         default:
             break;
         }
@@ -95,6 +147,7 @@ static void mmix_intc_write(void *opaque, hwaddr addr,
             }
             return;
         case MMIX_VIRT_INTC_CONTEXT_COMPLETE:
+            mmix_intc_complete(s, cpu, value);
             return;
         default:
             break;
