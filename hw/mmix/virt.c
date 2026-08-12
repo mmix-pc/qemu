@@ -296,6 +296,7 @@ static void mmix_virt_init(MachineState *machine)
     cpu = cpu_create(machine->cpu_type);
 
     intc = qdev_new(TYPE_MMIX_INTC);
+    object_property_add_child(OBJECT(machine), "intc", OBJECT(intc));
     sysbus_realize_and_unref(SYS_BUS_DEVICE(intc), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(intc), 0,
                     mmix_virt_memmap[MMIX_VIRT_INTC].base);
