@@ -128,8 +128,12 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                         mmix_virt_memmap[MMIX_VIRT_INTC].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_INTC_IRQ_COUNT,
                         MMIX_VIRT_INTC_IRQ_COUNT);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_BASE,
+                        mmix_virt_memmap[MMIX_VIRT_VIRTIO_MMIO].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_IRQ,
                         MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_COUNT,
+                        MMIX_VIRT_VIRTIO_MMIO_COUNT);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_IRQ,
                         MMIX_VIRT_FRAMEBUFFER_IRQ);
 
