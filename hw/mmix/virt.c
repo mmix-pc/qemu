@@ -18,6 +18,7 @@
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
+#include "bootinfo.h"
 #include "kernel-loader.h"
 
 #define MMIX_VIRT_UART_BASE 0x100000000ULL

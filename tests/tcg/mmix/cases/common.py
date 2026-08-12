@@ -53,12 +53,23 @@ VM_RV_ROOT2 = 0x11110d0000004000
 NEGATIVE_HANDLER = 0x8000000000000080
 MMIX_VIRT_UART_BASE = 0x0000000100000000
 MMIX_VIRT_UART_TX = 0x04
+MMIX_BOOTINFO_MAGIC = 0x4D4D4958424F4F54
+MMIX_BOOTINFO_VERSION = 1
+MMIX_BOOTINFO_PHYS_BASE = 0x0E800000
+MMIX_BOOTINFO_MMIO_BASE = 0x10000000
+MMIX_FRAMEBUFFER_BASE = 0x0F000000
+MMIX_FRAMEBUFFER_SIZE = 0x01000000
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
+MMIX_POOL_SEGMENT_PHYS_BASE = 0x06000000
 MMIX_POOL_SEGMENT_SIZE = 0x0000000000800000
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
+MMIX_DATA_SEGMENT_PHYS_BASE = 0x06800000
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
 MMIX_STACK_SEGMENT_BASE = 0x6000000000000000
+MMIX_STACK_SEGMENT_PHYS_BASE = 0x0A800000
 MMIX_STACK_SEGMENT_SIZE = 0x0000000004000000
+MMIX_LOW_RAM_BASE = 0
+MMIX_LOW_RAM_SIZE = MMIX_POOL_SEGMENT_PHYS_BASE
 MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS = 0x7000000000000000
 MMIX_SEMIHOSTING_HALT = 0
 MMIX_SEMIHOSTING_FOPEN = 1
@@ -90,6 +101,89 @@ ET_EXEC = 2
 EM_X86_64 = 62
 EM_MMIX = 80
 PT_LOAD = 1
+
+MMIX_BOOTINFO_FIELDS = (
+    "magic",
+    "version",
+    "size",
+    "flags",
+    "cpu_count",
+    "boot_cpu_id",
+    "ram_base",
+    "ram_size",
+    "low_ram_base",
+    "low_ram_size",
+    "pool_logical_base",
+    "pool_phys_base",
+    "pool_size",
+    "data_logical_base",
+    "data_phys_base",
+    "data_size",
+    "stack_logical_base",
+    "stack_phys_base",
+    "stack_size",
+    "mmio_base",
+    "uart_base",
+    "uart_irq",
+    "timer_base",
+    "intc_base",
+    "virtio_mmio_base",
+    "virtio_mmio_irq",
+    "virtio_mmio_count",
+    "framebuffer_control_base",
+    "framebuffer_base",
+    "framebuffer_size",
+    "framebuffer_width",
+    "framebuffer_height",
+    "framebuffer_stride",
+    "framebuffer_format",
+)
+MMIX_BOOTINFO_FORMAT = ">" + ("Q" * len(MMIX_BOOTINFO_FIELDS))
+MMIX_BOOTINFO_SIZE = struct.calcsize(MMIX_BOOTINFO_FORMAT)
+
+
+def parse_bootinfo(data):
+    values = struct.unpack(MMIX_BOOTINFO_FORMAT, data[:MMIX_BOOTINFO_SIZE])
+    return dict(zip(MMIX_BOOTINFO_FIELDS, values))
+
+
+def expected_bootinfo(ram_size=256 * 1024 * 1024):
+    return {
+        "magic": MMIX_BOOTINFO_MAGIC,
+        "version": MMIX_BOOTINFO_VERSION,
+        "size": MMIX_BOOTINFO_SIZE,
+        "flags": 0,
+        "cpu_count": 1,
+        "boot_cpu_id": 0,
+        "ram_base": 0,
+        "ram_size": ram_size,
+        "low_ram_base": MMIX_LOW_RAM_BASE,
+        "low_ram_size": MMIX_LOW_RAM_SIZE,
+        "pool_logical_base": MMIX_POOL_SEGMENT_BASE,
+        "pool_phys_base": MMIX_POOL_SEGMENT_PHYS_BASE,
+        "pool_size": MMIX_POOL_SEGMENT_SIZE,
+        "data_logical_base": MMIX_DATA_SEGMENT_BASE,
+        "data_phys_base": MMIX_DATA_SEGMENT_PHYS_BASE,
+        "data_size": MMIX_DATA_SEGMENT_SIZE,
+        "stack_logical_base": MMIX_STACK_SEGMENT_BASE,
+        "stack_phys_base": MMIX_STACK_SEGMENT_PHYS_BASE,
+        "stack_size": MMIX_STACK_SEGMENT_SIZE,
+        "mmio_base": MMIX_BOOTINFO_MMIO_BASE,
+        "uart_base": 0,
+        "uart_irq": 0,
+        "timer_base": 0,
+        "intc_base": 0,
+        "virtio_mmio_base": 0,
+        "virtio_mmio_irq": 0,
+        "virtio_mmio_count": 0,
+        "framebuffer_control_base": 0,
+        "framebuffer_base": 0,
+        "framebuffer_size": 0,
+        "framebuffer_width": 0,
+        "framebuffer_height": 0,
+        "framebuffer_stride": 0,
+        "framebuffer_format": 0,
+    }
 
 
 def serial_tx_program():
