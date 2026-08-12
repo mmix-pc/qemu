@@ -18,9 +18,14 @@ typedef enum MMIXVirtMemMap {
     MMIX_VIRT_BOOTINFO,
     MMIX_VIRT_FRAMEBUFFER,
     MMIX_VIRT_MMIO,
+    MMIX_VIRT_UART0,
     MMIX_VIRT_UARTLITE,
     MMIX_VIRT_MEMMAP_COUNT,
 } MMIXVirtMemMap;
+
+enum {
+    MMIX_VIRT_UART0_IRQ = 1,
+};
 
 extern const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT];
 
