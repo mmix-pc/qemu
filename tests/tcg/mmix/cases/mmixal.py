@@ -39,18 +39,18 @@ Main    ADDU    $2,Ptr,0
 """
 
 MMIXAL_UART_SOURCE = """\
-Uart    GREG    #100000000
+Uart    GREG    #10000000
         LOC     #0
 Main    SETL    $2,'Q'
-        STBU    $2,Uart,#4
+        STBU    $2,Uart,#0
         SETL    $2,'E'
-        STBU    $2,Uart,#4
+        STBU    $2,Uart,#0
         SETL    $2,'M'
-        STBU    $2,Uart,#4
+        STBU    $2,Uart,#0
         SETL    $2,'U'
-        STBU    $2,Uart,#4
+        STBU    $2,Uart,#0
         SETL    $2,#a
-        STBU    $2,Uart,#4
+        STBU    $2,Uart,#0
         TRAP    0,0,0
 """
 

@@ -34,7 +34,6 @@ const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
     [MMIX_VIRT_FRAMEBUFFER] =  { 0x000000000f000000ULL, 0x0000000001000000ULL },
     [MMIX_VIRT_MMIO] =         { 0x0000000010000000ULL, 0 },
     [MMIX_VIRT_UART0] =        { 0x0000000010000000ULL, 0x100 },
-    [MMIX_VIRT_UARTLITE] =     { 0x0000000100000000ULL, 0x1000 },
 };
 
 static void mmix_bootinfo_store(uint8_t *bootinfo, MMIXBootInfoField field,
