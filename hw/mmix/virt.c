@@ -7,10 +7,12 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "exec/cpu-interrupt.h"
 #include "hw/char/serial-mm.h"
 #include "system/address-spaces.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
+#include "hw/core/irq.h"
 #include "semihosting/semihost.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
@@ -37,6 +39,19 @@ const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
     [MMIX_VIRT_UART0] =        { 0x0000000010000000ULL, 0x100 },
     [MMIX_VIRT_INTC] =         { 0x0000000010004000ULL, MMIX_VIRT_INTC_SIZE },
 };
+
+static void mmix_virt_cpu_irq(void *opaque, int irq, int level)
+{
+    CPUState *cpu = opaque;
+
+    g_assert(irq == 0);
+
+    if (level) {
+        cpu_interrupt(cpu, CPU_INTERRUPT_HARD);
+    } else {
+        cpu_reset_interrupt(cpu, CPU_INTERRUPT_HARD);
+    }
+}
 
 static void mmix_bootinfo_store(uint8_t *bootinfo, MMIXBootInfoField field,
                                 uint64_t value)
@@ -263,6 +278,7 @@ static void mmix_virt_init(MachineState *machine)
     MemoryRegion *sysmem = get_system_memory();
     CPUState *cpu;
     DeviceState *intc;
+    qemu_irq cpu_irq;
 
     memory_region_add_subregion(sysmem, 0, machine->ram);
 
@@ -272,6 +288,8 @@ static void mmix_virt_init(MachineState *machine)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(intc), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(intc), 0,
                     mmix_virt_memmap[MMIX_VIRT_INTC].base);
+    cpu_irq = qemu_allocate_irq(mmix_virt_cpu_irq, cpu, 0);
+    sysbus_connect_irq(SYS_BUS_DEVICE(intc), 0, cpu_irq);
 
     serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
                    115200, serial_hd(0), DEVICE_BIG_ENDIAN);

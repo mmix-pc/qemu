@@ -196,6 +196,7 @@ static void mmix_intc_reset(DeviceState *dev)
     s->input_level = 0;
     memset(s->claimed, 0, sizeof(s->claimed));
     memset(s->enable, 0, sizeof(s->enable));
+    qemu_set_irq(s->irq, 0);
 }
 
 static void mmix_intc_realize(DeviceState *dev, Error **errp)
