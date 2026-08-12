@@ -236,7 +236,7 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_MMIO][0],
         "uart_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_UART0][0],
         "uart_irq": MMIX_VIRT_UART0_IRQ,
-        "timer_base": 0,
+        "timer_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0],
         "timer_irq_base": MMIX_VIRT_TIMER_IRQ_BASE,
         "timer_irq_count": 1,
         "intc_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0],
