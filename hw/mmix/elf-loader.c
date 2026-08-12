@@ -118,6 +118,8 @@ static bool mmix_validate_elf_low_ram_range(const char *filename,
 static void mmix_apply_elf_load_info(MMIXKernelLoadInfo *info, uint64_t entry)
 {
     info->entry = entry;
+    info->image_type = MMIX_KERNEL_IMAGE_ELF;
+    info->boot_cpu_id = 0;
     info->has_mmo_globals = false;
 }
 

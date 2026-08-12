@@ -31,4 +31,19 @@ ELF_LOADER_TESTS = [
         pc=0x14,
         regs={R2: 0},
     ),
+    MMIXMMOTest(
+        "elf-entry-state",
+        elf64_image(
+            0x100,
+            b"".join([
+                insn(ADDI, R2, R0, 0),
+                insn(ADDI, R3, R1, 0),
+                wyde(SETL, R4, 0x7e),
+                halt(),
+            ]),
+            entry=0x100,
+        ),
+        pc=0x10c,
+        regs={R2: 0, R3: 0, R4: 0x7e},
+    ),
 ]

@@ -159,6 +159,10 @@ static void mmix_apply_kernel_load_info(CPUState *cpu,
         }
     }
 
+    if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
+        mmix_cpu_write_reg(env, 0, info->boot_cpu_id);
+    }
+
     cpu_set_pc(cpu, info->entry);
 }
 

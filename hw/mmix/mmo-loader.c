@@ -608,6 +608,8 @@ ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
         .ram_size = ram_size,
     };
 
+    info->image_type = MMIX_KERNEL_IMAGE_MMO;
+
     loader.file = fopen(filename, "rb");
     if (!loader.file) {
         error_setg_file_open(errp, errno, filename);

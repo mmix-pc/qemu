@@ -11,12 +11,6 @@
 #include "kernel-loader.h"
 #include "mmo-loader.h"
 
-typedef enum MMIXKernelImageType {
-    MMIX_KERNEL_IMAGE_MMO,
-    MMIX_KERNEL_IMAGE_ELF,
-    MMIX_KERNEL_IMAGE_RAW,
-} MMIXKernelImageType;
-
 static bool mmix_detect_kernel_image_type(const char *filename,
                                           MMIXKernelImageType *type,
                                           Error **errp)
@@ -58,6 +52,7 @@ ssize_t mmix_load_kernel(const char *filename, uint64_t ram_size,
 
     *info = (MMIXKernelLoadInfo) {
         .entry = 0,
+        .image_type = MMIX_KERNEL_IMAGE_RAW,
     };
 
     if (!mmix_detect_kernel_image_type(filename, &type, errp)) {

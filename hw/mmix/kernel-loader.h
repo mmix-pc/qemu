@@ -10,8 +10,16 @@
 #include "exec/hwaddr.h"
 #include "qapi/error.h"
 
+typedef enum MMIXKernelImageType {
+    MMIX_KERNEL_IMAGE_RAW,
+    MMIX_KERNEL_IMAGE_MMO,
+    MMIX_KERNEL_IMAGE_ELF,
+} MMIXKernelImageType;
+
 typedef struct MMIXKernelLoadInfo {
     hwaddr entry;
+    MMIXKernelImageType image_type;
+    uint64_t boot_cpu_id;
     bool has_mmo_globals;
     uint8_t global_base;
     uint64_t globals[256];
