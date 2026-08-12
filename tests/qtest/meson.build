@@ -301,7 +301,10 @@ qtests_riscv64 = ['riscv-csr-test'] + \
 
 qtests_hexagon = ['boot-serial-test']
 
-qtests_mmix = ['mmix-intc-test']
+qtests_mmix = [
+  'mmix-intc-test',
+  'mmix-timer-test',
+]
 
 qos_test_ss = ss.source_set()
 qos_test_ss.add(
