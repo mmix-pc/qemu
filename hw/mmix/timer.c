@@ -19,6 +19,57 @@ static uint64_t mmix_timer_control_mask(void)
            MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
 }
 
+static bool mmix_timer_enabled(MMIXTimerState *s, uint32_t cpu)
+{
+    return s->control[cpu] & MMIX_VIRT_TIMER_CONTROL_ENABLE;
+}
+
+static bool mmix_timer_irq_enabled(MMIXTimerState *s, uint32_t cpu)
+{
+    return s->control[cpu] & MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
+}
+
+static bool mmix_timer_pending(MMIXTimerState *s, uint32_t cpu)
+{
+    return s->status[cpu] & MMIX_VIRT_TIMER_STATUS_PENDING;
+}
+
+static void mmix_timer_update(MMIXTimerState *s)
+{
+    bool assert_irq = mmix_timer_enabled(s, 0) &&
+                      mmix_timer_irq_enabled(s, 0) &&
+                      mmix_timer_pending(s, 0);
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    qemu_set_irq(s->irq, assert_irq);
+
+    if (!s->timer) {
+        return;
+    }
+    if (!mmix_timer_enabled(s, 0) || mmix_timer_pending(s, 0)) {
+        timer_del(s->timer);
+        return;
+    }
+
+    if (s->compare[0] <= (uint64_t)now) {
+        s->status[0] |= MMIX_VIRT_TIMER_STATUS_PENDING;
+        qemu_set_irq(s->irq, mmix_timer_irq_enabled(s, 0));
+        timer_del(s->timer);
+    } else if (s->compare[0] <= INT64_MAX) {
+        timer_mod(s->timer, s->compare[0]);
+    } else {
+        timer_del(s->timer);
+    }
+}
+
+static void mmix_timer_expire(void *opaque)
+{
+    MMIXTimerState *s = opaque;
+
+    s->status[0] |= MMIX_VIRT_TIMER_STATUS_PENDING;
+    mmix_timer_update(s);
+}
+
 static bool mmix_timer_context_offset(hwaddr addr, uint32_t *cpu, hwaddr *reg)
 {
     hwaddr context;
@@ -29,7 +80,7 @@ static bool mmix_timer_context_offset(hwaddr addr, uint32_t *cpu, hwaddr *reg)
 
     context = addr - MMIX_VIRT_TIMER_CONTEXT_BASE;
     *cpu = context / MMIX_VIRT_TIMER_CONTEXT_STRIDE;
-    if (*cpu >= MMIX_VIRT_INTC_CONTEXT_COUNT) {
+    if (*cpu >= MMIX_VIRT_TIMER_CONTEXT_COUNT) {
         return false;
     }
 
@@ -86,12 +137,15 @@ static void mmix_timer_write(void *opaque, hwaddr addr,
         switch (reg) {
         case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
             s->compare[cpu] = value;
+            mmix_timer_update(s);
             return;
         case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
             s->control[cpu] = value & mmix_timer_control_mask();
+            mmix_timer_update(s);
             return;
         case MMIX_VIRT_TIMER_CONTEXT_STATUS:
             s->status[cpu] &= ~(value & MMIX_VIRT_TIMER_STATUS_PENDING);
+            mmix_timer_update(s);
             return;
         default:
             break;
@@ -120,7 +174,10 @@ static void mmix_timer_reset(DeviceState *dev)
     memset(s->compare, 0, sizeof(s->compare));
     memset(s->control, 0, sizeof(s->control));
     memset(s->status, 0, sizeof(s->status));
-    qemu_set_irq(s->irq, 0);
+    if (s->timer) {
+        timer_del(s->timer);
+    }
+    mmix_timer_update(s);
 }
 
 static void mmix_timer_realize(DeviceState *dev, Error **errp)
@@ -129,8 +186,17 @@ static void mmix_timer_realize(DeviceState *dev, Error **errp)
 
     (void)errp;
 
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mmix_timer_expire, s);
     memory_region_init_io(&s->iomem, OBJECT(s), &mmix_timer_ops, s,
                           TYPE_MMIX_TIMER, MMIX_VIRT_TIMER_SIZE);
+}
+
+static void mmix_timer_unrealize(DeviceState *dev)
+{
+    MMIXTimerState *s = MMIX_TIMER(dev);
+
+    timer_free(s->timer);
+    s->timer = NULL;
 }
 
 static const VMStateDescription vmstate_mmix_timer = {
@@ -139,11 +205,12 @@ static const VMStateDescription vmstate_mmix_timer = {
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64_ARRAY(compare, MMIXTimerState,
-                             MMIX_VIRT_INTC_CONTEXT_COUNT),
+                             MMIX_VIRT_TIMER_CONTEXT_COUNT),
         VMSTATE_UINT64_ARRAY(control, MMIXTimerState,
-                             MMIX_VIRT_INTC_CONTEXT_COUNT),
+                             MMIX_VIRT_TIMER_CONTEXT_COUNT),
         VMSTATE_UINT64_ARRAY(status, MMIXTimerState,
-                             MMIX_VIRT_INTC_CONTEXT_COUNT),
+                             MMIX_VIRT_TIMER_CONTEXT_COUNT),
+        VMSTATE_TIMER_PTR(timer, MMIXTimerState),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -165,6 +232,7 @@ static void mmix_timer_class_init(ObjectClass *oc, const void *data)
 
     device_class_set_legacy_reset(dc, mmix_timer_reset);
     dc->realize = mmix_timer_realize;
+    dc->unrealize = mmix_timer_unrealize;
     dc->vmsd = &vmstate_mmix_timer;
 }
 

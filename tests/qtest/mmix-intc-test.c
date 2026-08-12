@@ -15,10 +15,21 @@
 #define MMIX_VIRT_INTC_CONTEXT_CLAIM 0x04
 #define MMIX_VIRT_INTC_CONTEXT_COMPLETE 0x08
 
+#define MMIX_VIRT_TIMER_BASE 0x10003000ULL
+#define MMIX_VIRT_TIMER_CONTEXT_BASE 0x0100
+#define MMIX_VIRT_TIMER_CONTEXT_STRIDE 0x40
+#define MMIX_VIRT_TIMER_CONTEXT_COMPARE 0x00
+#define MMIX_VIRT_TIMER_CONTEXT_CONTROL 0x08
+#define MMIX_VIRT_TIMER_CONTEXT_STATUS 0x10
+#define MMIX_VIRT_TIMER_CONTROL_ENABLE 0x01
+#define MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE 0x02
+#define MMIX_VIRT_TIMER_STATUS_PENDING 0x01
+
 #define MMIX_VIRT_UART0_IRQ 1
 #define MMIX_VIRT_VIRTIO_BLOCK0_IRQ 2
 #define MMIX_VIRT_FRAMEBUFFER_IRQ 3
 #define MMIX_VIRT_TIMER_CPU0_IRQ 16
+#define MMIX_VIRT_TEST_SYNTHETIC_IRQ 4
 
 #define MMIX_INTC_QOM_PATH "/machine/intc"
 #define MMIX_INTC_OUTPUT_IRQ "sysbus-irq"
@@ -71,6 +82,47 @@ static void mmix_intc_set_irq(QTestState *qts, unsigned irq, int level)
     qtest_set_irq_in(qts, MMIX_INTC_QOM_PATH, "unnamed-gpio-in", irq, level);
 }
 
+static uint64_t mmix_timer_context_reg(unsigned cpu, uint64_t reg)
+{
+    return MMIX_VIRT_TIMER_BASE + MMIX_VIRT_TIMER_CONTEXT_BASE +
+           cpu * MMIX_VIRT_TIMER_CONTEXT_STRIDE + reg;
+}
+
+static uint64_t mmix_timer_read_time(QTestState *qts)
+{
+    return qtest_readq(qts, MMIX_VIRT_TIMER_BASE);
+}
+
+static uint64_t mmix_timer_read_status(QTestState *qts, unsigned cpu)
+{
+    return qtest_readq(qts, mmix_timer_context_reg(cpu,
+                                                   MMIX_VIRT_TIMER_CONTEXT_STATUS));
+}
+
+static void mmix_timer_write_compare(QTestState *qts, unsigned cpu,
+                                     uint64_t value)
+{
+    qtest_writeq(qts, mmix_timer_context_reg(cpu,
+                                             MMIX_VIRT_TIMER_CONTEXT_COMPARE),
+                 value);
+}
+
+static void mmix_timer_write_control(QTestState *qts, unsigned cpu,
+                                     uint64_t value)
+{
+    qtest_writeq(qts, mmix_timer_context_reg(cpu,
+                                             MMIX_VIRT_TIMER_CONTEXT_CONTROL),
+                 value);
+}
+
+static void mmix_timer_write_status(QTestState *qts, unsigned cpu,
+                                    uint64_t value)
+{
+    qtest_writeq(qts, mmix_timer_context_reg(cpu,
+                                             MMIX_VIRT_TIMER_CONTEXT_STATUS),
+                 value);
+}
+
 static QTestState *mmix_intc_start(void)
 {
     QTestState *qts = qtest_init("-machine virt");
@@ -111,16 +163,16 @@ static void test_mmix_intc_claim_complete(void)
 {
     QTestState *qts = mmix_intc_start();
     uint32_t enabled = mmix_intc_irq_mask(MMIX_VIRT_FRAMEBUFFER_IRQ) |
-                       mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
+                       mmix_intc_irq_mask(MMIX_VIRT_TEST_SYNTHETIC_IRQ);
 
     mmix_intc_write_enable(qts, 0, enabled);
-    mmix_intc_set_irq(qts, MMIX_VIRT_TIMER_CPU0_IRQ, 1);
+    mmix_intc_set_irq(qts, MMIX_VIRT_TEST_SYNTHETIC_IRQ, 1);
     mmix_intc_set_irq(qts, MMIX_VIRT_FRAMEBUFFER_IRQ, 1);
 
     g_assert_true(qtest_get_irq(qts, 0));
     g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_FRAMEBUFFER_IRQ);
     g_assert_true(qtest_get_irq(qts, 0));
-    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_TIMER_CPU0_IRQ);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_TEST_SYNTHETIC_IRQ);
     g_assert_false(qtest_get_irq(qts, 0));
     g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, 0);
 
@@ -132,10 +184,41 @@ static void test_mmix_intc_claim_complete(void)
     mmix_intc_complete(qts, 0, MMIX_VIRT_FRAMEBUFFER_IRQ);
     g_assert_false(qtest_get_irq(qts, 0));
 
-    mmix_intc_complete(qts, 0, MMIX_VIRT_TIMER_CPU0_IRQ);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_TEST_SYNTHETIC_IRQ);
     g_assert_true(qtest_get_irq(qts, 0));
-    mmix_intc_set_irq(qts, MMIX_VIRT_TIMER_CPU0_IRQ, 0);
+    mmix_intc_set_irq(qts, MMIX_VIRT_TEST_SYNTHETIC_IRQ, 0);
     g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_timer_irq(void)
+{
+    QTestState *qts = mmix_intc_start();
+    uint32_t timer_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
+    uint64_t now = mmix_timer_read_time(qts);
+
+    mmix_intc_write_enable(qts, 0, timer_mask);
+    mmix_timer_write_compare(qts, 0, now + 10);
+    mmix_timer_write_control(qts, 0,
+                             MMIX_VIRT_TIMER_CONTROL_ENABLE |
+                             MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_clock_step(qts, 10);
+
+    g_assert_cmphex(mmix_timer_read_status(qts, 0), ==,
+                    MMIX_VIRT_TIMER_STATUS_PENDING);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, timer_mask);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_TIMER_CPU0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_timer_write_compare(qts, 0, mmix_timer_read_time(qts) + 10);
+    mmix_timer_write_status(qts, 0, MMIX_VIRT_TIMER_STATUS_PENDING);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_TIMER_CPU0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_cmphex(mmix_timer_read_status(qts, 0), ==, 0);
 
     qtest_quit(qts);
 }
@@ -168,6 +251,8 @@ int main(int argc, char **argv)
                    test_mmix_intc_pending_enable);
     qtest_add_func("/mmix/intc/claim-complete",
                    test_mmix_intc_claim_complete);
+    qtest_add_func("/mmix/intc/timer-irq",
+                   test_mmix_intc_timer_irq);
     qtest_add_func("/mmix/intc/unsupported-contexts",
                    test_mmix_intc_unsupported_contexts);
 

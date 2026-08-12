@@ -8,6 +8,7 @@
 #define HW_MMIX_TIMER_H
 
 #include "hw/core/sysbus.h"
+#include "qemu/timer.h"
 #include "virt.h"
 
 #define TYPE_MMIX_TIMER "mmix-timer"
@@ -18,10 +19,11 @@ struct MMIXTimerState {
 
     MemoryRegion iomem;
     qemu_irq irq;
+    QEMUTimer *timer;
 
-    uint64_t compare[MMIX_VIRT_INTC_CONTEXT_COUNT];
-    uint64_t control[MMIX_VIRT_INTC_CONTEXT_COUNT];
-    uint64_t status[MMIX_VIRT_INTC_CONTEXT_COUNT];
+    uint64_t compare[MMIX_VIRT_TIMER_CONTEXT_COUNT];
+    uint64_t control[MMIX_VIRT_TIMER_CONTEXT_COUNT];
+    uint64_t status[MMIX_VIRT_TIMER_CONTEXT_COUNT];
 };
 
 #endif

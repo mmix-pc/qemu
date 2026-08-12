@@ -20,6 +20,7 @@
 #include "bootinfo.h"
 #include "intc.h"
 #include "kernel-loader.h"
+#include "timer.h"
 #include "virt.h"
 
 #define MMIX_ARG_OCTA_SIZE 8
@@ -290,6 +291,7 @@ static void mmix_virt_init(MachineState *machine)
     MemoryRegion *sysmem = get_system_memory();
     CPUState *cpu;
     DeviceState *intc;
+    DeviceState *timer;
     qemu_irq cpu_irq;
 
     memory_region_add_subregion(sysmem, 0, machine->ram);
@@ -303,6 +305,14 @@ static void mmix_virt_init(MachineState *machine)
                     mmix_virt_memmap[MMIX_VIRT_INTC].base);
     cpu_irq = qemu_allocate_irq(mmix_virt_cpu_irq, cpu, 0);
     sysbus_connect_irq(SYS_BUS_DEVICE(intc), 0, cpu_irq);
+
+    timer = qdev_new(TYPE_MMIX_TIMER);
+    object_property_add_child(OBJECT(machine), "timer", OBJECT(timer));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(timer), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(timer), 0,
+                    mmix_virt_memmap[MMIX_VIRT_TIMER].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(timer), 0,
+                       qdev_get_gpio_in(intc, MMIX_VIRT_TIMER_IRQ_BASE));
 
     serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
                    115200, serial_hd(0), DEVICE_BIG_ENDIAN);
