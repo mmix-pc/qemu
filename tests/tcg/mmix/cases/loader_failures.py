@@ -16,6 +16,36 @@ LOADER_FAILURE_TESTS = [
         ("unsupported MMIX .mmo preamble version 2",),
     ),
     MMIXLoaderFailure(
+        "elf-truncated-header",
+        b"\x7fELF",
+        ("truncated MMIX ELF header",),
+    ),
+    MMIXLoaderFailure(
+        "elf-unsupported-class",
+        elf64_header(elf_class=ELFCLASS32),
+        ("unsupported MMIX ELF class 1",),
+    ),
+    MMIXLoaderFailure(
+        "elf-unsupported-data-encoding",
+        elf64_header(elf_data=ELFDATA2LSB),
+        ("unsupported MMIX ELF data encoding 1",),
+    ),
+    MMIXLoaderFailure(
+        "elf-unsupported-type",
+        elf64_header(elf_type=ET_REL),
+        ("unsupported MMIX ELF type 1",),
+    ),
+    MMIXLoaderFailure(
+        "elf-unsupported-machine",
+        elf64_header(machine=EM_X86_64),
+        ("unsupported MMIX ELF machine 62",),
+    ),
+    MMIXLoaderFailure(
+        "elf-valid-header-not-loaded-yet",
+        elf64_header(),
+        ("MMIX ELF kernel loading is not implemented yet",),
+    ),
+    MMIXLoaderFailure(
         "mmo-fixo-invalid-z",
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXO, 0, y=0, z=0)]),
         ("invalid MMIX .mmo lop_fixo z=0", "tetra 2"),

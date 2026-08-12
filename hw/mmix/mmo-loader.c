@@ -74,7 +74,7 @@ static bool mmix_read_mmo_preamble(const char *filename,
     return true;
 }
 
-static bool mmix_kernel_is_mmo(const char *filename, Error **errp)
+bool mmix_kernel_is_mmo(const char *filename, Error **errp)
 {
     uint8_t preamble[MMIX_MMO_PREAMBLE_SIZE] = { 0 };
     size_t size;
@@ -598,8 +598,8 @@ static bool mmix_mmo_read_symbol_tail(MMIXMMOLoader *loader, Error **errp)
     return false;
 }
 
-static ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
-                             MMIXKernelLoadInfo *info, Error **errp)
+ssize_t mmix_load_mmo(const char *filename, uint64_t ram_size,
+                      MMIXKernelLoadInfo *info, Error **errp)
 {
     uint8_t tetra[MMIX_MMO_TETRA_SIZE];
     Error *local_err = NULL;
@@ -715,25 +715,4 @@ done:
 fail:
     fclose(loader.file);
     return -1;
-}
-
-ssize_t mmix_load_kernel(const char *filename, uint64_t ram_size,
-                         MMIXKernelLoadInfo *info, Error **errp)
-{
-    Error *local_err = NULL;
-
-    *info = (MMIXKernelLoadInfo) {
-        .entry = 0,
-    };
-
-    if (!mmix_kernel_is_mmo(filename, &local_err)) {
-        if (local_err) {
-            error_propagate(errp, local_err);
-            return -1;
-        }
-
-        return load_image_targphys(filename, 0, ram_size, errp);
-    }
-
-    return mmix_load_mmo(filename, ram_size, info, errp);
 }

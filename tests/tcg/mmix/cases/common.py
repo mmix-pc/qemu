@@ -81,6 +81,14 @@ MMIX_SEMIHOSTING_BINARY_READ = 2
 MMIX_SEMIHOSTING_BINARY_WRITE = 3
 MMIX_SEMIHOSTING_BINARY_READ_WRITE = 4
 MMIX_SEMIHOSTING_STRING_MAX = 256
+ELFCLASS32 = 1
+ELFCLASS64 = 2
+ELFDATA2LSB = 1
+ELFDATA2MSB = 2
+ET_REL = 1
+ET_EXEC = 2
+EM_X86_64 = 62
+EM_MMIX = 80
 
 
 def serial_tx_program():
@@ -359,6 +367,30 @@ def f64(value):
 
 def f32(value):
     return struct.unpack(">I", struct.pack(">f", value))[0]
+
+
+def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
+                 elf_type=ET_EXEC, machine=EM_MMIX):
+    e_ident = bytes((
+        0x7f, ord("E"), ord("L"), ord("F"),
+        elf_class, elf_data, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ))
+    return e_ident + struct.pack(
+        ">HHIQQQIHHHHHH",
+        elf_type,
+        machine,
+        1,
+        0,
+        0,
+        0,
+        0,
+        64,
+        56,
+        0,
+        64,
+        0,
+        0,
+    )
 
 
 @dataclasses.dataclass(frozen=True)
