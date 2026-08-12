@@ -34,6 +34,13 @@ LOADER_FAILURE_TESTS = [
          f"0x{MMIX_POOL_SEGMENT_BASE + MMIX_POOL_SEGMENT_SIZE:016x}",),
     ),
     MMIXLoaderFailure(
+        "mmo-unsupported-stack-segment-range",
+        mmo_image([mmo_loc(MMIX_STACK_SEGMENT_BASE + MMIX_STACK_SEGMENT_SIZE),
+                   halt()]),
+        (f"unsupported MMIX .mmo high-segment tetrabyte address "
+         f"0x{MMIX_STACK_SEGMENT_BASE + MMIX_STACK_SEGMENT_SIZE:016x}",),
+    ),
+    MMIXLoaderFailure(
         "mmo-fixr-target-before-zero",
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXR, 4)]),
         ("MMIX .mmo lop_fixr target before address 0", "tetra 2"),

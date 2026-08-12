@@ -311,6 +311,9 @@ static bool mmix_mmo_translate_address(MMIXMMOLoader *loader, uint64_t address,
     if (mmix_bare_pool_segment_to_phys(address, physical)) {
         return true;
     }
+    if (mmix_bare_stack_segment_to_phys(address, physical)) {
+        return true;
+    }
     if (mmix_bare_unsupported_high_segment(address)) {
         error_setg(errp, "unsupported MMIX .mmo high-segment %s address 0x%"
                    HWADDR_PRIx " at tetra %" PRIu64, name, address,
