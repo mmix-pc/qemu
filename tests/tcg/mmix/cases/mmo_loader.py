@@ -129,6 +129,21 @@ MMO_LOADER_TESTS = [
         regs={R2: 0x1122334455667788},
     ),
     MMIXMMOTest(
+        "mmo-data-segment-last-octa-load",
+        mmo_image(
+            [
+                *set_octa(R1, MMIX_DATA_SEGMENT_BASE +
+                          MMIX_DATA_SEGMENT_SIZE - 8),
+                insn(LDOU, R2, R1, R0),
+                halt(),
+                mmo_loc(MMIX_DATA_SEGMENT_BASE + MMIX_DATA_SEGMENT_SIZE - 8),
+                struct.pack(">Q", 0x99aabbccddeeff00),
+            ]
+        ),
+        pc=0x14,
+        regs={R2: 0x99aabbccddeeff00},
+    ),
+    MMIXMMOTest(
         "mmo-data-segment-store",
         mmo_image(
             [
@@ -155,6 +170,21 @@ MMO_LOADER_TESTS = [
         ),
         pc=0x14,
         regs={R2: 0x0102030405060708},
+    ),
+    MMIXMMOTest(
+        "mmo-pool-segment-last-octa-load",
+        mmo_image(
+            [
+                *set_octa(R1, MMIX_POOL_SEGMENT_BASE +
+                          MMIX_POOL_SEGMENT_SIZE - 8),
+                insn(LDOU, R2, R1, R0),
+                halt(),
+                mmo_loc(MMIX_POOL_SEGMENT_BASE + MMIX_POOL_SEGMENT_SIZE - 8),
+                struct.pack(">Q", 0xfedcba9876543210),
+            ]
+        ),
+        pc=0x14,
+        regs={R2: 0xfedcba9876543210},
     ),
     MMIXMMOTest(
         "mmo-fixo-load",
