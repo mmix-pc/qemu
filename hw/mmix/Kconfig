@@ -3,4 +3,5 @@ config MMIX_VIRT
     default y
     depends on MMIX
     select SERIAL_MM
+    select VIRTIO_BLK
     select VIRTIO_MMIO
