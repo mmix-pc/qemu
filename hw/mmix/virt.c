@@ -13,6 +13,7 @@
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
 #include "hw/core/irq.h"
+#include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
@@ -38,6 +39,8 @@ const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
     [MMIX_VIRT_FRAMEBUFFER] =  { 0x000000000f000000ULL, 0x0000000001000000ULL },
     [MMIX_VIRT_MMIO] =         { 0x0000000010000000ULL, 0 },
     [MMIX_VIRT_UART0] =        { 0x0000000010000000ULL, 0x100 },
+    [MMIX_VIRT_VIRTIO_MMIO] =  { 0x0000000010001000ULL,
+                                 MMIX_VIRT_VIRTIO_MMIO_SIZE },
     [MMIX_VIRT_TIMER] =        { 0x0000000010003000ULL, MMIX_VIRT_TIMER_SIZE },
     [MMIX_VIRT_INTC] =         { 0x0000000010004000ULL, MMIX_VIRT_INTC_SIZE },
 };
@@ -294,6 +297,7 @@ static void mmix_virt_init(MachineState *machine)
     CPUState *cpu;
     DeviceState *intc;
     DeviceState *timer;
+    DeviceState *virtio_mmio;
     qemu_irq cpu_irq;
 
     memory_region_add_subregion(sysmem, 0, machine->ram);
@@ -315,6 +319,13 @@ static void mmix_virt_init(MachineState *machine)
                     mmix_virt_memmap[MMIX_VIRT_TIMER].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(timer), 0,
                        qdev_get_gpio_in(intc, MMIX_VIRT_TIMER_IRQ_BASE));
+
+    virtio_mmio = qdev_new(TYPE_VIRTIO_MMIO);
+    object_property_add_child(OBJECT(machine), "virtio-mmio",
+                              OBJECT(virtio_mmio));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(virtio_mmio), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(virtio_mmio), 0,
+                    mmix_virt_memmap[MMIX_VIRT_VIRTIO_MMIO].base);
 
     serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
                    115200, serial_hd(0), DEVICE_BIG_ENDIAN);
