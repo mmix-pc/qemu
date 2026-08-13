@@ -39,6 +39,10 @@ enum {
 };
 
 enum {
+    MMIX_VIRT_UART0_BAUD_BASE = 115200,
+};
+
+enum {
     MMIX_VIRT_VIRTIO_MMIO_SIZE = 0x1000,
     MMIX_VIRT_VIRTIO_MMIO_COUNT = 1,
 };

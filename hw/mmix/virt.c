@@ -361,8 +361,10 @@ static void mmix_virt_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(framebuffer), 0,
                     mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER_CONTROL].base);
 
-    serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
-                   115200, serial_hd(0), DEVICE_BIG_ENDIAN);
+    serial_mm_init(
+        sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0,
+        qdev_get_gpio_in(intc, MMIX_VIRT_UART0_IRQ),
+        MMIX_VIRT_UART0_BAUD_BASE, serial_hd(0), DEVICE_BIG_ENDIAN);
 
     if (machine->kernel_filename) {
         Error *err = NULL;

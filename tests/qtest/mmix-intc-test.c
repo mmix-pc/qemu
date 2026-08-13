@@ -7,6 +7,13 @@
 #include "qemu/osdep.h"
 #include "libqtest.h"
 
+#define MMIX_VIRT_UART0_BASE 0x10000000ULL
+#define MMIX_UART_IER 0x01
+#define MMIX_UART_IIR 0x02
+#define MMIX_UART_IER_THRI 0x02
+#define MMIX_UART_IIR_ID 0x06
+#define MMIX_UART_IIR_THRI 0x02
+
 #define MMIX_VIRT_INTC_BASE 0x10004000ULL
 #define MMIX_VIRT_INTC_PENDING 0x0000
 #define MMIX_VIRT_INTC_CONTEXT_BASE 0x1000
@@ -41,8 +48,8 @@ static uint32_t mmix_intc_read_pending(QTestState *qts)
 
 static uint32_t mmix_intc_read_enable(QTestState *qts, unsigned cpu)
 {
-    return qtest_readl(qts, mmix_intc_context_reg(cpu,
-                                                  MMIX_VIRT_INTC_CONTEXT_ENABLE));
+    return qtest_readl(
+        qts, mmix_intc_context_reg(cpu, MMIX_VIRT_INTC_CONTEXT_ENABLE));
 }
 
 static uint32_t mmix_intc_claim(QTestState *qts, unsigned cpu)
@@ -107,6 +114,29 @@ static void test_mmix_intc_pending_enable(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_intc_uart_irq(void)
+{
+    QTestState *qts = mmix_intc_start();
+    uint32_t uart_mask = mmix_intc_irq_mask(MMIX_VIRT_UART0_IRQ);
+
+    mmix_intc_write_enable(qts, 0, uart_mask);
+    qtest_writeb(qts, MMIX_VIRT_UART0_BASE + MMIX_UART_IER,
+                 MMIX_UART_IER_THRI);
+
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, uart_mask);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_UART0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    g_assert_cmphex(qtest_readb(qts, MMIX_VIRT_UART0_BASE + MMIX_UART_IIR) &
+                    MMIX_UART_IIR_ID, ==, MMIX_UART_IIR_THRI);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_UART0_IRQ);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_quit(qts);
+}
+
 static void test_mmix_intc_claim_complete(void)
 {
     QTestState *qts = mmix_intc_start();
@@ -166,6 +196,7 @@ int main(int argc, char **argv)
 
     qtest_add_func("/mmix/intc/pending-enable",
                    test_mmix_intc_pending_enable);
+    qtest_add_func("/mmix/intc/uart-irq", test_mmix_intc_uart_irq);
     qtest_add_func("/mmix/intc/claim-complete",
                    test_mmix_intc_claim_complete);
     qtest_add_func("/mmix/intc/unsupported-contexts",
