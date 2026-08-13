@@ -138,8 +138,24 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                         MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_VIRTIO_MMIO_COUNT,
                         MMIX_VIRT_VIRTIO_MMIO_COUNT);
+    mmix_bootinfo_store(
+        bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_CONTROL_BASE,
+        mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER_CONTROL].base);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_BASE,
+                        mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER].base);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_SIZE,
+                        mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER].size);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_IRQ,
                         MMIX_VIRT_FRAMEBUFFER_IRQ);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_WIDTH,
+                        MMIX_VIRT_FRAMEBUFFER_WIDTH);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_HEIGHT,
+                        MMIX_VIRT_FRAMEBUFFER_HEIGHT);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_STRIDE,
+                        MMIX_VIRT_FRAMEBUFFER_STRIDE);
+    mmix_bootinfo_store(
+        bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_FORMAT,
+        MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888);
 
     result = address_space_write(&address_space_memory,
                                  mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base,

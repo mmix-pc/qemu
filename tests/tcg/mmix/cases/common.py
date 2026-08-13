@@ -261,14 +261,16 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "virtio_mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_VIRTIO_MMIO][0],
         "virtio_mmio_irq": MMIX_VIRT_VIRTIO_BLOCK0_IRQ,
         "virtio_mmio_count": MMIX_VIRT_VIRTIO_MMIO_COUNT,
-        "framebuffer_control_base": 0,
-        "framebuffer_base": 0,
-        "framebuffer_size": 0,
+        "framebuffer_control_base": MMIX_VIRT_MEMMAP[
+            MMIX_VIRT_FRAMEBUFFER_CONTROL
+        ][0],
+        "framebuffer_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_FRAMEBUFFER][0],
+        "framebuffer_size": MMIX_VIRT_MEMMAP[MMIX_VIRT_FRAMEBUFFER][1],
         "framebuffer_irq": MMIX_VIRT_FRAMEBUFFER_IRQ,
-        "framebuffer_width": 0,
-        "framebuffer_height": 0,
-        "framebuffer_stride": 0,
-        "framebuffer_format": 0,
+        "framebuffer_width": MMIX_VIRT_FRAMEBUFFER_WIDTH,
+        "framebuffer_height": MMIX_VIRT_FRAMEBUFFER_HEIGHT,
+        "framebuffer_stride": MMIX_VIRT_FRAMEBUFFER_STRIDE,
+        "framebuffer_format": MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888,
     }
 
 
