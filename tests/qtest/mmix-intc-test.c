@@ -8,11 +8,16 @@
 #include "libqtest.h"
 
 #define MMIX_VIRT_UART0_BASE 0x10000000ULL
+#define MMIX_UART_RBR 0x00
 #define MMIX_UART_IER 0x01
 #define MMIX_UART_IIR 0x02
+#define MMIX_UART_LSR 0x05
+#define MMIX_UART_IER_RDI 0x01
 #define MMIX_UART_IER_THRI 0x02
+#define MMIX_UART_IIR_RDI 0x04
 #define MMIX_UART_IIR_ID 0x06
 #define MMIX_UART_IIR_THRI 0x02
+#define MMIX_UART_LSR_DR 0x01
 
 #define MMIX_VIRT_INTC_BASE 0x10004000ULL
 #define MMIX_VIRT_INTC_PENDING 0x0000
@@ -78,13 +83,37 @@ static void mmix_intc_set_irq(QTestState *qts, unsigned irq, int level)
     qtest_set_irq_in(qts, MMIX_INTC_QOM_PATH, "unnamed-gpio-in", irq, level);
 }
 
+static void mmix_intc_intercept_output(QTestState *qts)
+{
+    qtest_irq_intercept_out_named(qts, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+}
+
 static QTestState *mmix_intc_start(void)
 {
     QTestState *qts = qtest_init("-machine virt");
 
-    qtest_irq_intercept_out_named(qts, MMIX_INTC_QOM_PATH,
-                                  MMIX_INTC_OUTPUT_IRQ);
+    mmix_intc_intercept_output(qts);
     return qts;
+}
+
+static QTestState *mmix_intc_start_with_serial(int *serial_fd)
+{
+    QTestState *qts = qtest_init_with_serial("-machine virt", serial_fd);
+
+    mmix_intc_intercept_output(qts);
+    return qts;
+}
+
+static void mmix_uart_wait_for_data(QTestState *qts)
+{
+    gint64 deadline = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+
+    while (!(qtest_readb(qts, MMIX_VIRT_UART0_BASE + MMIX_UART_LSR) &
+             MMIX_UART_LSR_DR)) {
+        g_assert_cmpint(g_get_monotonic_time(), <, deadline);
+        g_usleep(1000);
+    }
 }
 
 static void test_mmix_intc_pending_enable(void)
@@ -134,6 +163,40 @@ static void test_mmix_intc_uart_irq(void)
     g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
     g_assert_false(qtest_get_irq(qts, 0));
 
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_uart_rx_irq(void)
+{
+    const uint8_t input = 0xa5;
+    QTestState *qts;
+    uint32_t uart_mask = mmix_intc_irq_mask(MMIX_VIRT_UART0_IRQ);
+    int serial_fd;
+
+    qts = mmix_intc_start_with_serial(&serial_fd);
+    mmix_intc_write_enable(qts, 0, uart_mask);
+    qtest_writeb(qts, MMIX_VIRT_UART0_BASE + MMIX_UART_IER,
+                 MMIX_UART_IER_RDI);
+
+    g_assert_cmpint(qemu_write_full(serial_fd, &input, sizeof(input)), ==,
+                    sizeof(input));
+    mmix_uart_wait_for_data(qts);
+
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, uart_mask);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_cmphex(qtest_readb(qts, MMIX_VIRT_UART0_BASE + MMIX_UART_IIR) &
+                    MMIX_UART_IIR_ID, ==, MMIX_UART_IIR_RDI);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_UART0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    g_assert_cmphex(qtest_readb(qts, MMIX_VIRT_UART0_BASE + MMIX_UART_RBR),
+                    ==, input);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_UART0_IRQ);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    close(serial_fd);
     qtest_quit(qts);
 }
 
@@ -197,6 +260,7 @@ int main(int argc, char **argv)
     qtest_add_func("/mmix/intc/pending-enable",
                    test_mmix_intc_pending_enable);
     qtest_add_func("/mmix/intc/uart-irq", test_mmix_intc_uart_irq);
+    qtest_add_func("/mmix/intc/uart-rx-irq", test_mmix_intc_uart_rx_irq);
     qtest_add_func("/mmix/intc/claim-complete",
                    test_mmix_intc_claim_complete);
     qtest_add_func("/mmix/intc/unsupported-contexts",
