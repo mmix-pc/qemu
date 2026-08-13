@@ -19,6 +19,7 @@
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
 #include "bootinfo.h"
+#include "framebuffer.h"
 #include "intc.h"
 #include "kernel-loader.h"
 #include "timer.h"
@@ -302,6 +303,7 @@ static void mmix_virt_init(MachineState *machine)
 {
     MemoryRegion *sysmem = get_system_memory();
     CPUState *cpu;
+    DeviceState *framebuffer;
     DeviceState *intc;
     DeviceState *timer;
     DeviceState *virtio_mmio;
@@ -335,6 +337,13 @@ static void mmix_virt_init(MachineState *machine)
                     mmix_virt_memmap[MMIX_VIRT_VIRTIO_MMIO].base);
     sysbus_connect_irq(SYS_BUS_DEVICE(virtio_mmio), 0,
                        qdev_get_gpio_in(intc, MMIX_VIRT_VIRTIO_BLOCK0_IRQ));
+
+    framebuffer = qdev_new(TYPE_MMIX_FRAMEBUFFER);
+    object_property_add_child(OBJECT(machine), "framebuffer",
+                              OBJECT(framebuffer));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(framebuffer), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(framebuffer), 0,
+                    mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER_CONTROL].base);
 
     serial_mm_init(sysmem, mmix_virt_memmap[MMIX_VIRT_UART0].base, 0, NULL,
                    115200, serial_hd(0), DEVICE_BIG_ENDIAN);

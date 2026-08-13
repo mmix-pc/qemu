@@ -5,7 +5,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "exec/hwaddr.h"
 #include "hw/core/sysbus.h"
 #include "ui/console.h"
@@ -178,6 +177,8 @@ static void mmix_framebuffer_realize(DeviceState *dev, Error **errp)
 {
     MMIXFramebufferState *s = MMIX_FRAMEBUFFER(dev);
 
+    (void)errp;
+
     memory_region_init_io(&s->iomem, OBJECT(s), &mmix_framebuffer_ops, s,
                           TYPE_MMIX_FRAMEBUFFER,
                           MMIX_VIRT_FRAMEBUFFER_CONTROL_MMIO_SIZE);
@@ -186,10 +187,6 @@ static void mmix_framebuffer_realize(DeviceState *dev, Error **errp)
         &s->fbsection, get_system_memory(),
         mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER].base,
         MMIX_VIRT_FRAMEBUFFER_HEIGHT, MMIX_VIRT_FRAMEBUFFER_STRIDE);
-    if (!s->fbsection.mr) {
-        error_setg(errp, "MMIX framebuffer RAM is not mapped");
-        return;
-    }
 
     s->invalidate = true;
     s->con = qemu_graphic_console_create(dev, 0,
