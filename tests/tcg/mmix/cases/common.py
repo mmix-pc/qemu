@@ -655,6 +655,16 @@ class MMIXMMOTest:
     exit_status: int = 0
 
 
+@dataclasses.dataclass(frozen=True)
+class MMIXELFTest:
+    name: str
+    image: bytes
+    pc: int
+    regs: dict[int, int]
+    output: Optional[bytes] = None
+    exit_status: int = 0
+
+
 def case_id(test):
     return test.name
 

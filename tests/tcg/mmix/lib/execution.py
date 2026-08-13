@@ -271,15 +271,20 @@ def run_mmo_test(qemu, workdir, test):
 def run_elf_test(qemu, workdir, test):
     image = workdir / f"{test.name}.elf"
     log = workdir / f"{test.name}.log"
+    serial = workdir / f"{test.name}.serial"
 
     image.write_bytes(test.image)
-    if log.exists():
-        log.unlink()
+    for path in (log, serial):
+        if path.exists():
+            path.unlink()
 
-    completed = run_kernel(qemu, image, trace="int", log=log, check=False,
-                           timeout=10)
+    serial_arg = f"file:{serial}" if test.output is not None else "none"
+    completed = run_kernel(qemu, image, serial=serial_arg, trace="int",
+                           log=log, check=False, timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
     assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)
+    if test.output is not None:
+        assert_serial_output(test.name, serial.read_bytes(), test.output)
