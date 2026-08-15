@@ -6,26 +6,6 @@ from .common import *
 
 EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
-        "readonly-put-rn",
-        insn(PUTI, SR_N, 0, 1),
-        ("MMIX illegal instruction",),
-    ),
-    MMIXExpectedFailure(
-        "readonly-put-ro",
-        insn(PUTI, SR_O, 0, 1),
-        ("MMIX illegal instruction",),
-    ),
-    MMIXExpectedFailure(
-        "readonly-put-rs",
-        insn(PUTI, SR_S, 0, 1),
-        ("MMIX illegal instruction",),
-    ),
-    MMIXExpectedFailure(
-        "invalid-put-rg",
-        insn(PUTI, SR_G, 0, 31),
-        ("MMIX illegal instruction",),
-    ),
-    MMIXExpectedFailure(
         "unsupported-resume-replay",
         b"".join(
             [
@@ -66,11 +46,6 @@ EXPECTED_FAILURE_TESTS = [
         ),
         ("MMIX unsupported RESUME ropcode 3 virtual translation",
          "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "invalid-save-local-destination",
-        insn(SAVE, R0, 0, 0),
-        ("MMIX invalid SAVE local destination 0", "MMIX illegal instruction"),
     ),
 ]
 

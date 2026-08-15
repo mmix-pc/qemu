@@ -323,7 +323,7 @@ uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t selector,
     float64 result;
 
     if (!mmix_round_mode_from_y(y, env, &mode)) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_break_rules_and_continue(env, insn, y, z);
     }
     if (mmix_fp_is_nan(z)) {
         return mmix_unary_nan_result(env, insn, y, z);
@@ -355,7 +355,7 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t selector,
     int64_t result;
 
     if (!mmix_round_mode_from_y(y, env, &mode)) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_break_rules_and_continue(env, insn, y, z);
     }
     if (mmix_fp_is_nan(z) || float64_is_infinity(z)) {
         mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
@@ -386,7 +386,7 @@ uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t selector,
     float64 result;
 
     if (!mmix_round_mode_from_y(y, env, &mode)) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_break_rules_and_continue(env, insn, y, z);
     }
     mmix_softfloat_status(&status, mode);
 

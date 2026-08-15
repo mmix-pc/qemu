@@ -919,7 +919,8 @@ static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
         return gen_mmix_break_rules(ctx, a, immediate);
     }
 
-    gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(a->x),
+    gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(ctx->insn),
+                             tcg_constant_i32(a->x),
                              gen_load_z(a, immediate));
     if (a->x == MMIX_SREG_RK || a->x == MMIX_SREG_RV) {
         ctx->base.is_jmp = DISAS_TOO_MANY;
@@ -944,7 +945,8 @@ static bool trans_SAVE(DisasContext *ctx, arg_xyz *a)
         return gen_mmix_break_rules(ctx, a, false);
     }
 
-    gen_helper_mmix_save(tcg_env, tcg_constant_i32(a->x));
+    gen_helper_mmix_save(tcg_env, tcg_constant_i32(ctx->insn),
+                         tcg_constant_i32(a->x));
     return true;
 }
 
@@ -1046,7 +1048,8 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
     tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
 
     tcg_gen_movcond_i64(TCG_COND_EQ, next_rp, old, rp, rp, old);
-    gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(MMIX_SREG_RP), next_rp);
+    gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(ctx->insn),
+                             tcg_constant_i32(MMIX_SREG_RP), next_rp);
 
     tcg_gen_movcond_i64(TCG_COND_EQ, success, old, rp,
                         tcg_constant_i64(1), tcg_constant_i64(0));

@@ -107,6 +107,62 @@ def rule_breaks_masked_program():
 RULE_BREAKS_MASKED = rule_breaks_masked_program()
 
 
+def runtime_rule_breaks_masked_program():
+    program = [
+        insn(GET, R210, 0, SR_N),
+        insn(GET, R211, 0, SR_O),
+        insn(GET, R212, 0, SR_S),
+        insn(GET, R213, 0, SR_G),
+    ]
+    invalid_puts = [
+        insn(PUTI, SR_N, 0, 1),
+        insn(PUTI, SR_O, 0, 1),
+        insn(PUTI, SR_S, 0, 1),
+        insn(PUTI, SR_G, 0, 31),
+    ]
+    for instruction in invalid_puts:
+        program.extend([instruction, insn(ADDUI, R30, R30, 1)])
+
+    program.extend([
+        wyde(SETL, R5, 0x100),
+        insn(PUT, SR_G, 0, R5),
+        insn(ADDUI, R30, R30, 1),
+        insn(GET, R206, 0, SR_L),
+        insn(PUTI, SR_L, 0, 0xff),
+        insn(GET, R207, 0, SR_L),
+        insn(CMP, R208, R206, R207),
+        insn(ADDUI, R30, R30, 1),
+        insn(SAVE, R0, 0, 0),
+        insn(ADDUI, R30, R30, 1),
+        *set_octa(R200, 0x1111222233334444),
+        *set_octa(R201, 0x5555666677778888),
+        *set_octa(R202, 0x9999aaaabbbbcccc),
+        *set_octa(R5, f64(1.5)),
+        insn(FINT, R200, 5, R5),
+        insn(ADDUI, R30, R30, 1),
+        insn(FIX, R201, 6, R5),
+        insn(ADDUI, R30, R30, 1),
+        wyde(SETL, R6, 7),
+        insn(FLOT, R202, 7, R6),
+        insn(ADDUI, R30, R30, 1),
+        insn(GET, R214, 0, SR_N),
+        insn(GET, R215, 0, SR_O),
+        insn(GET, R216, 0, SR_S),
+        insn(GET, R217, 0, SR_G),
+        insn(CMP, R218, R210, R214),
+        insn(CMP, R219, R211, R215),
+        insn(CMP, R220, R212, R216),
+        insn(CMP, R221, R213, R217),
+        insn(GET, R222, 0, SR_Q),
+        insn(GET, R223, 0, SR_K),
+        halt(),
+    ])
+    return b"".join(program), (len(program) - 1) * 4
+
+
+RUNTIME_RULE_BREAKS_MASKED = runtime_rule_breaks_masked_program()
+
+
 ISA_TESTS = [
     MMIXTest(
         "raw-image-startup-registers",
@@ -1328,6 +1384,101 @@ ISA_TESTS = [
             *set_octa(R40, 0x0300000000000000),
             insn(PUT, SR_X, 0, R40),
         ),
+    ),
+    MMIXTest(
+        "break-rules-runtime-forms-masked",
+        RUNTIME_RULE_BREAKS_MASKED[0],
+        pc=RUNTIME_RULE_BREAKS_MASKED[1],
+        regs={
+            R30: 10,
+            R200: 0x1111222233334444,
+            R201: 0x5555666677778888,
+            R202: 0x9999aaaabbbbcccc,
+            R208: 0,
+            R218: 0,
+            R219: 0,
+            R220: 0,
+            R221: 0,
+            R222: RQ_PROGRAM_B,
+            R223: 0,
+        },
+    ),
+    rule_break_enabled_test(
+        "break-rules-readonly-special-register",
+        insn(PUTI, SR_N, 0, 1),
+        setup=(insn(GET, R220, 0, SR_N),),
+        z=1,
+        handler_checks=(
+            insn(GET, R221, 0, SR_N),
+            insn(CMP, R230, R220, R221),
+        ),
+        regs={R230: 0},
+    ),
+    rule_break_enabled_test(
+        "break-rules-rg-value",
+        insn(PUTI, SR_G, 0, 31),
+        setup=(insn(GET, R220, 0, SR_G),),
+        z=31,
+        handler_checks=(
+            insn(GET, R221, 0, SR_G),
+            insn(CMP, R230, R220, R221),
+        ),
+        regs={R230: 0},
+    ),
+    rule_break_enabled_test(
+        "break-rules-rl-value",
+        insn(PUTI, SR_L, 0, 0xff),
+        z=0xff,
+        handler_checks=(insn(GET, R230, 0, SR_L),),
+        regs={R230: 11},
+    ),
+    rule_break_enabled_test(
+        "break-rules-save-destination",
+        insn(SAVE, R0, 0, 0),
+        setup=(
+            insn(GET, R220, 0, SR_O),
+            insn(GET, R221, 0, SR_S),
+        ),
+        handler_checks=(
+            insn(GET, R222, 0, SR_O),
+            insn(GET, R223, 0, SR_S),
+            insn(CMP, R230, R220, R222),
+            insn(CMP, R231, R221, R223),
+        ),
+        regs={R230: 0, R231: 0},
+    ),
+    rule_break_enabled_test(
+        "break-rules-fp-unary-rounding",
+        insn(FINT, R200, 5, R5),
+        setup=(
+            *set_octa(R200, 0x1111222233334444),
+            *set_octa(R5, f64(1.5)),
+        ),
+        y=5,
+        z=f64(1.5),
+        regs={R200: 0x1111222233334444},
+    ),
+    rule_break_enabled_test(
+        "break-rules-fp-fix-rounding",
+        insn(FIX, R201, 6, R5),
+        setup=(
+            *set_octa(R201, 0x5555666677778888),
+            *set_octa(R5, f64(1.5)),
+        ),
+        y=6,
+        z=f64(1.5),
+        regs={R201: 0x5555666677778888},
+    ),
+    rule_break_enabled_test(
+        "break-rules-fp-float-rounding",
+        insn(FLOT, R202, 7, R6),
+        setup=(
+            *set_octa(R202, 0x9999aaaabbbbcccc),
+            wyde(SETL, R6, 7),
+        ),
+        y=7,
+        z=7,
+        regs={R202: 0x9999aaaabbbbcccc},
     ),
     MMIXTest(
         "memory-compare-swap",

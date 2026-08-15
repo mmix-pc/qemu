@@ -192,13 +192,13 @@ static void mmix_resume_unsupported(CPUMMIXState *env, const char *why,
     helper_raise_illegal_instruction(env);
 }
 
-static G_NORETURN void mmix_resume_break_rules(CPUMMIXState *env,
-                                               uint32_t insn, uint32_t z)
+G_NORETURN void mmix_cpu_break_rules_and_continue(CPUMMIXState *env,
+                                                  uint32_t insn, uint64_t y,
+                                                  uint64_t z)
 {
     CPUState *cs = env_cpu(env);
 
-    helper_mmix_break_rules(env, insn, mmix_cpu_read_reg(env, 0),
-                            mmix_cpu_read_reg(env, z));
+    helper_mmix_break_rules(env, insn, y, z);
     env->pc = env->npc;
     env->npc += 4;
     cpu_loop_exit_noexc(cs);
@@ -230,7 +230,9 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     if ((int64_t)exec >= 0) {
         ropcode = exec >> 56;
         if (ropcode > 3 || (ropcode == 3 && !trap_state)) {
-            mmix_resume_break_rules(env, resume_insn, resume_z);
+            mmix_cpu_break_rules_and_continue(
+                env, resume_insn, mmix_cpu_read_reg(env, 0),
+                mmix_cpu_read_reg(env, resume_z));
         }
     }
 

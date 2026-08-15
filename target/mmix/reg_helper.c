@@ -273,9 +273,6 @@ static void mmix_cpu_put_rq(CPUMMIXState *env, uint64_t val)
 
 static void mmix_cpu_put_rg(CPUMMIXState *env, uint64_t val)
 {
-    if (val < 32 || val > 255) {
-        helper_raise_illegal_instruction(env);
-    }
     env->sregs[MMIX_SREG_RG] = val;
     if (env->sregs[MMIX_SREG_RL] > val) {
         env->sregs[MMIX_SREG_RL] = val;
@@ -311,13 +308,23 @@ static bool mmix_sreg_privileged(uint32_t reg)
     }
 }
 
-void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
+void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
+                          uint64_t val)
 {
     if (reg >= MMIX_SREGS || mmix_sreg_read_only(reg)) {
-        helper_raise_illegal_instruction(env);
+        helper_mmix_break_rules(env, insn, 0, val);
+        return;
     }
     if (mmix_sreg_privileged(reg) && !mmix_cpu_is_privileged(env)) {
         mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
+    }
+    if (reg == MMIX_SREG_RG && (val < 32 || val > 255)) {
+        helper_mmix_break_rules(env, insn, 0, val);
+        return;
+    }
+    if (reg == MMIX_SREG_RL && val > mmix_cpu_get_rl(env)) {
+        helper_mmix_break_rules(env, insn, 0, val);
+        return;
     }
 
     switch (reg) {
@@ -440,16 +447,15 @@ static const uint32_t mmix_save_sregs[] = {
     MMIX_SREG_RZ,
 };
 
-void helper_mmix_save(CPUMMIXState *env, uint32_t x)
+void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 {
     unsigned rg = mmix_cpu_get_rg(env);
     unsigned old_rl = mmix_cpu_get_rl(env);
     unsigned i;
 
     if (x < rg) {
-        qemu_log_mask(LOG_UNIMP, "MMIX invalid SAVE local destination %u\n",
-                      x);
-        helper_raise_illegal_instruction(env);
+        helper_mmix_break_rules(env, insn, 0, 0);
+        return;
     }
 
     mmix_cpu_ensure_local_room(env, old_rl);
