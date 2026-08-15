@@ -4,6 +4,109 @@
 
 from .common import *
 
+
+def rule_break_enabled_test(name, instruction, *, setup=(), y=0, z=0,
+                            handler_checks=(), regs=None, old_r255=0):
+    handler = 0x100
+    prefix = [
+        *setup,
+        wyde(SETL, R10, handler),
+        insn(PUT, SR_TT, 0, R10),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+    ]
+    invalid_pc = len(b"".join(prefix))
+    prefix.extend([
+        instruction,
+        wyde(SETL, R30, 0xdead),
+    ])
+    trap_handler = [
+        insn(GET, R240, 0, SR_Q),
+        insn(GET, R241, 0, SR_WW),
+        insn(GET, R242, 0, SR_XX),
+        insn(GET, R243, 0, SR_YY),
+        insn(GET, R244, 0, SR_ZZ),
+        insn(GET, R245, 0, SR_BB),
+        insn(GET, R246, 0, SR_K),
+        insn(ADDU, R247, R255, R0),
+        *handler_checks,
+        halt(),
+    ]
+    expected = {
+        R30: 0,
+        R240: RQ_PROGRAM_B,
+        R241: invalid_pc + 4,
+        R242: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+              int.from_bytes(instruction, "big"),
+        R243: y,
+        R244: z,
+        R245: old_r255,
+        R246: 0,
+        R247: 0,
+    }
+    if regs is not None:
+        expected.update(regs)
+    return MMIXTest(
+        name,
+        program_with_handler(prefix, handler, trap_handler),
+        pc=handler + (len(trap_handler) - 1) * 4,
+        regs=expected,
+    )
+
+
+def rule_breaks_masked_program():
+    program = [
+        wyde(SETL, R20, 0x77),
+        insn(PUTI, SR_M, 0, 0x55),
+        insn(GET, R21, 0, SR_O),
+        insn(GET, R22, 0, SR_S),
+    ]
+    invalid = [
+        insn(GET, R20, 3, SR_M),
+        insn(GET, R20, 0, 0xff),
+        insn(PUT, SR_M, 3, R4),
+        insn(PUT, 0xff, 0, R4),
+        insn(PUTI, SR_M, 3, 0xaa),
+        insn(PUTI, 0xff, 0, 0xaa),
+        insn(SAVE, R32, 3, 0),
+        insn(UNSAVE, 3, 0, R32),
+        insn(RESUME, 3, 0, 0),
+        insn(RESUME, 0, 0, 2),
+        jump(SYNC, 8),
+    ]
+    for instruction in invalid:
+        program.extend([instruction, insn(ADDUI, R30, R30, 1)])
+
+    program.extend([
+        *set_octa(R40, 0x0400000000000000),
+        insn(PUT, SR_XX, 0, R40),
+        wyde(SETL, R41, 0x66),
+        insn(PUT, SR_BB, 0, R41),
+        wyde(SETL, R255, 0x55),
+        insn(RESUME, 0, 0, 1),
+        insn(ADDUI, R30, R30, 1),
+        *set_octa(R40, 0x0300000000000000),
+        insn(PUT, SR_X, 0, R40),
+        insn(RESUME, 0, 0, 0),
+        insn(ADDUI, R30, R30, 1),
+        insn(GET, R31, 0, SR_M),
+        insn(GET, R24, 0, SR_O),
+        insn(GET, R25, 0, SR_S),
+        insn(CMP, R32, R21, R24),
+        insn(CMP, R33, R22, R25),
+        insn(GET, R35, 0, SR_Q),
+        insn(GET, R36, 0, SR_K),
+        insn(GET, R37, 0, SR_BB),
+        insn(ADDU, R38, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+    return b"".join(program), (len(program) - 1) * 4
+
+
+RULE_BREAKS_MASKED = rule_breaks_masked_program()
+
+
 ISA_TESTS = [
     MMIXTest(
         "raw-image-startup-registers",
@@ -1114,6 +1217,117 @@ ISA_TESTS = [
             R46: 0,
             R47: 0x1122,
         },
+    ),
+    MMIXTest(
+        "break-rules-static-forms-masked",
+        RULE_BREAKS_MASKED[0],
+        pc=RULE_BREAKS_MASKED[1],
+        regs={
+            R20: 0x77,
+            R30: 13,
+            R31: 0x55,
+            R32: 0,
+            R33: 0,
+            R35: RQ_PROGRAM_B,
+            R36: 0,
+            R37: 0x66,
+            R38: 0x55,
+        },
+    ),
+    rule_break_enabled_test(
+        "break-rules-get-fields",
+        insn(GET, R20, 3, SR_M),
+        setup=(wyde(SETL, R20, 0x77),),
+        regs={R20: 0x77},
+    ),
+    rule_break_enabled_test(
+        "break-rules-get-register",
+        insn(GET, R20, 0, 0xff),
+        setup=(wyde(SETL, R20, 0x77),),
+        regs={R20: 0x77},
+    ),
+    rule_break_enabled_test(
+        "break-rules-put-fields",
+        insn(PUT, SR_M, 3, R4),
+        setup=(insn(PUTI, SR_M, 0, 0x55),),
+        handler_checks=(insn(GET, R230, 0, SR_M),),
+        regs={R230: 0x55},
+    ),
+    rule_break_enabled_test(
+        "break-rules-put-register",
+        insn(PUT, 0xff, 0, R4),
+    ),
+    rule_break_enabled_test(
+        "break-rules-puti-fields",
+        insn(PUTI, SR_M, 3, 0xaa),
+        setup=(insn(PUTI, SR_M, 0, 0x55),),
+        z=0xaa,
+        handler_checks=(insn(GET, R230, 0, SR_M),),
+        regs={R230: 0x55},
+    ),
+    rule_break_enabled_test(
+        "break-rules-puti-register",
+        insn(PUTI, 0xff, 0, 0xaa),
+        z=0xaa,
+    ),
+    rule_break_enabled_test(
+        "break-rules-save-fields",
+        insn(SAVE, R32, 3, 0),
+        setup=(
+            insn(GET, R220, 0, SR_O),
+            insn(GET, R221, 0, SR_S),
+        ),
+        handler_checks=(
+            insn(GET, R223, 0, SR_O),
+            insn(GET, R224, 0, SR_S),
+            insn(CMP, R230, R220, R223),
+            insn(CMP, R231, R221, R224),
+        ),
+        regs={R230: 0, R231: 0},
+    ),
+    rule_break_enabled_test(
+        "break-rules-unsave-fields",
+        insn(UNSAVE, 3, 0, R32),
+        setup=(
+            insn(GET, R220, 0, SR_O),
+            insn(GET, R221, 0, SR_S),
+        ),
+        handler_checks=(
+            insn(GET, R223, 0, SR_O),
+            insn(GET, R224, 0, SR_S),
+            insn(CMP, R230, R220, R223),
+            insn(CMP, R231, R221, R224),
+        ),
+        regs={R230: 0, R231: 0},
+    ),
+    rule_break_enabled_test(
+        "break-rules-resume-fields",
+        insn(RESUME, 3, 0, 0),
+    ),
+    rule_break_enabled_test(
+        "break-rules-resume-z",
+        insn(RESUME, 0, 0, 2),
+        z=RQ_PROGRAM_B,
+    ),
+    rule_break_enabled_test(
+        "break-rules-resume-ropcode",
+        insn(RESUME, 0, 0, 1),
+        setup=(
+            *set_octa(R40, 0x0400000000000000),
+            insn(PUT, SR_XX, 0, R40),
+            wyde(SETL, R41, 0x66),
+            insn(PUT, SR_BB, 0, R41),
+            wyde(SETL, R255, 0x55),
+        ),
+        old_r255=0x55,
+    ),
+    rule_break_enabled_test(
+        "break-rules-resume0-ropcode3",
+        insn(RESUME, 0, 0, 0),
+        setup=(
+            *set_octa(R40, 0x0300000000000000),
+            insn(PUT, SR_X, 0, R40),
+        ),
     ),
     MMIXTest(
         "memory-compare-swap",

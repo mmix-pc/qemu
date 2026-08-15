@@ -91,12 +91,6 @@ static TCGv_i64 cpu_npc;
         return true; \
     }
 
-static void gen_raise_illegal(DisasContext *ctx)
-{
-    gen_helper_raise_illegal_instruction(tcg_env);
-    ctx->base.is_jmp = DISAS_NORETURN;
-}
-
 static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
 {
     if (translator_use_goto_tb(&ctx->base, dest)) {
@@ -157,15 +151,12 @@ static vaddr mmix_jump_dest(DisasContext *ctx, const arg_xyz *a,
     return ctx->insn_pc + ((int64_t)disp << 2);
 }
 
-static bool gen_mmix_unsupported(DisasContext *ctx, const char *mnemonic,
-                                 const arg_xyz *a)
+static bool gen_mmix_break_rules(DisasContext *ctx, const arg_xyz *a,
+                                 bool immediate)
 {
-    qemu_log_mask(LOG_UNIMP,
-                  "MMIX decoded unimplemented %s at 0x%016" VADDR_PRIx
-                  " x=%u y=%u z=%u yz=0x%04x xyz=0x%06x\n",
-                  mnemonic, ctx->insn_pc, a->x, a->y, a->z, a->yz,
-                  a->xyz);
-    gen_raise_illegal(ctx);
+    gen_helper_mmix_break_rules(tcg_env, tcg_constant_i32(ctx->insn),
+                                gen_load_reg(a->y),
+                                gen_load_z(a, immediate));
     return true;
 }
 
@@ -179,8 +170,12 @@ static bool trans_TRIP(DisasContext *ctx, arg_xyz *a)
 
 static bool trans_RESUME(DisasContext *ctx, arg_xyz *a)
 {
-    gen_helper_mmix_resume(tcg_env, tcg_constant_i32(a->x),
-                           tcg_constant_i32(a->y), tcg_constant_i32(a->z));
+    if (a->x != 0 || a->y != 0 || a->z > 1) {
+        return gen_mmix_break_rules(ctx, a, false);
+    }
+
+    gen_helper_mmix_resume(tcg_env, tcg_constant_i32(ctx->insn),
+                           tcg_constant_i32(a->z));
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
 }
@@ -203,9 +198,7 @@ TRANS_NOP(SWYM)
 
 static bool gen_mmix_invalid_sync(DisasContext *ctx, arg_xyz *a)
 {
-    gen_helper_mmix_break_rules(tcg_env, tcg_constant_i32(ctx->insn),
-                                gen_load_reg(a->y), gen_load_reg(a->z));
-    return true;
+    return gen_mmix_break_rules(ctx, a, false);
 }
 
 static bool gen_mmix_privileged_sync(DisasContext *ctx, uint32_t mode)
@@ -910,7 +903,7 @@ TRANS_GEN1(GETAB, gen_geta, true)
 static bool trans_GET(DisasContext *ctx, arg_xyz *a)
 {
     if (a->y != 0 || a->z >= MMIX_SREGS) {
-        return gen_mmix_unsupported(ctx, "GET", a);
+        return gen_mmix_break_rules(ctx, a, false);
     }
 
     TCGv_i64 val = tcg_temp_new_i64();
@@ -923,7 +916,7 @@ static bool trans_GET(DisasContext *ctx, arg_xyz *a)
 static bool gen_put(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     if (a->y != 0 || a->x >= MMIX_SREGS) {
-        return gen_mmix_unsupported(ctx, immediate ? "PUTI" : "PUT", a);
+        return gen_mmix_break_rules(ctx, a, immediate);
     }
 
     gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(a->x),
@@ -948,7 +941,7 @@ TRANS_GEN1(PUSHGOI, gen_pushgo, true)
 static bool trans_SAVE(DisasContext *ctx, arg_xyz *a)
 {
     if (a->y != 0 || a->z != 0) {
-        return gen_mmix_unsupported(ctx, "SAVE", a);
+        return gen_mmix_break_rules(ctx, a, false);
     }
 
     gen_helper_mmix_save(tcg_env, tcg_constant_i32(a->x));
@@ -958,7 +951,7 @@ static bool trans_SAVE(DisasContext *ctx, arg_xyz *a)
 static bool trans_UNSAVE(DisasContext *ctx, arg_xyz *a)
 {
     if (a->x != 0 || a->y != 0) {
-        return gen_mmix_unsupported(ctx, "UNSAVE", a);
+        return gen_mmix_break_rules(ctx, a, false);
     }
 
     gen_helper_mmix_unsave(tcg_env, tcg_constant_i32(a->z));
@@ -1207,11 +1200,12 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     tcg_gen_movi_i64(cpu_pc, pc);
     tcg_gen_movi_i64(cpu_npc, ctx->base.pc_next);
     if (!decode(ctx, insn)) {
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX unknown opcode 0x%02x at 0x%016" VADDR_PRIx
-                      " insn=0x%08x\n",
-                      insn >> 24, pc, insn);
-        gen_raise_illegal(ctx);
+        arg_xyz a = {
+            .y = extract32(insn, 8, 8),
+            .z = extract32(insn, 0, 8),
+        };
+
+        gen_mmix_break_rules(ctx, &a, false);
     }
 }
 

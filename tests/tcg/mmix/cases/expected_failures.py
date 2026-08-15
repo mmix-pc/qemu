@@ -40,24 +40,37 @@ EXPECTED_FAILURE_TESTS = [
          "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "invalid-resume-fields",
-        insn(RESUME, 1, 0, 0),
-        ("MMIX invalid RESUME x=1 y=0 z=0", "MMIX illegal instruction"),
+        "unsupported-resume-operands",
+        b"".join(
+            [
+                wyde(SETL, R1, 0x20),
+                insn(PUT, SR_W, 0, R1),
+                *set_octa(R2, 0x0100000021010001),
+                insn(PUT, SR_X, 0, R2),
+                insn(RESUME, 0, 0, 0),
+            ]
+        ),
+        ("MMIX unsupported RESUME ropcode 1 operand substitution",
+         "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
-        "invalid-save-fields",
-        insn(SAVE, R32, 1, 0),
-        ("MMIX decoded unimplemented SAVE", "MMIX illegal instruction"),
+        "unsupported-resume-translation",
+        b"".join(
+            [
+                wyde(SETL, R1, 0x20),
+                insn(PUT, SR_WW, 0, R1),
+                *set_octa(R2, 0x0300000021010001),
+                insn(PUT, SR_XX, 0, R2),
+                insn(RESUME, 0, 0, 1),
+            ]
+        ),
+        ("MMIX unsupported RESUME ropcode 3 virtual translation",
+         "MMIX illegal instruction"),
     ),
     MMIXExpectedFailure(
         "invalid-save-local-destination",
         insn(SAVE, R0, 0, 0),
         ("MMIX invalid SAVE local destination 0", "MMIX illegal instruction"),
-    ),
-    MMIXExpectedFailure(
-        "invalid-unsave-fields",
-        insn(UNSAVE, 1, 0, R32),
-        ("MMIX decoded unimplemented UNSAVE", "MMIX illegal instruction"),
     ),
 ]
 
