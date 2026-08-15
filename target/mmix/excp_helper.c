@@ -59,6 +59,24 @@ static hwaddr mmix_arithmetic_trip_handler(uint32_t event)
     }
 }
 
+static void mmix_cpu_enter_dynamic_trap(CPUState *cs, uint64_t where,
+                                        uint64_t exec, uint64_t y, uint64_t z)
+{
+    CPUMMIXState *env = cpu_env(cs);
+    hwaddr handler = env->sregs[MMIX_SREG_RTT];
+
+    env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
+    env->sregs[MMIX_SREG_RWW] = where;
+    env->sregs[MMIX_SREG_RXX] = exec;
+    env->sregs[MMIX_SREG_RYY] = y;
+    env->sregs[MMIX_SREG_RZZ] = z;
+    mmix_cpu_put_rk(env, 0);
+    mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+    env->pc = handler;
+    env->npc = handler + 4;
+    cs->exception_index = -1;
+}
+
 static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
                                        uint32_t insn, uint64_t y, uint64_t z)
 {
@@ -280,6 +298,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
     CPUMMIXState *env = cpu_env(cs);
     uint32_t event;
     uint64_t causes;
+    uint64_t requests;
     hwaddr handler;
 
     switch (cs->exception_index) {
@@ -308,17 +327,18 @@ void mmix_cpu_do_interrupt(CPUState *cs)
                       "MMIX dynamic trap causes=0x%016" PRIx64
                       " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
                       causes, env->pc, handler);
-        env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
-        env->sregs[MMIX_SREG_RWW] = env->npc;
-        env->sregs[MMIX_SREG_RXX] = causes;
-        env->sregs[MMIX_SREG_RYY] = 0;
-        env->sregs[MMIX_SREG_RZZ] = 0;
-        mmix_cpu_put_rk(env, 0);
-        mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
-        env->pc = handler;
-        env->npc = handler + 4;
+        mmix_cpu_enter_dynamic_trap(cs, env->npc, causes, 0, 0);
         env->program_exception_causes = 0;
-        cs->exception_index = -1;
+        break;
+    case EXCP_MMIX_INTERRUPT:
+        requests = env->sregs[MMIX_SREG_RQ] & env->sregs[MMIX_SREG_RK];
+        handler = env->sregs[MMIX_SREG_RTT];
+        qemu_log_mask(CPU_LOG_INT,
+                      "MMIX external dynamic trap requests=0x%016" PRIx64
+                      " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
+                      requests, env->pc, handler);
+        mmix_cpu_enter_dynamic_trap(cs, env->pc,
+                                    MMIX_DYNAMIC_TRAP_RESUME_NEXT, 0, 0);
         break;
     default:
         qemu_log_mask(CPU_LOG_INT, "MMIX exception %d at 0x%016" PRIx64 "\n",

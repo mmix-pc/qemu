@@ -152,6 +152,7 @@ enum {
 /* MMIXware section 37 leaves high-priority I/O bits implementation-defined. */
 #define MMIX_RQ_INTERRUPT_CONTROLLER (1ULL << 8)
 #define MMIX_RK_INTERRUPT_CONTROLLER MMIX_RQ_INTERRUPT_CONTROLLER
+#define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)

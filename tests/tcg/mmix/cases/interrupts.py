@@ -61,6 +61,74 @@ def masked_interrupt_request_program():
 
 MASKED_INTERRUPT_REQUEST = masked_interrupt_request_program()
 
+
+def external_dynamic_trap_program():
+    handler = 0x100
+    timer_compare = (
+        MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0] +
+        MMIX_VIRT_TIMER_CONTEXT_BASE +
+        MMIX_VIRT_TIMER_CONTEXT_COMPARE
+    )
+    timer_control = (
+        MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0] +
+        MMIX_VIRT_TIMER_CONTEXT_BASE +
+        MMIX_VIRT_TIMER_CONTEXT_CONTROL
+    )
+    intc_enable = (
+        MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0] +
+        MMIX_VIRT_INTC_CONTEXT_BASE +
+        MMIX_VIRT_INTC_CONTEXT_ENABLE
+    )
+    prefix = [
+        insn(PUTI, SR_K, 0, 0),
+        *set_octa(R1, intc_enable),
+        *set_octa(R2, 1 << MMIX_VIRT_TIMER_IRQ_BASE),
+        insn(STTU, R2, R1, R0),
+        *set_octa(R3, timer_compare),
+        insn(STOU, R0, R3, R0),
+        *set_octa(R4, timer_control),
+        wyde(SETL, R5, MMIX_VIRT_TIMER_CONTROL_ENABLE |
+             MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
+        insn(STOU, R5, R4, R0),
+        *set_octa(R6, RQ_INTERRUPT_CONTROLLER),
+        insn(GET, R20, 0, SR_Q),
+        insn(AND, R21, R20, R6),
+        branch(BZB, R21, 0xfffe),
+        wyde(SETL, R8, 0x55),
+        insn(ADDU, R255, R8, R0),
+        wyde(SETL, R9, 0x1122),
+        insn(PUT, SR_J, 0, R9),
+        wyde(SETL, R10, handler),
+        insn(PUT, SR_TT, 0, R10),
+        insn(PUT, SR_K, 0, R6),
+    ]
+    resume_pc = len(b"".join(prefix))
+    prefix.extend([
+        wyde(SETL, R30, 0xee),
+        halt(),
+    ])
+    program = program_with_handler(
+        prefix,
+        handler,
+        [
+            insn(GET, R40, 0, SR_Q),
+            insn(GET, R41, 0, SR_WW),
+            insn(GET, R42, 0, SR_XX),
+            insn(GET, R43, 0, SR_YY),
+            insn(GET, R44, 0, SR_ZZ),
+            insn(GET, R45, 0, SR_BB),
+            insn(GET, R46, 0, SR_K),
+            insn(ADDU, R47, R255, R0),
+            insn(PUTI, SR_Q, 0, 0),
+            insn(ADDU, R255, R0, R0),
+            halt(),
+        ],
+    )
+    return program, handler + 10 * 4, resume_pc
+
+
+EXTERNAL_DYNAMIC_TRAP = external_dynamic_trap_program()
+
 INTERRUPT_TESTS = [
     MMIXTest(
         "masked-interrupt-request",
@@ -74,6 +142,22 @@ INTERRUPT_TESTS = [
             R24: RQ_INTERRUPT_CONTROLLER,
             R25: 0,
             R26: 0,
+        },
+    ),
+    MMIXTest(
+        "external-dynamic-trap",
+        EXTERNAL_DYNAMIC_TRAP[0],
+        pc=EXTERNAL_DYNAMIC_TRAP[1],
+        regs={
+            R30: 0,
+            R40: RQ_INTERRUPT_CONTROLLER,
+            R41: EXTERNAL_DYNAMIC_TRAP[2],
+            R42: DYNAMIC_TRAP_RESUME_NEXT,
+            R43: 0,
+            R44: 0,
+            R45: 0x55,
+            R46: 0,
+            R47: 0x1122,
         },
     ),
 ]
