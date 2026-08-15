@@ -230,6 +230,8 @@ uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_is_privileged(CPUMMIXState *env);
+bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);
+void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);

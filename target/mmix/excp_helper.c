@@ -352,14 +352,11 @@ bool mmix_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     CPUMMIXState *env = cpu_env(cs);
 
     if (interrupt_request & CPU_INTERRUPT_HARD) {
-        if (!(env->sregs[MMIX_SREG_RQ] &
-              env->sregs[MMIX_SREG_RK] &
-              MMIX_RK_INTERRUPT_CONTROLLER)) {
+        if (!mmix_cpu_interrupt_enabled(env)) {
             return false;
         }
         cs->exception_index = EXCP_MMIX_INTERRUPT;
         mmix_cpu_do_interrupt(cs);
-        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
         return true;
     }
 

@@ -109,7 +109,31 @@ static void mmix_restore_state_to_opc(CPUState *cs,
 
 static bool mmix_cpu_has_work(CPUState *cs)
 {
-    return cpu_test_interrupt(cs, CPU_INTERRUPT_HARD);
+    CPUMMIXState *env = cpu_env(cs);
+
+    return cpu_test_interrupt(cs, CPU_INTERRUPT_HARD) &&
+           mmix_cpu_interrupt_enabled(env);
+}
+
+bool mmix_cpu_interrupt_enabled(CPUMMIXState *env)
+{
+    return env->sregs[MMIX_SREG_RQ] &
+           env->sregs[MMIX_SREG_RK] &
+           MMIX_RK_INTERRUPT_CONTROLLER;
+}
+
+void mmix_cpu_update_interrupt(CPUMMIXState *env)
+{
+    CPUState *cs = env_cpu(env);
+
+    if (env->interrupt_controller_level || mmix_cpu_interrupt_enabled(env)) {
+        cpu_set_interrupt(cs, CPU_INTERRUPT_HARD);
+        if (!qemu_cpu_is_self(cs)) {
+            qemu_cpu_kick(cs);
+        }
+    } else {
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+    }
 }
 
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
@@ -119,10 +143,8 @@ void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
     env->interrupt_controller_level = level;
     if (level) {
         mmix_cpu_set_rq_bits(env, MMIX_RQ_INTERRUPT_CONTROLLER);
-        cpu_interrupt(cs, CPU_INTERRUPT_HARD);
-    } else {
-        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
     }
+    mmix_cpu_update_interrupt(env);
 }
 
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)

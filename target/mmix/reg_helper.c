@@ -224,6 +224,7 @@ void mmix_cpu_put_rk(CPUMMIXState *env, uint64_t val)
 {
     env->sregs[MMIX_SREG_RK] = val;
     mmix_cpu_update_translation_state(env);
+    mmix_cpu_update_interrupt(env);
 }
 
 static void mmix_cpu_put_rv(CPUMMIXState *env, uint64_t val)
@@ -267,6 +268,7 @@ static void mmix_cpu_put_rq(CPUMMIXState *env, uint64_t val)
         val |= MMIX_RQ_INTERRUPT_CONTROLLER;
     }
     env->sregs[MMIX_SREG_RQ] = val;
+    mmix_cpu_update_interrupt(env);
 }
 
 static void mmix_cpu_put_rg(CPUMMIXState *env, uint64_t val)
