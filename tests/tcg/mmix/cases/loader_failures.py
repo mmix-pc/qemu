@@ -56,6 +56,12 @@ LOADER_FAILURE_TESTS = [
         ("MMIX ELF kernel", "loads outside Low RAM"),
     ),
     MMIXLoaderFailure(
+        "elf-kernel-command-line-too-long",
+        elf64_image(0, halt()),
+        ("MMIX kernel command line exceeds maximum length 4095",),
+        ("-append", "x" * (MMIX_BOOTINFO_KERNEL_CMDLINE_MAX + 1)),
+    ),
+    MMIXLoaderFailure(
         "mmo-fixo-invalid-z",
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXO, 0, y=0, z=0)]),
         ("invalid MMIX .mmo lop_fixo z=0", "tetra 2"),

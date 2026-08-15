@@ -240,6 +240,7 @@ def run_loader_failure(qemu, workdir, test):
     result = run_kernel(
         qemu,
         image,
+        qemu_args=test.qemu_args,
         check=False,
         timeout=10,
         capture_output=True,

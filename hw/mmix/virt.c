@@ -36,6 +36,10 @@ const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
                                  MMIX_STACK_SEGMENT_SIZE },
     [MMIX_VIRT_PLATFORM_RAM] = { 0x000000000e800000ULL, 0x0000000000800000ULL },
     [MMIX_VIRT_BOOTINFO] =     { 0x000000000e800000ULL, MMIX_BOOTINFO_SIZE },
+    [MMIX_VIRT_KERNEL_CMDLINE] = {
+        0x000000000e800000ULL + MMIX_BOOTINFO_SIZE,
+        MMIX_BOOTINFO_KERNEL_CMDLINE_STORAGE_SIZE
+    },
     [MMIX_VIRT_FRAMEBUFFER] =  { 0x000000000f000000ULL, 0x0000000001000000ULL },
     [MMIX_VIRT_MMIO] =         { 0x0000000010000000ULL, 0 },
     [MMIX_VIRT_UART0] =        { 0x0000000010000000ULL, 0x100 },
@@ -62,16 +66,73 @@ static void mmix_bootinfo_store(uint8_t *bootinfo, MMIXBootInfoField field,
     stq_be_p(bootinfo + mmix_bootinfo_field_offset(field), value);
 }
 
+static bool mmix_range_contains(const MemMapEntry *container,
+                                const MemMapEntry *range)
+{
+    uint64_t offset;
+
+    if (range->base < container->base) {
+        return false;
+    }
+    offset = range->base - container->base;
+    return offset <= container->size &&
+           range->size <= container->size - offset;
+}
+
+static bool mmix_range_fits_ram(const MachineState *machine,
+                                const MemMapEntry *range)
+{
+    return range->base <= machine->ram_size &&
+           range->size <= machine->ram_size - range->base;
+}
+
+static bool mmix_validate_bootinfo_layout(const MachineState *machine,
+                                          size_t cmdline_size, Error **errp)
+{
+    const MemMapEntry *platform =
+        &mmix_virt_memmap[MMIX_VIRT_PLATFORM_RAM];
+    const MemMapEntry *bootinfo = &mmix_virt_memmap[MMIX_VIRT_BOOTINFO];
+    const MemMapEntry *cmdline =
+        &mmix_virt_memmap[MMIX_VIRT_KERNEL_CMDLINE];
+
+    if (!mmix_range_contains(platform, bootinfo) ||
+        !mmix_range_fits_ram(machine, bootinfo)) {
+        error_setg(errp, "MMIX boot info does not fit in platform RAM");
+        return false;
+    }
+    if (cmdline->base < bootinfo->base ||
+        cmdline->base - bootinfo->base < bootinfo->size ||
+        !mmix_range_contains(platform, cmdline)) {
+        error_setg(errp, "MMIX kernel command line overlaps platform data");
+        return false;
+    }
+    if (cmdline_size > MMIX_BOOTINFO_KERNEL_CMDLINE_MAX) {
+        error_setg(errp,
+                   "MMIX kernel command line exceeds maximum length %u",
+                   MMIX_BOOTINFO_KERNEL_CMDLINE_MAX);
+        return false;
+    }
+    if (cmdline_size != 0 && !mmix_range_fits_ram(machine, cmdline)) {
+        error_setg(errp,
+                   "MMIX kernel command line does not fit in machine RAM");
+        return false;
+    }
+
+    return true;
+}
+
 static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                                 Error **errp)
 {
+    const char *cmdline = machine->kernel_cmdline;
+    const MemMapEntry *cmdline_region =
+        &mmix_virt_memmap[MMIX_VIRT_KERNEL_CMDLINE];
     g_autofree uint8_t *bootinfo = NULL;
+    size_t cmdline_size = cmdline ? strlen(cmdline) : 0;
+    uint64_t flags = 0;
     MemTxResult result;
 
-    if (machine->ram_size < mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base ||
-        machine->ram_size - mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base <
-        mmix_virt_memmap[MMIX_VIRT_BOOTINFO].size) {
-        error_setg(errp, "MMIX boot info does not fit in machine RAM");
+    if (!mmix_validate_bootinfo_layout(machine, cmdline_size, errp)) {
         return false;
     }
 
@@ -83,6 +144,10 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                         MMIX_BOOTINFO_VERSION);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_SIZE,
                         MMIX_BOOTINFO_SIZE);
+    if (cmdline_size != 0) {
+        flags |= MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE;
+    }
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FLAGS, flags);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_CPU_COUNT, 1);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_BOOT_CPU_ID,
                         boot_cpu_id);
@@ -150,6 +215,14 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
     mmix_bootinfo_store(
         bootinfo, MMIX_BOOTINFO_FIELD_FRAMEBUFFER_FORMAT,
         MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888);
+    if (cmdline_size != 0) {
+        mmix_bootinfo_store(bootinfo,
+                            MMIX_BOOTINFO_FIELD_KERNEL_CMDLINE_ADDR,
+                            cmdline_region->base);
+        mmix_bootinfo_store(bootinfo,
+                            MMIX_BOOTINFO_FIELD_KERNEL_CMDLINE_SIZE,
+                            cmdline_size);
+    }
 
     result = address_space_write(&address_space_memory,
                                  mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base,
@@ -159,6 +232,17 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
     if (result != MEMTX_OK) {
         error_setg(errp, "could not write MMIX boot info");
         return false;
+    }
+
+    if (cmdline_size != 0) {
+        result = address_space_write(&address_space_memory,
+                                     cmdline_region->base,
+                                     MEMTXATTRS_UNSPECIFIED,
+                                     cmdline, cmdline_size + 1);
+        if (result != MEMTX_OK) {
+            error_setg(errp, "could not write MMIX kernel command line");
+            return false;
+        }
     }
 
     return true;

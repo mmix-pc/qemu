@@ -61,6 +61,7 @@ MMIX_VIRT_DATA = "data"
 MMIX_VIRT_STACK = "stack"
 MMIX_VIRT_PLATFORM_RAM = "platform_ram"
 MMIX_VIRT_BOOTINFO = "bootinfo"
+MMIX_VIRT_KERNEL_CMDLINE = "kernel_cmdline"
 MMIX_VIRT_FRAMEBUFFER = "framebuffer"
 MMIX_VIRT_MMIO = "mmio"
 MMIX_VIRT_UART0 = "uart0"
@@ -82,6 +83,7 @@ MMIX_VIRT_MEMMAP = {
     MMIX_VIRT_STACK: (0x0A800000, 0x04000000),
     MMIX_VIRT_PLATFORM_RAM: (0x0E800000, 0x00800000),
     MMIX_VIRT_BOOTINFO: (0x0E800000, 0),
+    MMIX_VIRT_KERNEL_CMDLINE: (0, 0x1000),
     MMIX_VIRT_FRAMEBUFFER: (0x0F000000, 0x01000000),
     MMIX_VIRT_MMIO: (0x10000000, 0),
     MMIX_VIRT_UART0: (0x10000000, 0x100),
@@ -137,6 +139,8 @@ MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER] = (
 )
 MMIX_BOOTINFO_MAGIC = 0x4D4D4958424F4F54
 MMIX_BOOTINFO_VERSION = 1
+MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE = 1 << 0
+MMIX_BOOTINFO_KERNEL_CMDLINE_MAX = 4095
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
 MMIX_POOL_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_POOL][0]
 MMIX_POOL_SEGMENT_SIZE = 0x0000000000800000
@@ -219,12 +223,18 @@ MMIX_BOOTINFO_FIELDS = (
     "framebuffer_height",
     "framebuffer_stride",
     "framebuffer_format",
+    "kernel_cmdline_addr",
+    "kernel_cmdline_size",
 )
 MMIX_BOOTINFO_FORMAT = ">" + ("Q" * len(MMIX_BOOTINFO_FIELDS))
 MMIX_BOOTINFO_SIZE = struct.calcsize(MMIX_BOOTINFO_FORMAT)
 MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO] = (
     MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
     MMIX_BOOTINFO_SIZE,
+)
+MMIX_VIRT_MEMMAP[MMIX_VIRT_KERNEL_CMDLINE] = (
+    MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0] + MMIX_BOOTINFO_SIZE,
+    MMIX_BOOTINFO_KERNEL_CMDLINE_MAX + 1,
 )
 
 
@@ -275,6 +285,8 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "framebuffer_height": MMIX_VIRT_FRAMEBUFFER_HEIGHT,
         "framebuffer_stride": MMIX_VIRT_FRAMEBUFFER_STRIDE,
         "framebuffer_format": MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888,
+        "kernel_cmdline_addr": 0,
+        "kernel_cmdline_size": 0,
     }
 
 
@@ -640,6 +652,7 @@ class MMIXLoaderFailure:
     name: str
     image: bytes
     patterns: tuple[str, ...]
+    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

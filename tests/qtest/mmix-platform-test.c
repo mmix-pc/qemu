@@ -73,6 +73,8 @@ static const uint64_t mmix_bootinfo_magic = 0x4d4d4958424f4f54ULL;
 
 enum {
     MMIX_BOOTINFO_VERSION = 1,
+    MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE = 1,
+    MMIX_BOOTINFO_KERNEL_CMDLINE_MAX = 4095,
     MMIX_UART_LSR = 0x05,
     MMIX_UART_LSR_THRE = 0x20,
     MMIX_FRAMEBUFFER_REG_WIDTH = 0x00,
@@ -123,13 +125,59 @@ typedef enum MMIXBootInfoOffset {
     MMIX_BOOTINFO_FRAMEBUFFER_HEIGHT_OFFSET = 0x118,
     MMIX_BOOTINFO_FRAMEBUFFER_STRIDE_OFFSET = 0x120,
     MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_OFFSET = 0x128,
-    MMIX_BOOTINFO_SIZE = 0x130,
+    MMIX_BOOTINFO_KERNEL_CMDLINE_ADDR_OFFSET = 0x130,
+    MMIX_BOOTINFO_KERNEL_CMDLINE_SIZE_OFFSET = 0x138,
+    MMIX_BOOTINFO_SIZE = 0x140,
 } MMIXBootInfoOffset;
+
+static const uint64_t mmix_kernel_cmdline_base =
+    0x0e800000ULL + MMIX_BOOTINFO_SIZE;
 
 static uint64_t mmix_bootinfo_read(QTestState *qts,
                                    MMIXBootInfoOffset offset)
 {
     return qtest_readq(qts, mmix_bootinfo_base + offset);
+}
+
+static QTestState *mmix_start_elf(const char *elf, const char *cmdline)
+{
+    g_autofree char *quoted_elf = g_shell_quote(elf);
+
+    if (cmdline) {
+        g_autofree char *quoted_cmdline = g_shell_quote(cmdline);
+
+        return qtest_initf("-machine virt -display none -kernel %s "
+                           "-append %s", quoted_elf, quoted_cmdline);
+    }
+
+    return qtest_initf("-machine virt -display none -kernel %s", quoted_elf);
+}
+
+static void mmix_assert_kernel_cmdline(QTestState *qts, const char *expected)
+{
+    uint64_t address = mmix_bootinfo_read(
+        qts, MMIX_BOOTINFO_KERNEL_CMDLINE_ADDR_OFFSET);
+    uint64_t size = mmix_bootinfo_read(
+        qts, MMIX_BOOTINFO_KERNEL_CMDLINE_SIZE_OFFSET);
+    uint64_t flags = mmix_bootinfo_read(qts, MMIX_BOOTINFO_FLAGS_OFFSET);
+    size_t expected_size = strlen(expected);
+    g_autofree char *actual = NULL;
+
+    if (expected_size == 0) {
+        g_assert_cmphex(flags & MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE, ==, 0);
+        g_assert_cmphex(address, ==, 0);
+        g_assert_cmpuint(size, ==, 0);
+        return;
+    }
+
+    g_assert_cmphex(flags, ==, MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE);
+    g_assert_cmphex(address, ==, mmix_kernel_cmdline_base);
+    g_assert_cmpuint(size, ==, expected_size);
+
+    actual = g_malloc(expected_size + 1);
+    qtest_memread(qts, address, actual, expected_size + 1);
+    g_assert_cmpmem(actual, expected_size + 1,
+                    expected, expected_size + 1);
 }
 
 static void mmix_check_ram_region(QTestState *qts,
@@ -216,8 +264,7 @@ static void test_mmix_platform_memory_layout(void)
 static void test_mmix_platform_bootinfo_headless(void)
 {
     g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = qtest_initf("-machine virt -display none -kernel %s",
-                                  elf);
+    QTestState *qts = mmix_start_elf(elf, NULL);
     const MMIXBootInfoOffset implemented_device_offsets[] = {
         MMIX_BOOTINFO_UART_BASE_OFFSET,
         MMIX_BOOTINFO_UART_IRQ_OFFSET,
@@ -257,6 +304,7 @@ static void test_mmix_platform_bootinfo_headless(void)
                      MMIX_BOOTINFO_SIZE);
     g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_FLAGS_OFFSET), ==,
                      0);
+    mmix_assert_kernel_cmdline(qts, "");
     g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
                      ==, 1);
     g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
@@ -333,6 +381,43 @@ static void test_mmix_platform_bootinfo_headless(void)
     g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
+static void test_mmix_platform_kernel_cmdline(void)
+{
+    const char *cmdline = "console=ttyS0 root=/dev/vda";
+    g_autofree char *elf = mmix_create_elf();
+    QTestState *qts = mmix_start_elf(elf, cmdline);
+
+    mmix_assert_kernel_cmdline(qts, cmdline);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
+static void test_mmix_platform_empty_kernel_cmdline(void)
+{
+    g_autofree char *elf = mmix_create_elf();
+    QTestState *qts = mmix_start_elf(elf, "");
+
+    /* MachineState normalizes absent and explicitly empty values to "". */
+    mmix_assert_kernel_cmdline(qts, "");
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
+static void test_mmix_platform_max_kernel_cmdline(void)
+{
+    g_autofree char *cmdline =
+        g_strnfill(MMIX_BOOTINFO_KERNEL_CMDLINE_MAX, 'x');
+    g_autofree char *elf = mmix_create_elf();
+    QTestState *qts = mmix_start_elf(elf, cmdline);
+
+    mmix_assert_kernel_cmdline(qts, cmdline);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -341,6 +426,12 @@ int main(int argc, char **argv)
                    test_mmix_platform_memory_layout);
     qtest_add_func("/mmix/platform/bootinfo-headless",
                    test_mmix_platform_bootinfo_headless);
+    qtest_add_func("/mmix/platform/kernel-cmdline",
+                   test_mmix_platform_kernel_cmdline);
+    qtest_add_func("/mmix/platform/empty-kernel-cmdline",
+                   test_mmix_platform_empty_kernel_cmdline);
+    qtest_add_func("/mmix/platform/max-kernel-cmdline",
+                   test_mmix_platform_max_kernel_cmdline);
 
     return g_test_run();
 }
