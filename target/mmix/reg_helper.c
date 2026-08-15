@@ -112,7 +112,7 @@ static void mmix_cpu_fill_stack(CPUMMIXState *env)
                       env->sregs[MMIX_SREG_RO],
                       env->sregs[MMIX_SREG_RS],
                       mmix_cpu_stack_depth(env));
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
     mmix_cpu_stack_load(env);
 }
@@ -249,7 +249,7 @@ uint64_t helper_mmix_read_sreg(CPUMMIXState *env, uint32_t reg)
     uint64_t val;
 
     if (reg >= MMIX_SREGS) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
     val = env->sregs[reg];
     if (reg == MMIX_SREG_RQ) {

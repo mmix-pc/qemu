@@ -117,11 +117,11 @@ void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
     }
 }
 
-void helper_raise_illegal_instruction(CPUMMIXState *env)
+G_NORETURN void mmix_cpu_raise_emulator_failure(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);
 
-    cs->exception_index = EXCP_MMIX_ILLEGAL;
+    cs->exception_index = EXCP_MMIX_EMULATOR_FAILURE;
     cpu_loop_exit(cs);
 }
 
@@ -189,7 +189,7 @@ static void mmix_resume_unsupported(CPUMMIXState *env, const char *why,
     qemu_log_mask(LOG_UNIMP,
                   "MMIX unsupported RESUME %s exec=0x%016" PRIx64 "\n",
                   why, exec);
-    helper_raise_illegal_instruction(env);
+    mmix_cpu_raise_emulator_failure(env);
 }
 
 G_NORETURN void mmix_cpu_break_rules_and_continue(CPUMMIXState *env,
@@ -332,8 +332,9 @@ void mmix_cpu_do_interrupt(CPUState *cs)
     hwaddr handler;
 
     switch (cs->exception_index) {
-    case EXCP_MMIX_ILLEGAL:
-        qemu_log_mask(CPU_LOG_INT, "MMIX illegal instruction at 0x%016" PRIx64 "\n",
+    case EXCP_MMIX_EMULATOR_FAILURE:
+        qemu_log_mask(CPU_LOG_INT,
+                      "MMIX emulator failure at 0x%016" PRIx64 "\n",
                       env->pc);
         break;
     case EXCP_MMIX_ARITHMETIC_TRIP:

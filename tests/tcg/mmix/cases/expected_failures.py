@@ -9,6 +9,10 @@ EXPECTED_FAILURE_TESTS = [
         "unsupported-resume-replay",
         b"".join(
             [
+                wyde(SETL, R10, 0x100),
+                insn(PUT, SR_TT, 0, R10),
+                *set_octa(R11, RQ_PROGRAM_B),
+                insn(PUT, SR_K, 0, R11),
                 wyde(SETL, R1, 0x20),  # target address
                 insn(PUT, SR_W, 0, R1),
                 *set_octa(R2, 0x0000000021010001),
@@ -17,7 +21,7 @@ EXPECTED_FAILURE_TESTS = [
             ]
         ),
         ("MMIX unsupported RESUME ropcode 0 instruction replay",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "unsupported-resume-operands",
@@ -31,7 +35,7 @@ EXPECTED_FAILURE_TESTS = [
             ]
         ),
         ("MMIX unsupported RESUME ropcode 1 operand substitution",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "unsupported-resume-translation",
@@ -45,7 +49,13 @@ EXPECTED_FAILURE_TESTS = [
             ]
         ),
         ("MMIX unsupported RESUME ropcode 3 virtual translation",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
+    ),
+    MMIXExpectedFailure(
+        "register-stack-underflow",
+        insn(POP, 0, 0, 0),
+        ("MMIX register stack underflow during POP",
+         "MMIX emulator failure"),
     ),
 ]
 
@@ -54,13 +64,17 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
         "semihosting-fputs-stdout-disabled",
         b"".join(
             [
+                wyde(SETL, R10, 0x100),
+                insn(PUT, SR_TT, 0, R10),
+                *set_octa(R11, RQ_PROGRAM_B),
+                insn(PUT, SR_K, 0, R11),
                 *set_octa(R255, 0x40),
                 insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
                      MMIX_SEMIHOSTING_STDOUT),
             ]
         ),
         ("MMIX semihosting disabled for hosted TRAP service 7 handle 1",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fputs-stderr-disabled",
@@ -72,46 +86,46 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
             ]
         ),
         ("MMIX semihosting disabled for hosted TRAP service 7 handle 2",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fread-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD,
              MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
         ("MMIX semihosting disabled for hosted TRAP service 3 handle 3",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fread-stdin-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, MMIX_SEMIHOSTING_STDIN),
         ("MMIX semihosting disabled for hosted TRAP service 3 handle 0",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fgets-stdin-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FGETS, MMIX_SEMIHOSTING_STDIN),
         ("MMIX semihosting disabled for hosted TRAP service 4 handle 0",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fwrite-stdout-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, MMIX_SEMIHOSTING_STDOUT),
         ("MMIX semihosting disabled for hosted TRAP service 6 handle 1",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fseek-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FSEEK,
              MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
         ("MMIX semihosting disabled for hosted TRAP service 9 handle 3",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-ftell-disabled",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FTELL,
              MMIX_SEMIHOSTING_FIRST_FILE_HANDLE),
         ("MMIX semihosting disabled for hosted TRAP service 10 handle 3",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
 ]
 
@@ -121,13 +135,13 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
         insn(TRAP, 0, MMIX_SEMIHOSTING_FGETWS,
              MMIX_SEMIHOSTING_STDIN),
         ("MMIX unsupported hosted TRAP service 5 handle 0",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-unsupported-trap-service",
         insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTWS, MMIX_SEMIHOSTING_STDOUT),
         ("MMIX unsupported hosted TRAP service 8 handle 1",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fputs-invalid-string-address",
@@ -140,7 +154,7 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
         ),
         (f"MMIX hosted Fputs invalid string address "
          f"0x{MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS:016x}",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fputs-unterminated-string",
@@ -155,7 +169,7 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
         ),
         ("MMIX hosted Fputs string at 0x0000000000000100 exceeds 256 bytes "
          "without NUL",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
         "semihosting-fputs-stdin-handle",
@@ -167,7 +181,7 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
             ]
         ),
         ("MMIX hosted Fputs unsupported handle 0",
-         "MMIX illegal instruction"),
+         "MMIX emulator failure"),
     ),
 ]
 

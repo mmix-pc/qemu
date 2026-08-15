@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "mmix-helper.h"
 #include "semihosting.h"
 #include "exec/helper-proto.h"
 #include "exec/log.h"
@@ -473,7 +474,7 @@ mmix_semihosting_raise_disabled(CPUMMIXState *env,
                   "MMIX semihosting disabled for hosted TRAP service %u "
                   "handle %u at 0x%016" PRIx64 "\n",
                   call->service, call->handle, env->pc);
-    helper_raise_illegal_instruction(env);
+    mmix_cpu_raise_emulator_failure(env);
 }
 
 static G_NORETURN void
@@ -484,7 +485,7 @@ mmix_semihosting_raise_fputs_bad_handle(CPUMMIXState *env,
                   "MMIX hosted Fputs unsupported handle %u at 0x%016"
                   PRIx64 "\n",
                   call->handle, env->pc);
-    helper_raise_illegal_instruction(env);
+    mmix_cpu_raise_emulator_failure(env);
 }
 
 static G_NORETURN void
@@ -495,7 +496,7 @@ mmix_semihosting_raise_unsupported(CPUMMIXState *env,
                   "MMIX unsupported hosted TRAP service %u handle %u at "
                   "0x%016" PRIx64 "\n",
                   call->service, call->handle, env->pc);
-    helper_raise_illegal_instruction(env);
+    mmix_cpu_raise_emulator_failure(env);
 }
 
 static bool mmix_semihosting_translate_byte(CPUMMIXState *env,
@@ -799,12 +800,12 @@ static void mmix_semihosting_fputs_console(CPUMMIXState *env,
     if (!mmix_semihosting_read_cstring(env, address, "Fputs", "string",
                                        bytes)) {
         g_byte_array_free(bytes, true);
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
 
     if (!mmix_semihosting_write_console(env, "Fputs", call->handle, bytes)) {
         g_byte_array_free(bytes, true);
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
 
     mmix_cpu_write_reg(env, 255, bytes->len);
@@ -828,7 +829,7 @@ static void mmix_semihosting_fopen(CPUMMIXState *env,
         !mmix_semihosting_read_cstring(env, args.arg2, service_name,
                                        "pathname", bytes)) {
         g_byte_array_free(bytes, true);
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
     if (!mmix_semihosting_file_mode_flags(args.arg3, &flags)) {
         qemu_log_mask(LOG_UNIMP,
@@ -871,7 +872,7 @@ static void mmix_semihosting_fread(CPUMMIXState *env,
     int guestfd;
 
     if (!mmix_semihosting_read_args3(env, call, &args)) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
     if (call->handle == MMIX_SEMIHOSTING_HANDLE_STDIN) {
         if (!mmix_semihosting_check_counted_buffer(env, args.arg2, args.arg3,
@@ -953,7 +954,7 @@ static void mmix_semihosting_fgets(CPUMMIXState *env,
     uint8_t byte;
 
     if (!mmix_semihosting_read_args3(env, call, &args)) {
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
     if (args.arg3 == 0 ||
         !mmix_semihosting_read_handle_guestfd(env, call, &guestfd,
@@ -997,7 +998,7 @@ static void mmix_semihosting_fwrite(CPUMMIXState *env,
     bytes = g_byte_array_new();
     if (!mmix_semihosting_read_args3(env, call, &args)) {
         g_byte_array_free(bytes, true);
-        helper_raise_illegal_instruction(env);
+        mmix_cpu_raise_emulator_failure(env);
     }
     if (call->handle == MMIX_SEMIHOSTING_HANDLE_STDIN) {
         mmix_semihosting_validate_regular_file_handle(env, call);

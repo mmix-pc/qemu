@@ -13,6 +13,7 @@
 #include "cpu.h"
 
 void mmix_cpu_put_rk(CPUMMIXState *env, uint64_t val);
+G_NORETURN void mmix_cpu_raise_emulator_failure(CPUMMIXState *env);
 G_NORETURN void mmix_cpu_break_rules_and_continue(CPUMMIXState *env,
                                                   uint32_t insn, uint64_t y,
                                                   uint64_t z);

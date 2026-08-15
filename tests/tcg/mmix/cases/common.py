@@ -621,7 +621,7 @@ class MMIXExpectedFailure:
     name: str
     program: bytes
     patterns: tuple[str, ...]
-    absent: tuple[str, ...] = ("MMIX test exit",)
+    absent: tuple[str, ...] = ("MMIX test exit", "MMIX dynamic trap causes=")
 
 
 @dataclasses.dataclass(frozen=True)

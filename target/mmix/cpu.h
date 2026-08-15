@@ -132,7 +132,7 @@ typedef enum MMIXSpecialReg {
 } MMIXSpecialReg;
 
 enum {
-    EXCP_MMIX_ILLEGAL = 1,
+    EXCP_MMIX_EMULATOR_FAILURE = 1,
     EXCP_MMIX_INTERRUPT = 2,
     EXCP_MMIX_ARITHMETIC_TRIP = 3,
     EXCP_MMIX_DYNAMIC_TRAP = 4,

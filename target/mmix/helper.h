@@ -4,7 +4,6 @@
  * target/mmix/mmix-helper.h carries normal internal helper declarations.
  */
 
-DEF_HELPER_1(raise_illegal_instruction, noreturn, env)
 DEF_HELPER_4(mmix_break_rules, void, env, i32, i64, i64)
 DEF_HELPER_1(mmix_test_exit, noreturn, env)
 DEF_HELPER_4(mmix_trip, noreturn, env, i32, i64, i64)
