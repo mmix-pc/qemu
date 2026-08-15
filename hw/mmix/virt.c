@@ -7,7 +7,6 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
-#include "exec/cpu-interrupt.h"
 #include "hw/char/serial-mm.h"
 #include "system/address-spaces.h"
 #include "hw/core/boards.h"
@@ -54,12 +53,7 @@ static void mmix_virt_cpu_irq(void *opaque, int irq, int level)
     CPUState *cpu = opaque;
 
     g_assert(irq == 0);
-
-    if (level) {
-        cpu_interrupt(cpu, CPU_INTERRUPT_HARD);
-    } else {
-        cpu_reset_interrupt(cpu, CPU_INTERRUPT_HARD);
-    }
+    mmix_cpu_set_interrupt_controller(cpu, level);
 }
 
 static void mmix_bootinfo_store(uint8_t *bootinfo, MMIXBootInfoField field,

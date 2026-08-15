@@ -192,10 +192,18 @@ bool mmix_cpu_is_privileged(CPUMMIXState *env)
            (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_K) == 0;
 }
 
+void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits)
+{
+    uint64_t new_bits = bits & ~env->sregs[MMIX_SREG_RQ];
+
+    env->sregs[MMIX_SREG_RQ] |= bits;
+    env->rq_new_bits |= new_bits;
+}
+
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes)
 {
     env->program_exception_causes |= causes & MMIX_RQ_PROGRAM_MASK;
-    env->sregs[MMIX_SREG_RQ] |= causes & MMIX_RQ_PROGRAM_MASK;
+    mmix_cpu_set_rq_bits(env, causes & MMIX_RQ_PROGRAM_MASK);
 }
 
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes)
@@ -237,10 +245,28 @@ void helper_mmix_write_reg(CPUMMIXState *env, uint32_t reg, uint64_t val)
 
 uint64_t helper_mmix_read_sreg(CPUMMIXState *env, uint32_t reg)
 {
+    uint64_t val;
+
     if (reg >= MMIX_SREGS) {
         helper_raise_illegal_instruction(env);
     }
-    return env->sregs[reg];
+    val = env->sregs[reg];
+    if (reg == MMIX_SREG_RQ) {
+        /* MMIXware sections 43 and MMIX-PIPE 148 define GET/PUT handoff. */
+        env->rq_new_bits = 0;
+    }
+    return val;
+}
+
+static void mmix_cpu_put_rq(CPUMMIXState *env, uint64_t val)
+{
+    /* Software cannot manufacture the virtual interrupt-controller input. */
+    val &= ~MMIX_RQ_INTERRUPT_CONTROLLER;
+    val |= env->rq_new_bits;
+    if (env->interrupt_controller_level) {
+        val |= MMIX_RQ_INTERRUPT_CONTROLLER;
+    }
+    env->sregs[MMIX_SREG_RQ] = val;
 }
 
 static void mmix_cpu_put_rg(CPUMMIXState *env, uint64_t val)
@@ -303,12 +329,7 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t reg, uint64_t val)
         mmix_cpu_put_rl(env, val);
         break;
     case MMIX_SREG_RQ:
-        /*
-         * Hardware interrupt request bits are still not modeled. Privileged
-         * PUT[I] can write rQ as stored state; program-exception helpers OR
-         * architectural cause bits into rQ when they raise dynamic traps.
-         */
-        env->sregs[reg] = val;
+        mmix_cpu_put_rq(env, val);
         break;
     case MMIX_SREG_RK:
         mmix_cpu_put_rk(env, val);

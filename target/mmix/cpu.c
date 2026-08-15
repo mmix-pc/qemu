@@ -112,6 +112,19 @@ static bool mmix_cpu_has_work(CPUState *cs)
     return cpu_test_interrupt(cs, CPU_INTERRUPT_HARD);
 }
 
+void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
+{
+    CPUMMIXState *env = cpu_env(cs);
+
+    env->interrupt_controller_level = level;
+    if (level) {
+        mmix_cpu_set_rq_bits(env, MMIX_RQ_INTERRUPT_CONTROLLER);
+        cpu_interrupt(cs, CPU_INTERRUPT_HARD);
+    } else {
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+    }
+}
+
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
     return 0;
