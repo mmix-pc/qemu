@@ -120,6 +120,61 @@ def platform_probe_program():
 
 PLATFORM_PROBE = platform_probe_program()
 
+
+KERNEL_CMDLINE = b"console=ttyS0 root=/dev/vda"
+
+
+def kernel_cmdline_probe_program():
+    bootinfo_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0]
+    platform_base, platform_size = MMIX_VIRT_MEMMAP[MMIX_VIRT_PLATFORM_RAM]
+    cmdline_address = MMIX_VIRT_MEMMAP[MMIX_VIRT_KERNEL_CMDLINE][0]
+
+    def bootinfo_load(reg, field):
+        offset = MMIX_BOOTINFO_FIELDS.index(field) * 8
+        return [
+            wyde(SETL, R50, offset),
+            insn(LDOU, reg, R1, R50),
+        ]
+
+    program = [
+        insn(ADDI, R20, R1, 0),
+        *bootinfo_load(R21, "flags"),
+        *bootinfo_load(R22, "kernel_cmdline_addr"),
+        *bootinfo_load(R23, "kernel_cmdline_size"),
+        wyde(SETL, R25, 0),
+    ]
+
+    for offset, byte in enumerate(KERNEL_CMDLINE):
+        program.extend([
+            insn(LDBUI, R26, R22, offset),
+            insn(XORI, R26, R26, byte),
+            insn(OR, R25, R25, R26),
+        ])
+
+    program.extend([
+        insn(LDBUI, R24, R22, len(KERNEL_CMDLINE)),
+        insn(OR, R25, R25, R24),
+        insn(SUBU, R27, R22, R20),
+        *set_octa(R29, platform_base + platform_size),
+        insn(SUBU, R28, R29, R22),
+        halt(),
+    ])
+
+    regs = {
+        R20: bootinfo_base,
+        R21: MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE,
+        R22: cmdline_address,
+        R23: len(KERNEL_CMDLINE),
+        R24: 0,
+        R25: 0,
+        R27: MMIX_BOOTINFO_SIZE,
+        R28: platform_base + platform_size - cmdline_address,
+    }
+    return b"".join(program), (len(program) - 1) * 4, regs
+
+
+KERNEL_CMDLINE_PROBE = kernel_cmdline_probe_program()
+
 ELF_LOADER_TESTS = [
     MMIXELFTest(
         "elf-load-low-ram-segment",
@@ -170,6 +225,16 @@ ELF_LOADER_TESTS = [
         ),
         pc=BOOTINFO_PROBE[1],
         regs=BOOTINFO_PROBE[2],
+    ),
+    MMIXELFTest(
+        "elf-kernel-command-line",
+        elf64_image(
+            0,
+            KERNEL_CMDLINE_PROBE[0],
+        ),
+        pc=KERNEL_CMDLINE_PROBE[1],
+        regs=KERNEL_CMDLINE_PROBE[2],
+        qemu_args=("-append", KERNEL_CMDLINE.decode("ascii")),
     ),
     MMIXELFTest(
         "elf-single-core-platform",

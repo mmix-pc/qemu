@@ -281,7 +281,8 @@ def run_elf_test(qemu, workdir, test):
 
     serial_arg = f"file:{serial}" if test.output is not None else "none"
     completed = run_kernel(qemu, image, serial=serial_arg, trace="int",
-                           log=log, check=False, timeout=10)
+                           log=log, qemu_args=test.qemu_args, check=False,
+                           timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)

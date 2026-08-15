@@ -680,6 +680,7 @@ class MMIXELFTest:
     regs: dict[int, int]
     output: Optional[bytes] = None
     exit_status: int = 0
+    qemu_args: tuple[str, ...] = ()
 
 
 def case_id(test):
