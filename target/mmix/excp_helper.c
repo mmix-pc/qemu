@@ -125,6 +125,24 @@ void helper_raise_illegal_instruction(CPUMMIXState *env)
     cpu_loop_exit(cs);
 }
 
+void helper_mmix_break_rules(CPUMMIXState *env, uint32_t insn, uint64_t y,
+                             uint64_t z)
+{
+    CPUState *cs = env_cpu(env);
+
+    mmix_cpu_set_rq_bits(env, MMIX_RQ_PROGRAM_B);
+    if ((env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_B) == 0) {
+        return;
+    }
+
+    mmix_cpu_record_program_exception(env, MMIX_RQ_PROGRAM_B);
+    env->rule_break_insn = insn;
+    env->rule_break_y = y;
+    env->rule_break_z = z;
+    cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
+    cpu_loop_exit(cs);
+}
+
 void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
                       uint64_t z)
 {
@@ -327,7 +345,18 @@ void mmix_cpu_do_interrupt(CPUState *cs)
                       "MMIX dynamic trap causes=0x%016" PRIx64
                       " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
                       causes, env->pc, handler);
-        mmix_cpu_enter_dynamic_trap(cs, env->npc, causes, 0, 0);
+        if (causes & MMIX_RQ_PROGRAM_B) {
+            mmix_cpu_enter_dynamic_trap(
+                cs, env->npc,
+                MMIX_DYNAMIC_TRAP_RESUME_NEXT | causes |
+                env->rule_break_insn,
+                env->rule_break_y, env->rule_break_z);
+            env->rule_break_insn = 0;
+            env->rule_break_y = 0;
+            env->rule_break_z = 0;
+        } else {
+            mmix_cpu_enter_dynamic_trap(cs, env->npc, causes, 0, 0);
+        }
         env->program_exception_causes = 0;
         break;
     case EXCP_MMIX_INTERRUPT:

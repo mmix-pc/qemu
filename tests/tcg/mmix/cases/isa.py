@@ -1049,6 +1049,73 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
+        "break-rules-sync-masked",
+        b"".join(
+            [
+                wyde(SETL, R8, 0x1234),
+                jump(SYNC, 8),
+                wyde(SETL, R20, 0x55),
+                insn(GET, R21, 0, SR_Q),
+                insn(GET, R22, 0, SR_K),
+                halt(),
+            ]
+        ),
+        pc=0x14,
+        regs={R8: 0x1234, R20: 0x55, R21: RQ_PROGRAM_B, R22: 0},
+    ),
+    MMIXTest(
+        "break-rules-sync-enabled-resume",
+        program_with_handler(
+            [
+                wyde(SETL, R8, 0x1234),
+                wyde(SETL, R255, 0x55),
+                wyde(SETL, R9, 0x1122),
+                insn(PUT, SR_J, 0, R9),
+                wyde(SETL, R10, 0x100),
+                insn(PUT, SR_TT, 0, R10),
+                *set_octa(R2, RQ_PROGRAM_B),
+                insn(PUT, SR_K, 0, R2),
+                jump(SYNC, 8),
+                wyde(SETL, R30, 0xabcd),
+                insn(ADDU, R31, R255, R0),
+                insn(GET, R32, 0, SR_K),
+                insn(GET, R33, 0, SR_Q),
+                wyde(SETL, R255, 0),
+                halt(),
+            ],
+            0x100,
+            [
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_WW),
+                insn(GET, R42, 0, SR_XX),
+                insn(GET, R43, 0, SR_YY),
+                insn(GET, R44, 0, SR_ZZ),
+                insn(GET, R45, 0, SR_BB),
+                insn(GET, R46, 0, SR_K),
+                insn(ADDU, R47, R255, R0),
+                insn(PUTI, SR_Q, 0, 0),
+                insn(ADDU, R255, R2, R0),
+                insn(RESUME, 0, 0, 1),
+            ],
+        ),
+        pc=0x44,
+        regs={
+            R30: 0xabcd,
+            R31: 0x55,
+            R32: RQ_PROGRAM_B,
+            R33: 0,
+            R40: RQ_PROGRAM_B,
+            R41: 0x30,
+            R42: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 (SYNC << 24) | 8,
+            R43: 0,
+            R44: 0x1234,
+            R45: 0x55,
+            R46: 0,
+            R47: 0x1122,
+        },
+    ),
+    MMIXTest(
         "memory-compare-swap",
         b"".join(
             [

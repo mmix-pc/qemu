@@ -59,11 +59,6 @@ EXPECTED_FAILURE_TESTS = [
         insn(UNSAVE, 1, 0, R32),
         ("MMIX decoded unimplemented UNSAVE", "MMIX illegal instruction"),
     ),
-    MMIXExpectedFailure(
-        "invalid-sync",
-        jump(SYNC, 8),
-        ("MMIX invalid SYNC 8", "MMIX illegal instruction"),
-    ),
 ]
 
 SEMIHOSTING_DISABLED_FAILURE_TESTS = [

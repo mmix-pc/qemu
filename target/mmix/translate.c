@@ -201,12 +201,10 @@ static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
 
 TRANS_NOP(SWYM)
 
-static bool gen_mmix_invalid_sync(DisasContext *ctx, uint32_t mode)
+static bool gen_mmix_invalid_sync(DisasContext *ctx, arg_xyz *a)
 {
-    qemu_log_mask(LOG_UNIMP,
-                  "MMIX invalid SYNC %u at 0x%016" VADDR_PRIx "\n",
-                  mode, ctx->insn_pc);
-    gen_raise_illegal(ctx);
+    gen_helper_mmix_break_rules(tcg_env, tcg_constant_i32(ctx->insn),
+                                gen_load_reg(a->y), gen_load_reg(a->z));
     return true;
 }
 
@@ -1170,7 +1168,7 @@ static bool trans_SYNC(DisasContext *ctx, arg_xyz *a)
     case 7:
         return gen_mmix_privileged_sync(ctx, a->xyz);
     default:
-        return gen_mmix_invalid_sync(ctx, a->xyz);
+        return gen_mmix_invalid_sync(ctx, a);
     }
 }
 

@@ -185,6 +185,9 @@ typedef struct CPUArchState {
     uint32_t lring_mask;
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
+    uint32_t rule_break_insn;
+    uint64_t rule_break_y;
+    uint64_t rule_break_z;
     uint64_t rq_new_bits;
     bool interrupt_controller_level;
     bool flat_translation;
