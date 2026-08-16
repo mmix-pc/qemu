@@ -16,6 +16,7 @@
 #endif
 
 #define MMIX_ELF_REG_CONTENTS_LIMIT (MMIX_REGS - 1)
+#define MMIX_ELF_SHN_XINDEX UINT16_MAX
 
 static const char mmix_elf_reg_contents_name[] = ".MMIX.reg_contents";
 
@@ -194,10 +195,32 @@ static bool mmix_load_elf_registers(const char *filename,
     unsigned i;
 
     if (section_count == 0) {
+        if (table_offset != 0) {
+            error_setg(errp,
+                       "unsupported MMIX ELF extended section numbering in "
+                       "'%s'", filename);
+            return false;
+        }
+        if (names_index != SHN_UNDEF) {
+            error_setg(errp, "invalid MMIX ELF section-name index in '%s'",
+                       filename);
+            return false;
+        }
         return true;
     }
-    if (entry_size != sizeof(Elf64_Shdr) || names_index >= section_count) {
+    if (entry_size != sizeof(Elf64_Shdr)) {
         error_setg(errp, "invalid MMIX ELF section table in '%s'", filename);
+        return false;
+    }
+    if (names_index == MMIX_ELF_SHN_XINDEX) {
+        error_setg(errp,
+                   "unsupported MMIX ELF extended section-name index in '%s'",
+                   filename);
+        return false;
+    }
+    if (names_index != SHN_UNDEF && names_index >= section_count) {
+        error_setg(errp, "invalid MMIX ELF section-name index in '%s'",
+                   filename);
         return false;
     }
 
@@ -213,6 +236,15 @@ static bool mmix_load_elf_registers(const char *filename,
                              (uint64_t)section_count * entry_size)) {
         error_setg(errp, "truncated MMIX ELF section table in '%s'", filename);
         return false;
+    }
+
+    mmix_elf_read_shdr(data, table_offset, entry_size, 0, &shdr);
+    if (be32_to_cpu(shdr.sh_type) != SHT_NULL) {
+        error_setg(errp, "invalid MMIX ELF null section in '%s'", filename);
+        return false;
+    }
+    if (names_index == SHN_UNDEF) {
+        return true;
     }
 
     mmix_elf_read_shdr(data, table_offset, entry_size, names_index,

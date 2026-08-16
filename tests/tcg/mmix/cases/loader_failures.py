@@ -4,6 +4,16 @@
 
 from .common import *
 
+
+ELF_REG_CONTENTS_FAILURE_IMAGE = elf64_image_with_reg_contents(
+    0, halt(), 254, (0x1122334455667788,)
+)
+
+
+def elf_reg_contents_failure(name, image, *patterns):
+    return MMIXLoaderFailure(name, image, (f"{name}.mmo", *patterns))
+
+
 LOADER_FAILURE_TESTS = [
     MMIXLoaderFailure(
         "mmo-truncated-preamble",
@@ -60,6 +70,158 @@ LOADER_FAILURE_TESTS = [
         elf64_image(0, halt()),
         ("MMIX kernel command line exceeds maximum length 4095",),
         ("-append", "x" * (MMIX_BOOTINFO_KERNEL_CMDLINE_MAX + 1)),
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-extended-section-numbering",
+        elf64_patch_ehdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, "section_count", 0
+        ),
+        "unsupported MMIX ELF extended section numbering",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-section-name-index-without-table",
+        elf64_patch_ehdr_field(
+            elf64_image(0, halt()), "section_names_index", 1
+        ),
+        "invalid MMIX ELF section-name index",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-invalid-section-entry-size",
+        elf64_patch_ehdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, "section_entry_size", 63
+        ),
+        "invalid MMIX ELF section table",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-section-table-offset-overflow",
+        elf64_patch_ehdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, "section_offset", MASK64
+        ),
+        "truncated MMIX ELF section table",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-section-table-truncated",
+        elf64_patch_ehdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, "section_count", 4
+        ),
+        "truncated MMIX ELF section table",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-extended-section-name-index",
+        elf64_patch_ehdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, "section_names_index", SHN_XINDEX
+        ),
+        "unsupported MMIX ELF extended section-name index",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-invalid-section-name-index",
+        elf64_patch_ehdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, "section_names_index", 3
+        ),
+        "invalid MMIX ELF section-name index",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-invalid-null-section",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, 0, "type", SHT_PROGBITS
+        ),
+        "invalid MMIX ELF null section",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-invalid-section-name-table",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, 1, "type", SHT_PROGBITS
+        ),
+        "invalid MMIX ELF section-name table",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-section-name-table-truncated",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE,
+            1,
+            "offset",
+            len(ELF_REG_CONTENTS_FAILURE_IMAGE),
+        ),
+        "invalid MMIX ELF section-name table",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-invalid-section-name-offset",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE,
+            2,
+            "name",
+            elf64_read_shdr_field(ELF_REG_CONTENTS_FAILURE_IMAGE, 1, "size"),
+        ),
+        "invalid MMIX ELF section name offset",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-unterminated-section-name",
+        elf64_patch_byte(
+            ELF_REG_CONTENTS_FAILURE_IMAGE,
+            elf64_read_shdr_field(
+                ELF_REG_CONTENTS_FAILURE_IMAGE, 1, "offset"
+            ) + elf64_read_shdr_field(
+                ELF_REG_CONTENTS_FAILURE_IMAGE, 1, "size"
+            ) - 1,
+            ord("x"),
+        ),
+        "unterminated MMIX ELF section name",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-duplicate-section",
+        elf64_duplicate_shdr(ELF_REG_CONTENTS_FAILURE_IMAGE, 2),
+        "duplicate .MMIX.reg_contents section",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-invalid-section-type",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, 2, "type", SHT_STRTAB
+        ),
+        "invalid .MMIX.reg_contents section type",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-non-octa-payload",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, 2, "size", MMIX_OCTA_SIZE - 1
+        ),
+        "unaligned .MMIX.reg_contents section",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-local-register-range",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE,
+            2,
+            "address",
+            (MMIX_GLOBAL_REG_MIN - 1) * MMIX_OCTA_SIZE,
+        ),
+        "invalid .MMIX.reg_contents register range",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-register-255-included",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE, 2, "size", 2 * MMIX_OCTA_SIZE
+        ),
+        "invalid .MMIX.reg_contents register range",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-global-base-overflow",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE,
+            2,
+            "address",
+            MMIX_REGS * MMIX_OCTA_SIZE,
+        ),
+        "invalid .MMIX.reg_contents register range",
+    ),
+    elf_reg_contents_failure(
+        "elf-reg-payload-truncated",
+        elf64_patch_shdr_field(
+            ELF_REG_CONTENTS_FAILURE_IMAGE,
+            2,
+            "offset",
+            len(ELF_REG_CONTENTS_FAILURE_IMAGE),
+        ),
+        "truncated .MMIX.reg_contents section",
     ),
     MMIXLoaderFailure(
         "mmo-fixo-invalid-z",

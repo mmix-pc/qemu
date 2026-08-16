@@ -186,6 +186,10 @@ PT_LOAD = 1
 SHT_NULL = 0
 SHT_PROGBITS = 1
 SHT_STRTAB = 3
+SHN_XINDEX = 0xffff
+MMIX_REGS = 256
+MMIX_GLOBAL_REG_MIN = 32
+MMIX_OCTA_SIZE = 8
 
 MMIX_BOOTINFO_FIELDS = (
     "magic",
@@ -637,15 +641,96 @@ def elf64_shdr(name=0, section_type=SHT_NULL, flags=0, address=0, offset=0,
     )
 
 
+_ELF64_EHDR_FIELDS = {
+    "section_offset": (40, "Q"),
+    "section_entry_size": (58, "H"),
+    "section_count": (60, "H"),
+    "section_names_index": (62, "H"),
+}
+
+_ELF64_SHDR_FIELDS = {
+    "name": (0, "I"),
+    "type": (4, "I"),
+    "flags": (8, "Q"),
+    "address": (16, "Q"),
+    "offset": (24, "Q"),
+    "size": (32, "Q"),
+    "link": (40, "I"),
+    "info": (44, "I"),
+    "alignment": (48, "Q"),
+    "entry_size": (56, "Q"),
+}
+
+
+def _elf64_read_field(image, base, fields, field):
+    offset, format_ = fields[field]
+    return struct.unpack_from(">" + format_, image, base + offset)[0]
+
+
+def _elf64_patch_field(image, base, fields, field, value):
+    offset, format_ = fields[field]
+    result = bytearray(image)
+    struct.pack_into(">" + format_, result, base + offset, value)
+    return bytes(result)
+
+
+def elf64_read_ehdr_field(image, field):
+    return _elf64_read_field(image, 0, _ELF64_EHDR_FIELDS, field)
+
+
+def elf64_patch_ehdr_field(image, field, value):
+    return _elf64_patch_field(image, 0, _ELF64_EHDR_FIELDS, field, value)
+
+
+def elf64_read_shdr_field(image, index, field):
+    table_offset = elf64_read_ehdr_field(image, "section_offset")
+    entry_size = elf64_read_ehdr_field(image, "section_entry_size")
+    return _elf64_read_field(
+        image, table_offset + index * entry_size, _ELF64_SHDR_FIELDS, field
+    )
+
+
+def elf64_patch_shdr_field(image, index, field, value):
+    table_offset = elf64_read_ehdr_field(image, "section_offset")
+    entry_size = elf64_read_ehdr_field(image, "section_entry_size")
+    return _elf64_patch_field(
+        image, table_offset + index * entry_size,
+        _ELF64_SHDR_FIELDS, field, value
+    )
+
+
+def elf64_patch_byte(image, offset, value):
+    result = bytearray(image)
+    result[offset] = value
+    return bytes(result)
+
+
+def elf64_duplicate_shdr(image, index):
+    table_offset = elf64_read_ehdr_field(image, "section_offset")
+    entry_size = elf64_read_ehdr_field(image, "section_entry_size")
+    section_count = elf64_read_ehdr_field(image, "section_count")
+    table_end = table_offset + section_count * entry_size
+    if table_end != len(image):
+        raise ValueError("ELF section table must end at the end of the image")
+
+    duplicate = image[
+        table_offset + index * entry_size:
+        table_offset + (index + 1) * entry_size
+    ]
+    return elf64_patch_ehdr_field(
+        image + duplicate, "section_count", section_count + 1
+    )
+
+
 def _align_up(value, alignment):
     return (value + alignment - 1) & -alignment
 
 
 def elf64_image_with_reg_contents(load_address, data, global_base, values,
                                   entry=0, segment_offset=0x100):
-    if not 32 <= global_base <= 255:
+    if not MMIX_GLOBAL_REG_MIN <= global_base < MMIX_REGS:
         raise ValueError("ELF global-register base must be in 32..255")
-    if len(values) > 255 - global_base:
+    if len(values) > MMIX_REGS - 1 - global_base:
         raise ValueError("ELF register contents must not include register 255")
 
     register_data = b"".join(struct.pack(">Q", value) for value in values)
