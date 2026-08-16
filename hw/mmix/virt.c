@@ -377,9 +377,10 @@ static void mmix_apply_kernel_load_info(CPUState *cpu,
     CPUMMIXState *env = cpu_env(cpu);
     unsigned reg;
 
-    if (info->has_mmo_globals) {
+    if (info->has_global_registers) {
         env->sregs[MMIX_SREG_RG] = info->global_base;
-        for (reg = info->global_base; reg < MMIX_REGS; reg++) {
+        for (reg = info->global_base;
+             reg < info->global_base + info->global_count; reg++) {
             mmix_cpu_write_reg(env, reg, info->globals[reg]);
         }
     }

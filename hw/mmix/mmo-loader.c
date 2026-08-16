@@ -29,8 +29,6 @@
 #define MMIX_MMO_VERSION 1
 #define MMIX_MMO_TETRA_SIZE 4
 #define MMIX_MMO_PREAMBLE_SIZE MMIX_MMO_TETRA_SIZE
-#define MMIX_MMO_OCTABYTE_SIZE 8
-#define MMIX_MMO_GLOBAL_BASE_MIN 32
 #define MMIX_MMO_GLOBAL_REGS 256
 
 /*
@@ -288,7 +286,7 @@ static bool mmix_mmo_store_octa(MMIXMMOLoader *loader, uint64_t address,
                    HWADDR_PRIx, address);
         return false;
     }
-    if (loader->loaded_size > SSIZE_MAX - MMIX_MMO_OCTABYTE_SIZE) {
+    if (loader->loaded_size > SSIZE_MAX - MMIX_OCTA_SIZE) {
         error_setg(errp, "MMIX .mmo object '%s' is too large",
                    loader->filename);
         return false;
@@ -533,14 +531,15 @@ static bool mmix_mmo_read_postamble(MMIXMMOLoader *loader,
                    lop[2], loader->tetra_index);
         return false;
     }
-    if (lop[3] < MMIX_MMO_GLOBAL_BASE_MIN) {
+    if (lop[3] < MMIX_GLOBAL_REG_MIN) {
         error_setg(errp, "invalid MMIX .mmo lop_post z=%u at tetra %" PRIu64,
                    lop[3], loader->tetra_index);
         return false;
     }
 
-    info->has_mmo_globals = true;
+    info->has_global_registers = true;
     info->global_base = lop[3];
+    info->global_count = MMIX_MMO_GLOBAL_REGS - info->global_base;
     for (reg = info->global_base; reg < MMIX_MMO_GLOBAL_REGS; reg++) {
         if (!mmix_mmo_read_octa(loader, &info->globals[reg], errp)) {
             return false;

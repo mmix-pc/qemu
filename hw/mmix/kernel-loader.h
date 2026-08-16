@@ -20,8 +20,9 @@ typedef struct MMIXKernelLoadInfo {
     hwaddr entry;
     MMIXKernelImageType image_type;
     uint64_t boot_cpu_id;
-    bool has_mmo_globals;
+    bool has_global_registers;
     uint8_t global_base;
+    uint16_t global_count;
     uint64_t globals[256];
 } MMIXKernelLoadInfo;
 

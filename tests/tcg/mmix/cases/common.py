@@ -183,6 +183,9 @@ ET_EXEC = 2
 EM_X86_64 = 62
 EM_MMIX = 80
 PT_LOAD = 1
+SHT_NULL = 0
+SHT_PROGBITS = 1
+SHT_STRTAB = 3
 
 MMIX_BOOTINFO_FIELDS = (
     "magic",
@@ -567,7 +570,7 @@ def f32(value):
 
 def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
                  elf_type=ET_EXEC, machine=EM_MMIX, entry=0, phnum=0,
-                 phoff=64):
+                 phoff=64, shoff=0, shnum=0, shstrndx=0):
     e_ident = bytes((
         0x7f, ord("E"), ord("L"), ord("F"),
         elf_class, elf_data, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -579,14 +582,14 @@ def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
         1,
         entry,
         phoff if phnum else 0,
-        0,
+        shoff if shnum else 0,
         0,
         64,
         56,
         phnum,
         64,
-        0,
-        0,
+        shnum,
+        shstrndx,
     )
 
 
@@ -615,6 +618,85 @@ def elf64_image(load_address, data, mem_size=None, entry=0, offset=0x100):
     if offset < len(prefix):
         raise ValueError("ELF segment offset overlaps the program header table")
     return prefix + bytes(offset - len(prefix)) + data
+
+
+def elf64_shdr(name=0, section_type=SHT_NULL, flags=0, address=0, offset=0,
+               size=0, link=0, info=0, alignment=0, entry_size=0):
+    return struct.pack(
+        ">IIQQQQIIQQ",
+        name,
+        section_type,
+        flags,
+        address,
+        offset,
+        size,
+        link,
+        info,
+        alignment,
+        entry_size,
+    )
+
+
+def _align_up(value, alignment):
+    return (value + alignment - 1) & -alignment
+
+
+def elf64_image_with_reg_contents(load_address, data, global_base, values,
+                                  entry=0, segment_offset=0x100):
+    if not 32 <= global_base <= 255:
+        raise ValueError("ELF global-register base must be in 32..255")
+    if len(values) > 255 - global_base:
+        raise ValueError("ELF register contents must not include register 255")
+
+    register_data = b"".join(struct.pack(">Q", value) for value in values)
+    section_names = b"\0.shstrtab\0.MMIX.reg_contents\0"
+    shstrtab_name = section_names.index(b".shstrtab")
+    reg_contents_name = section_names.index(b".MMIX.reg_contents")
+    register_offset = _align_up(segment_offset + len(data), 8)
+    names_offset = register_offset + len(register_data)
+    section_offset = _align_up(names_offset + len(section_names), 8)
+    section_count = 3
+
+    image = bytearray(section_offset + section_count * 64)
+    header = elf64_header(
+        entry=entry,
+        phnum=1,
+        shoff=section_offset,
+        shnum=section_count,
+        shstrndx=1,
+    )
+    phdr = elf64_phdr(load_address, data, offset=segment_offset)
+    prefix = header + phdr
+    if segment_offset < len(prefix):
+        raise ValueError("ELF segment offset overlaps the program header table")
+
+    image[:len(prefix)] = prefix
+    image[segment_offset:segment_offset + len(data)] = data
+    image[register_offset:register_offset + len(register_data)] = register_data
+    image[names_offset:names_offset + len(section_names)] = section_names
+
+    section_headers = b"".join([
+        elf64_shdr(),
+        elf64_shdr(
+            name=shstrtab_name,
+            section_type=SHT_STRTAB,
+            offset=names_offset,
+            size=len(section_names),
+            alignment=1,
+        ),
+        elf64_shdr(
+            name=reg_contents_name,
+            section_type=SHT_PROGBITS,
+            address=global_base * 8,
+            offset=register_offset,
+            size=len(register_data),
+            alignment=8,
+        ),
+    ])
+    image[
+        section_offset:section_offset + len(section_headers)
+    ] = section_headers
+    return bytes(image)
 
 
 @dataclasses.dataclass(frozen=True)

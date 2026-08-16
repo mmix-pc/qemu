@@ -175,6 +175,44 @@ def kernel_cmdline_probe_program():
 
 KERNEL_CMDLINE_PROBE = kernel_cmdline_probe_program()
 
+
+ELF_GLOBAL_BASE = 250
+ELF_GLOBAL_VALUES = (
+    0x1122334455667788,
+    0x8877665544332211,
+    0x0123456789abcdef,
+    0xfedcba9876543210,
+    0xa5a55a5af0f00f0f,
+)
+
+
+def register_contents_probe_program():
+    program = [
+        insn(ADDU, R20, R250, R0),
+        insn(ADDU, R21, R251, R0),
+        insn(ADDU, R22, R252, R0),
+        insn(ADDU, R23, R253, R0),
+        insn(ADDU, R24, R254, R0),
+        insn(GET, R25, 0, SR_G),
+        insn(ADDU, R26, R0, R0),
+        insn(ADDU, R27, R1, R0),
+        halt(),
+    ]
+    regs = {
+        R20: ELF_GLOBAL_VALUES[0],
+        R21: ELF_GLOBAL_VALUES[1],
+        R22: ELF_GLOBAL_VALUES[2],
+        R23: ELF_GLOBAL_VALUES[3],
+        R24: ELF_GLOBAL_VALUES[4],
+        R25: ELF_GLOBAL_BASE,
+        R26: 0,
+        R27: MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
+    }
+    return b"".join(program), (len(program) - 1) * 4, regs
+
+
+REGISTER_CONTENTS_PROBE = register_contents_probe_program()
+
 ELF_LOADER_TESTS = [
     MMIXELFTest(
         "elf-load-low-ram-segment",
@@ -235,6 +273,17 @@ ELF_LOADER_TESTS = [
         pc=KERNEL_CMDLINE_PROBE[1],
         regs=KERNEL_CMDLINE_PROBE[2],
         qemu_args=("-append", KERNEL_CMDLINE.decode("ascii")),
+    ),
+    MMIXELFTest(
+        "elf-register-contents",
+        elf64_image_with_reg_contents(
+            0,
+            REGISTER_CONTENTS_PROBE[0],
+            ELF_GLOBAL_BASE,
+            ELF_GLOBAL_VALUES,
+        ),
+        pc=REGISTER_CONTENTS_PROBE[1],
+        regs=REGISTER_CONTENTS_PROBE[2],
     ),
     MMIXELFTest(
         "elf-single-core-platform",
