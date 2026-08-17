@@ -218,6 +218,121 @@ def external_dynamic_trap_resume_program():
 
 EXTERNAL_DYNAMIC_TRAP_RESUME = external_dynamic_trap_resume_program()
 
+
+def dynamic_trap_register_stack_program(depth=10):
+    interrupted_base = 0x200
+    handler_entry = 0x1000
+    handler_body = 0x1100
+    handler_calls = 0x1200
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("dynamic-trap register-stack sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    def nested_calls(saved_rj_base, leaf):
+        instructions = []
+
+        for level in range(depth):
+            instructions.extend([
+                insn(GET, saved_rj_base + level, 0, SR_J),
+                wyde(SETL, R31, level + 1),
+                branch(PUSHJ, R31, 4),
+                insn(ADDI, R0, R31, 1),
+                insn(PUT, SR_J, 0, saved_rj_base + level),
+                insn(POP, 1, 0, 0),
+            ])
+        instructions.extend(leaf)
+        return instructions
+
+    main = [
+        *set_octa(R80, RQ_PROGRAM_B),
+        wyde(SETL, R81, handler_entry),
+        insn(PUT, SR_TT, 0, R81),
+        wyde(SETL, R82, 0x55),
+        insn(ADDU, R255, R82, R83),
+        insn(PUT, SR_K, 0, R80),
+    ]
+    call_pc = len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (interrupted_base - call_pc) // 4),
+        insn(ADDU, R90, R31, R83),
+        insn(GET, R91, 0, SR_O),
+        insn(GET, R92, 0, SR_S),
+        insn(GET, R93, 0, SR_L),
+        insn(GET, R94, 0, SR_J),
+        insn(ADDU, R95, R255, R83),
+        insn(GET, R96, 0, SR_K),
+        insn(ADDU, R255, R83, R83),
+        halt(),
+    ])
+    place(0, main)
+
+    place(interrupted_base, nested_calls(
+        R100,
+        [
+            wyde(SETL, R0, 0x77),
+            insn(GET, R211, 0, SR_O),
+            insn(GET, R212, 0, SR_S),
+            insn(GET, R213, 0, SR_L),
+            insn(GET, R20, 3, SR_M),
+            insn(GET, R233, 0, SR_O),
+            insn(GET, R234, 0, SR_S),
+            insn(GET, R235, 0, SR_L),
+            insn(ADDU, R210, R0, R83),
+            insn(POP, 1, 0, 0),
+        ],
+    ))
+
+    place(handler_entry, [
+        branch(PUSHJ, R255, (handler_body - handler_entry) // 4),
+        insn(GET, R230, 0, SR_O),
+        insn(GET, R231, 0, SR_S),
+        insn(GET, R232, 0, SR_L),
+        insn(PUT, SR_J, 0, R200),
+        insn(ADDU, R255, R80, R83),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    body = [
+        insn(ADDU, R200, R255, R83),
+        insn(GET, R201, 0, SR_J),
+        insn(GET, R203, 0, SR_O),
+        insn(GET, R204, 0, SR_S),
+        insn(GET, R205, 0, SR_L),
+    ]
+    body_call_pc = handler_body + len(b"".join(body))
+    body.extend([
+        branch(PUSHJ, R31, (handler_calls - body_call_pc) // 4),
+        insn(ADDU, R202, R31, R83),
+        insn(GET, R206, 0, SR_O),
+        insn(GET, R207, 0, SR_S),
+        insn(GET, R208, 0, SR_L),
+        insn(PUT, SR_J, 0, R201),
+        insn(POP, 0, 0, 0),
+    ])
+    place(handler_body, body)
+
+    place(handler_calls, nested_calls(
+        R220,
+        [
+            wyde(SETL, R0, 1),
+            insn(POP, 1, 0, 0),
+        ],
+    ))
+
+    exit_pc = call_pc + 9 * 4
+    interrupted_rj = interrupted_base + (depth - 1) * 6 * 4 + 3 * 4
+    return bytes(image), exit_pc, call_pc + 4, interrupted_rj
+
+
+DYNAMIC_TRAP_REGISTER_STACK = dynamic_trap_register_stack_program()
+
+
 INTERRUPT_TESTS = [
     MMIXTest(
         "masked-interrupt-request",
@@ -266,6 +381,38 @@ INTERRUPT_TESTS = [
             R53: 0,
             R54: EXTERNAL_DYNAMIC_TRAP_RESUME[3],
             R55: DYNAMIC_TRAP_RESUME_NEXT,
+        },
+    ),
+    MMIXTest(
+        "dynamic-trap-register-stack-roundtrip",
+        DYNAMIC_TRAP_REGISTER_STACK[0],
+        pc=DYNAMIC_TRAP_REGISTER_STACK[1],
+        regs={
+            R90: 0x77 + 10,
+            R91: INITIAL_STACK,
+            R92: INITIAL_STACK,
+            R93: 32,
+            R94: DYNAMIC_TRAP_REGISTER_STACK[2],
+            R95: 0x55,
+            R96: RQ_PROGRAM_B,
+            R200: DYNAMIC_TRAP_REGISTER_STACK[3],
+            R202: 1 + 10,
+            R203: INITIAL_STACK + 0xb10,
+            R204: INITIAL_STACK + 0x318,
+            R205: 0,
+            R206: INITIAL_STACK + 0xb10,
+            R207: INITIAL_STACK + 0xb10,
+            R208: 32,
+            R210: 0x77,
+            R211: INITIAL_STACK + 0xb00,
+            R212: INITIAL_STACK + 0x310,
+            R213: 1,
+            R230: INITIAL_STACK + 0xb00,
+            R231: INITIAL_STACK + 0xb00,
+            R232: 1,
+            R233: INITIAL_STACK + 0xb00,
+            R234: INITIAL_STACK + 0xb00,
+            R235: 1,
         },
     ),
 ]

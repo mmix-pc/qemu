@@ -378,12 +378,14 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
     unsigned old_rl = mmix_cpu_get_rl(env);
     unsigned hole = x;
     unsigned pushed;
+    unsigned new_rl;
 
     if (x >= rg) {
         hole = old_rl;
         mmix_cpu_ensure_local_room(env, old_rl + 1);
         env->local_regs[mmix_cpu_local_index(env, hole)] = old_rl;
         pushed = old_rl + 1;
+        new_rl = 0;
     } else {
         if (x >= old_rl) {
             mmix_cpu_grow_rl(env, x + 1);
@@ -391,11 +393,12 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
         }
         env->local_regs[mmix_cpu_local_index(env, x)] = x;
         pushed = x + 1;
+        new_rl = old_rl - pushed;
     }
 
     env->sregs[MMIX_SREG_RJ] = next_pc;
     env->sregs[MMIX_SREG_RO] += (uint64_t)pushed * 8;
-    env->sregs[MMIX_SREG_RL] = old_rl - pushed;
+    env->sregs[MMIX_SREG_RL] = new_rl;
 }
 
 uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
