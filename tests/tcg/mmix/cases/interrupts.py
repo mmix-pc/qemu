@@ -333,6 +333,106 @@ def dynamic_trap_register_stack_program(depth=10):
 DYNAMIC_TRAP_REGISTER_STACK = dynamic_trap_register_stack_program()
 
 
+def spill_fault_resume_program(depth=10, protect_before_push=False):
+    sub_base = 0x200
+    handler = 0x1000
+    page_table = VM_PAGE_TABLE
+    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    physical_stack_pte = (1 << 63) | stack_pte
+    stack_page_read_only = INITIAL_STACK | 4
+    stack_page_rwx = INITIAL_STACK | 7
+    image = bytearray()
+    protect_level = 6
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("spill-fault resume sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        *set_octa(R240, page_table),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R242, stack_pte),
+        *set_octa(R243, stack_page_read_only),
+        *set_octa(R245, stack_page_rwx),
+        insn(STOU, R245 if protect_before_push else R243, R242, R250),
+        *set_octa(R244, physical_stack_pte),
+        *set_octa(R246, VM_RV_PAGE0),
+        wyde(SETL, R247, handler),
+        insn(PUT, SR_TT, 0, R247),
+        *set_octa(R248, RQ_PROGRAM_W),
+        insn(PUT, SR_K, 0, R248),
+        *set_octa(R249, RQ_PROGRAM_B),
+        insn(PUT, SR_Q, 0, R249),
+        insn(PUT, SR_V, 0, R246),
+    ]
+    call_pc = len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (sub_base - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(GET, R229, 0, SR_Q),
+        insn(GET, R230, 0, SR_K),
+        halt(),
+    ])
+    place(0, main)
+
+    nested = []
+    for level in range(depth):
+        nested.extend((
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+        ))
+        if protect_before_push and level == protect_level:
+            # Local growth leaves PUSHJ one additional spill slot short.
+            nested.extend((
+                insn(STOUI, R243, R244, 0),
+                insn(PUT, SR_V, 0, R246),
+            ))
+        nested.extend((
+            branch(PUSHJ,
+                   R255 if protect_before_push and level == protect_level
+                   else R31,
+                   4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ))
+    nested.extend([
+        wyde(SETL, R0, 1),
+        insn(POP, 1, 0, 0),
+    ])
+    place(sub_base, nested)
+
+    place(handler, [
+        insn(ADDUI, R220, R220, 1),
+        insn(GET, R221, 0, SR_Q),
+        insn(GET, R222, 0, SR_XX),
+        insn(GET, R223, 0, SR_WW),
+        insn(GET, R224, 0, SR_S),
+        insn(STOUI, R245, R244, 0),
+        insn(GET, R231, 0, SR_K),
+        insn(PUT, SR_V, 0, R246),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R248, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    exit_pc = call_pc + 7 * 4
+    result = depth + 4 if protect_before_push else depth + 1
+    return bytes(image), exit_pc, result
+
+
+SPILL_FAULT_LOCAL_GROWTH = spill_fault_resume_program()
+SPILL_FAULT_PUSHJ = spill_fault_resume_program(protect_before_push=True)
+
+
 INTERRUPT_TESTS = [
     MMIXTest(
         "masked-interrupt-request",
@@ -413,6 +513,44 @@ INTERRUPT_TESTS = [
             R233: INITIAL_STACK + 0xb00,
             R234: INITIAL_STACK + 0xb00,
             R235: 1,
+        },
+    ),
+    MMIXTest(
+        "register-stack-local-growth-spill-fault-resume",
+        SPILL_FAULT_LOCAL_GROWTH[0],
+        pc=SPILL_FAULT_LOCAL_GROWTH[1],
+        regs={
+            R220: 1,
+            R221: RQ_PROGRAM_B | RQ_PROGRAM_W,
+            R222: RQ_PROGRAM_W,
+            R223: 0x298,
+            R224: INITIAL_STACK,
+            R225: SPILL_FAULT_LOCAL_GROWTH[2],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0,
+            R230: RQ_PROGRAM_W,
+            R231: 0,
+        },
+    ),
+    MMIXTest(
+        "register-stack-pushj-spill-fault-resume",
+        SPILL_FAULT_PUSHJ[0],
+        pc=SPILL_FAULT_PUSHJ[1],
+        regs={
+            R220: 1,
+            R221: RQ_PROGRAM_B | RQ_PROGRAM_W,
+            R222: RQ_PROGRAM_W,
+            R223: 0x2a4,
+            R224: INITIAL_STACK + 8,
+            R225: SPILL_FAULT_PUSHJ[2],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0,
+            R230: RQ_PROGRAM_W,
+            R231: 0,
         },
     ),
 ]

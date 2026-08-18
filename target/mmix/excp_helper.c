@@ -241,6 +241,21 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RBB]);
     }
 
+    if (trap_state && env->stack_access.kind == MMIX_STACK_ACCESS_SPILL) {
+        if ((exec & MMIX_RQ_PROGRAM_W) == 0 || where < 4) {
+            mmix_resume_unsupported(env, "invalid pending spill state", exec);
+        }
+
+        /*
+         * rWW points past the instruction whose helper faulted. Re-executing
+         * it continues at the first spill that did not commit.
+         */
+        g_assert(mmix_cpu_prepare_spill_retry(env));
+        env->pc = where - 4;
+        env->npc = where;
+        cpu_loop_exit_noexc(cs);
+    }
+
     if ((int64_t)exec < 0) {
         env->pc = where;
         env->npc = where + 4;

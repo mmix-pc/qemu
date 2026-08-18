@@ -35,6 +35,23 @@ static void mmix_cpu_stack_access_commit(CPUMMIXState *env)
     memset(&env->stack_access, 0, sizeof(env->stack_access));
 }
 
+bool mmix_cpu_prepare_spill_retry(CPUMMIXState *env)
+{
+    MMIXStackAccessState *access = &env->stack_access;
+    unsigned idx;
+
+    if (access->kind != MMIX_STACK_ACCESS_SPILL) {
+        return false;
+    }
+
+    idx = (access->address >> 3) & env->lring_mask;
+    g_assert(access->address == env->sregs[MMIX_SREG_RS]);
+    g_assert(access->ring_index == idx);
+    g_assert(access->value == env->local_regs[idx]);
+    mmix_cpu_stack_access_commit(env);
+    return true;
+}
+
 static unsigned mmix_cpu_get_rg(CPUMMIXState *env)
 {
     uint64_t rg = env->sregs[MMIX_SREG_RG];

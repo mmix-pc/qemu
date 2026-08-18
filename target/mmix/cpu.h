@@ -256,6 +256,7 @@ void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
+bool mmix_cpu_prepare_spill_retry(CPUMMIXState *env);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);
