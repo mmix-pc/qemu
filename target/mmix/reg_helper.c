@@ -13,6 +13,28 @@
 #include "exec/helper-proto.h"
 #include "exec/log.h"
 
+#define MMIX_STACK_NO_RING_INDEX UINT32_MAX
+
+static void mmix_cpu_stack_access_begin(CPUMMIXState *env,
+                                        MMIXStackAccessKind kind,
+                                        uint64_t address,
+                                        uint32_t ring_index,
+                                        uint64_t value)
+{
+    MMIXStackAccessState *access = &env->stack_access;
+
+    g_assert(access->kind == MMIX_STACK_ACCESS_NONE);
+    access->kind = kind;
+    access->address = address;
+    access->ring_index = ring_index;
+    access->value = value;
+}
+
+static void mmix_cpu_stack_access_commit(CPUMMIXState *env)
+{
+    memset(&env->stack_access, 0, sizeof(env->stack_access));
+}
+
 static unsigned mmix_cpu_get_rg(CPUMMIXState *env)
 {
     uint64_t rg = env->sregs[MMIX_SREG_RG];
@@ -70,9 +92,13 @@ static void mmix_cpu_stack_store(CPUMMIXState *env)
     uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS];
     unsigned idx = (addr >> 3) & env->lring_mask;
+    uint64_t value = env->local_regs[idx];
 
-    cpu_stq_be_data_ra(env, addr, env->local_regs[idx], ra);
+    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SPILL, addr, idx,
+                                value);
+    cpu_stq_be_data_ra(env, addr, value, ra);
     env->sregs[MMIX_SREG_RS] = addr + 8;
+    mmix_cpu_stack_access_commit(env);
 }
 
 static void mmix_cpu_stack_load(CPUMMIXState *env)
@@ -80,9 +106,13 @@ static void mmix_cpu_stack_load(CPUMMIXState *env)
     uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS] - 8;
     unsigned idx = (addr >> 3) & env->lring_mask;
+    uint64_t value;
 
+    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_FILL, addr, idx, 0);
+    value = cpu_ldq_be_data_ra(env, addr, ra);
+    env->local_regs[idx] = value;
     env->sregs[MMIX_SREG_RS] = addr;
-    env->local_regs[idx] = cpu_ldq_be_data_ra(env, addr, ra);
+    mmix_cpu_stack_access_commit(env);
 }
 
 static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val)
@@ -90,17 +120,25 @@ static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val)
     uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS];
 
+    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SAVE, addr,
+                                MMIX_STACK_NO_RING_INDEX, val);
     cpu_stq_be_data_ra(env, addr, val, ra);
     env->sregs[MMIX_SREG_RS] = addr + 8;
+    mmix_cpu_stack_access_commit(env);
 }
 
 static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env)
 {
     uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS] - 8;
+    uint64_t value;
 
+    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_UNSAVE, addr,
+                                MMIX_STACK_NO_RING_INDEX, 0);
+    value = cpu_ldq_be_data_ra(env, addr, ra);
     env->sregs[MMIX_SREG_RS] = addr;
-    return cpu_ldq_be_data_ra(env, addr, ra);
+    mmix_cpu_stack_access_commit(env);
+    return value;
 }
 
 static void mmix_cpu_fill_stack(CPUMMIXState *env)

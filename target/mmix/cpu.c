@@ -444,6 +444,24 @@ static void mmix_cpu_realize(DeviceState *dev, Error **errp)
     mcc->parent_realize(dev, errp);
 }
 
+static const char *mmix_stack_access_name(MMIXStackAccessKind kind)
+{
+    switch (kind) {
+    case MMIX_STACK_ACCESS_NONE:
+        return "none";
+    case MMIX_STACK_ACCESS_SPILL:
+        return "spill";
+    case MMIX_STACK_ACCESS_FILL:
+        return "fill";
+    case MMIX_STACK_ACCESS_SAVE:
+        return "save";
+    case MMIX_STACK_ACCESS_UNSAVE:
+        return "unsave";
+    default:
+        return "unknown";
+    }
+}
+
 void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
     CPUMMIXState *env = cpu_env(cs);
@@ -458,6 +476,16 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
                  env->sregs[MMIX_SREG_RL], env->sregs[MMIX_SREG_RO],
                  env->sregs[MMIX_SREG_RS], env->lring_size,
                  env->lring_mask);
+    qemu_fprintf(f, "register-stack-access=%s",
+                 mmix_stack_access_name(env->stack_access.kind));
+    if (env->stack_access.kind != MMIX_STACK_ACCESS_NONE) {
+        qemu_fprintf(f,
+                     " address=0x%016" PRIx64 " ring=%" PRIu32
+                     " value=0x%016" PRIx64,
+                     env->stack_access.address, env->stack_access.ring_index,
+                     env->stack_access.value);
+    }
+    qemu_fprintf(f, "\n");
     qemu_fprintf(f, "special registers:\n");
     for (i = 0; i < MMIX_SREGS; i += 4) {
         qemu_fprintf(f,

@@ -82,6 +82,8 @@ def run_kernel(
 def parse_log(log_text):
     if "MMIX test exit" not in log_text:
         raise AssertionError("missing MMIX test exit line")
+    if "register-stack-access=none" not in log_text:
+        raise AssertionError("incomplete MMIX register-stack access")
 
     pc_match = re.search(r"pc=0x([0-9a-fA-F]+)\s+npc=0x([0-9a-fA-F]+)", log_text)
     if pc_match is None:

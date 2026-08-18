@@ -169,6 +169,21 @@ enum {
 #define MMIX_RA_ROUND_SHIFT 16
 #define MMIX_RA_VALID_MASK 0x3ffffu
 
+typedef enum MMIXStackAccessKind {
+    MMIX_STACK_ACCESS_NONE,
+    MMIX_STACK_ACCESS_SPILL,
+    MMIX_STACK_ACCESS_FILL,
+    MMIX_STACK_ACCESS_SAVE,
+    MMIX_STACK_ACCESS_UNSAVE,
+} MMIXStackAccessKind;
+
+typedef struct MMIXStackAccessState {
+    MMIXStackAccessKind kind;
+    uint32_t ring_index;
+    uint64_t address;
+    uint64_t value;
+} MMIXStackAccessState;
+
 typedef struct CPUArchState {
     /*
      * Architectural registers are split by rG: global registers are backed
@@ -185,6 +200,7 @@ typedef struct CPUArchState {
     uint64_t local_regs[MMIX_LOCAL_REGS];
     uint32_t lring_size;
     uint32_t lring_mask;
+    MMIXStackAccessState stack_access;
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
     uint32_t rule_break_insn;
