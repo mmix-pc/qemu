@@ -64,6 +64,83 @@ def argc_argv_probe_program():
 ARGC_ARGV_PROBE = argc_argv_probe_program()
 
 
+def explicit_argc_argv_probe_program():
+    program = [
+        insn(ADDI, R32, R0, 0),
+        insn(ADDI, R33, R1, 0),
+        insn(GET, R34, 0, SR_L),
+        *set_octa(R35, MMIX_POOL_SEGMENT_BASE),
+        insn(LDOU, R36, R35, R250),
+        insn(LDOUI, R37, R35, 8),
+        insn(LDOUI, R38, R35, 16),
+        insn(LDOUI, R39, R35, 24),
+        insn(LDOUI, R40, R35, 32),
+        insn(LDBUI, R41, R37, 0),
+        insn(LDBUI, R42, R37, 4),
+        insn(LDBUI, R43, R38, 0),
+        insn(LDBUI, R44, R38, 3),
+        insn(LDBUI, R45, R39, 0),
+        insn(LDBUI, R46, R39, 3),
+        halt(),
+    ]
+    regs = {
+        R32: 3,
+        R33: MMIX_POOL_SEGMENT_BASE + 8,
+        R34: 2,
+        R36: MMIX_POOL_SEGMENT_BASE + 0x40,
+        R37: MMIX_POOL_SEGMENT_BASE + 0x28,
+        R38: MMIX_POOL_SEGMENT_BASE + 0x30,
+        R39: MMIX_POOL_SEGMENT_BASE + 0x38,
+        R40: 0,
+        R41: ord("p"),
+        R42: 0,
+        R43: ord("o"),
+        R44: 0,
+        R45: ord("t"),
+        R46: 0,
+    }
+    return b"".join(program), (len(program) - 1) * 4, regs
+
+
+EXPLICIT_ARGC_ARGV_PROBE = explicit_argc_argv_probe_program()
+
+
+def fallback_argc_argv_probe_program():
+    program = [
+        insn(ADDI, R32, R0, 0),
+        insn(ADDI, R33, R1, 0),
+        insn(GET, R34, 0, SR_L),
+        *set_octa(R35, MMIX_POOL_SEGMENT_BASE),
+        insn(LDOUI, R36, R35, 8),
+        insn(LDOUI, R37, R35, 16),
+        insn(LDOUI, R38, R35, 24),
+        insn(LDOUI, R39, R35, 32),
+        insn(LDBUI, R40, R36, 0),
+        insn(CMPUI, R40, R40, 0),
+        insn(LDBUI, R41, R37, 0),
+        insn(LDBUI, R42, R37, 3),
+        insn(LDBUI, R43, R38, 0),
+        insn(LDBUI, R44, R38, 3),
+        halt(),
+    ]
+    regs = {
+        R32: 3,
+        R33: MMIX_POOL_SEGMENT_BASE + 8,
+        R34: 2,
+        R36: MMIX_POOL_SEGMENT_BASE + 0x28,
+        R39: 0,
+        R40: 1,
+        R41: ord("o"),
+        R42: 0,
+        R43: ord("t"),
+        R44: 0,
+    }
+    return b"".join(program), (len(program) - 1) * 4, regs
+
+
+FALLBACK_ARGC_ARGV_PROBE = fallback_argc_argv_probe_program()
+
+
 def platform_probe_program():
     entry = 0x1000
     kernel_stack_top = 0x00500000
@@ -215,16 +292,19 @@ ELF_GLOBAL_VALUES = (
 )
 
 
-def register_contents_probe_program():
+def register_contents_probe_program(startup_r0=0, startup_r1=None):
+    if startup_r1 is None:
+        startup_r1 = MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0]
+
     program = [
-        insn(ADDU, R20, R250, R0),
-        insn(ADDU, R21, R251, R0),
-        insn(ADDU, R22, R252, R0),
-        insn(ADDU, R23, R253, R0),
-        insn(ADDU, R24, R254, R0),
+        insn(ADDI, R20, R250, 0),
+        insn(ADDI, R21, R251, 0),
+        insn(ADDI, R22, R252, 0),
+        insn(ADDI, R23, R253, 0),
+        insn(ADDI, R24, R254, 0),
         insn(GET, R25, 0, SR_G),
-        insn(ADDU, R26, R0, R0),
-        insn(ADDU, R27, R1, R0),
+        insn(ADDI, R26, R0, 0),
+        insn(ADDI, R27, R1, 0),
         halt(),
     ]
     regs = {
@@ -234,13 +314,16 @@ def register_contents_probe_program():
         R23: ELF_GLOBAL_VALUES[3],
         R24: ELF_GLOBAL_VALUES[4],
         R25: ELF_GLOBAL_BASE,
-        R26: 0,
-        R27: MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
+        R26: startup_r0,
+        R27: startup_r1,
     }
     return b"".join(program), (len(program) - 1) * 4, regs
 
 
 REGISTER_CONTENTS_PROBE = register_contents_probe_program()
+REGISTER_CONTENTS_ARGC_ARGV_PROBE = register_contents_probe_program(
+    1, MMIX_POOL_SEGMENT_BASE + 8
+)
 
 ELF_LOADER_TESTS = [
     MMIXELFTest(
@@ -301,6 +384,37 @@ ELF_LOADER_TESTS = [
         ),
     ),
     MMIXELFTest(
+        "elf-argc-argv-multiple-explicit-arguments",
+        elf64_image(
+            0,
+            EXPLICIT_ARGC_ARGV_PROBE[0],
+        ),
+        pc=EXPLICIT_ARGC_ARGV_PROBE[1],
+        regs=EXPLICIT_ARGC_ARGV_PROBE[2],
+        qemu_args=(
+            "-machine",
+            "elf-startup-abi=argc-argv",
+            "-semihosting-config",
+            "enable=on,arg=prog,arg=one,arg=two",
+        ),
+    ),
+    MMIXELFTest(
+        "elf-argc-argv-kernel-append-fallback",
+        elf64_image(
+            0,
+            FALLBACK_ARGC_ARGV_PROBE[0],
+        ),
+        pc=FALLBACK_ARGC_ARGV_PROBE[1],
+        regs=FALLBACK_ARGC_ARGV_PROBE[2],
+        qemu_args=(
+            "-machine",
+            "elf-startup-abi=argc-argv",
+            "-semihosting",
+            "-append",
+            "one two",
+        ),
+    ),
+    MMIXELFTest(
         "elf-bootinfo",
         elf64_image(
             0,
@@ -320,6 +434,23 @@ ELF_LOADER_TESTS = [
         qemu_args=("-append", KERNEL_CMDLINE.decode("ascii")),
     ),
     MMIXELFTest(
+        "elf-bootinfo-with-semihosting",
+        elf64_image(
+            0,
+            KERNEL_CMDLINE_PROBE[0],
+        ),
+        pc=KERNEL_CMDLINE_PROBE[1],
+        regs=KERNEL_CMDLINE_PROBE[2],
+        qemu_args=(
+            "-machine",
+            "elf-startup-abi=bootinfo",
+            "-semihosting-config",
+            "enable=on,arg=ignored",
+            "-append",
+            KERNEL_CMDLINE.decode("ascii"),
+        ),
+    ),
+    MMIXELFTest(
         "elf-register-contents",
         elf64_image_with_reg_contents(
             0,
@@ -329,6 +460,23 @@ ELF_LOADER_TESTS = [
         ),
         pc=REGISTER_CONTENTS_PROBE[1],
         regs=REGISTER_CONTENTS_PROBE[2],
+    ),
+    MMIXELFTest(
+        "elf-register-contents-with-argc-argv",
+        elf64_image_with_reg_contents(
+            0,
+            REGISTER_CONTENTS_ARGC_ARGV_PROBE[0],
+            ELF_GLOBAL_BASE,
+            ELF_GLOBAL_VALUES,
+        ),
+        pc=REGISTER_CONTENTS_ARGC_ARGV_PROBE[1],
+        regs=REGISTER_CONTENTS_ARGC_ARGV_PROBE[2],
+        qemu_args=(
+            "-machine",
+            "elf-startup-abi=argc-argv",
+            "-semihosting-config",
+            "enable=on,arg=prog",
+        ),
     ),
     MMIXELFTest(
         "elf-single-core-platform",
@@ -342,6 +490,23 @@ ELF_LOADER_TESTS = [
         output=b"P",
     ),
 ]
+
+
+def large_elf_argc_argv_qemu_args():
+    args = [
+        "-m",
+        "97M",
+        "-machine",
+        "elf-startup-abi=argc-argv",
+    ]
+
+    for index in range(11):
+        config = f"arg={index:02d}{'x' * 99998}"
+        if index == 0:
+            config = f"enable=on,{config}"
+        args.extend(("-semihosting-config", config))
+
+    return tuple(args)
 
 
 ELF_STARTUP_PROCESS_FAILURE_TESTS = [
@@ -358,6 +523,51 @@ ELF_STARTUP_PROCESS_FAILURE_TESTS = [
         (
             "Invalid MMIX ELF startup ABI 'invalid'",
             "Valid values are bootinfo and argc-argv",
+        ),
+    ),
+    MMIXProcessFailure(
+        "elf-argc-argv-block-outside-ram",
+        elf64_image(0, halt()),
+        (
+            "-m",
+            "96M",
+            "-machine",
+            "elf-startup-abi=argc-argv",
+            "-semihosting-config",
+            "enable=on,arg=prog",
+        ),
+        (
+            "could not set up MMIX semihosting arguments",
+            "MMIX semihosting argument block does not fit in machine RAM",
+        ),
+    ),
+    MMIXProcessFailure(
+        "elf-argc-argv-block-exceeds-pool-backing",
+        elf64_image(0, halt()),
+        large_elf_argc_argv_qemu_args(),
+        (
+            "could not set up MMIX semihosting arguments",
+            "MMIX semihosting argument block does not fit in machine RAM",
+        ),
+    ),
+]
+
+
+NON_ELF_STARTUP_ABI_TESTS = [
+    MMIXTest(
+        "raw-elf-startup-abi-ignored",
+        b"".join([
+            insn(ADDI, R32, R0, 0),
+            insn(ADDI, R33, R1, 0),
+            halt(),
+        ]),
+        pc=0x08,
+        regs={R32: 1, R33: MMIX_POOL_SEGMENT_BASE + 8},
+        qemu_args=(
+            "-machine",
+            "elf-startup-abi=bootinfo",
+            "-semihosting-config",
+            "enable=on,arg=prog",
         ),
     ),
 ]

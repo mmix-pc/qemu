@@ -80,7 +80,9 @@ def run_semihosting_one(qemu, workdir, test):
 
 
 def run_semihosting_stdin_one(qemu, workdir, test):
-    qemu_args = test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_STDIN_ARGS
+    qemu_args = (
+        test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_STDIN_ARGS
+    )
 
     run_one(qemu, workdir, test, qemu_args=qemu_args)
 
@@ -260,8 +262,8 @@ def run_mmo_test(qemu, workdir, test):
     if log.exists():
         log.unlink()
 
-    completed = run_kernel(qemu, image, trace="int", log=log, check=False,
-                           timeout=10)
+    completed = run_kernel(qemu, image, trace="int", log=log,
+                           qemu_args=test.qemu_args, check=False, timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)

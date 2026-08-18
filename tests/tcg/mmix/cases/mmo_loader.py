@@ -6,6 +6,18 @@ from .common import *
 
 MMO_LOADER_TESTS = [
     MMIXMMOTest(
+        "mmo-elf-startup-abi-ignored",
+        mmo_image(
+            [
+                wyde(SETL, R1, 0x42),
+                halt(),
+            ]
+        ),
+        pc=0x04,
+        regs={R1: 0x42},
+        qemu_args=("-machine", "elf-startup-abi=argc-argv"),
+    ),
+    MMIXMMOTest(
         "mmo-straight-line-load",
         mmo_image(
             [
