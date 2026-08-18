@@ -52,6 +52,30 @@ bool mmix_cpu_prepare_spill_retry(CPUMMIXState *env)
     return true;
 }
 
+bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env)
+{
+    MMIXStackAccessState *access = &env->stack_access;
+    unsigned idx;
+
+    switch (access->kind) {
+    case MMIX_STACK_ACCESS_FILL:
+        idx = (access->address >> 3) & env->lring_mask;
+        g_assert(access->address == env->sregs[MMIX_SREG_RS] - 8);
+        g_assert(access->ring_index == idx);
+        break;
+    case MMIX_STACK_ACCESS_UNSAVE:
+        g_assert(access->address == env->sregs[MMIX_SREG_RS] - 8);
+        g_assert(access->ring_index == MMIX_STACK_NO_RING_INDEX);
+        break;
+    default:
+        return false;
+    }
+
+    g_assert(access->value == 0);
+    mmix_cpu_stack_access_commit(env);
+    return true;
+}
+
 static unsigned mmix_cpu_get_rg(CPUMMIXState *env)
 {
     uint64_t rg = env->sregs[MMIX_SREG_RG];
@@ -541,12 +565,19 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 
 void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
 {
-    uint64_t addr = mmix_cpu_read_reg(env, z) & ~7ULL;
+    uint64_t addr;
     uint64_t packed;
     unsigned rg;
     unsigned saved_rl;
     unsigned i;
 
+    if (env->unsave_restart_active) {
+        addr = env->unsave_restart_address;
+    } else {
+        addr = mmix_cpu_read_reg(env, z) & ~7ULL;
+        env->unsave_restart_address = addr;
+        env->unsave_restart_active = true;
+    }
     env->sregs[MMIX_SREG_RS] = addr + 8;
 
     packed = mmix_cpu_stack_read_octa(env);
@@ -573,4 +604,5 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
 
     env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
     env->sregs[MMIX_SREG_RL] = MIN(saved_rl, rg);
+    env->unsave_restart_active = false;
 }

@@ -201,6 +201,8 @@ typedef struct CPUArchState {
     uint32_t lring_size;
     uint32_t lring_mask;
     MMIXStackAccessState stack_access;
+    uint64_t unsave_restart_address;
+    bool unsave_restart_active;
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
     uint32_t rule_break_insn;
@@ -257,6 +259,7 @@ void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
 bool mmix_cpu_prepare_spill_retry(CPUMMIXState *env);
+bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);

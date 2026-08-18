@@ -433,6 +433,329 @@ SPILL_FAULT_LOCAL_GROWTH = spill_fault_resume_program()
 SPILL_FAULT_PUSHJ = spill_fault_resume_program(protect_before_push=True)
 
 
+def fill_fault_resume_program(depth=10):
+    sub_base = 0x200
+    handler = 0x1000
+    page_table = VM_PAGE_TABLE
+    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    physical_stack_pte = (1 << 63) | stack_pte
+    stack_page_write_only = INITIAL_STACK | 2
+    stack_page_rwx = INITIAL_STACK | 7
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("fill-fault resume sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        *set_octa(R240, page_table),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R242, stack_pte),
+        *set_octa(R243, stack_page_write_only),
+        *set_octa(R245, stack_page_rwx),
+        insn(STOU, R245, R242, R250),
+        *set_octa(R244, physical_stack_pte),
+        *set_octa(R246, VM_RV_PAGE0),
+        wyde(SETL, R247, handler),
+        insn(PUT, SR_TT, 0, R247),
+        *set_octa(R248, RQ_PROGRAM_R),
+        insn(PUT, SR_K, 0, R248),
+        *set_octa(R249, RQ_PROGRAM_B),
+        insn(PUT, SR_Q, 0, R249),
+        insn(PUT, SR_V, 0, R246),
+    ]
+    call_pc = len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (sub_base - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(GET, R229, 0, SR_Q),
+        insn(GET, R230, 0, SR_K),
+        halt(),
+    ])
+    place(0, main)
+
+    nested = []
+    for level in range(depth):
+        nested.extend([
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    nested.extend([
+        wyde(SETL, R0, 1),
+        insn(STOUI, R243, R244, 0),
+        insn(PUT, SR_V, 0, R246),
+        insn(POP, 1, 0, 0),
+    ])
+    place(sub_base, nested)
+
+    place(handler, [
+        insn(ADDUI, R220, R220, 1),
+        insn(GET, R221, 0, SR_Q),
+        insn(GET, R222, 0, SR_XX),
+        insn(GET, R223, 0, SR_WW),
+        insn(GET, R224, 0, SR_S),
+        insn(GET, R231, 0, SR_K),
+        insn(CMPUI, R219, R220, 1),
+        branch(BNZ, R219, 2),
+        insn(ADDU, R232, R221, R250),
+        insn(CMPUI, R219, R220, 2),
+        branch(BNZ, R219, 3),
+        insn(STOUI, R245, R244, 0),
+        insn(PUT, SR_V, 0, R246),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R248, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    exit_pc = call_pc + 7 * 4
+    return bytes(image), exit_pc, depth + 1
+
+
+FILL_FAULT_RESUME = fill_fault_resume_program()
+
+
+def unsave_fault_resume_program():
+    handler = 0x1000
+    snapshots = 0x1800
+    page_table = VM_PAGE_TABLE
+    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    physical_stack_pte = (1 << 63) | stack_pte
+    stack_page_write_only = INITIAL_STACK | 2
+    stack_page_rwx = INITIAL_STACK | 7
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("UNSAVE-fault resume sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        *set_octa(R239, snapshots),
+        *set_octa(R240, page_table),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R242, stack_pte),
+        *set_octa(R243, stack_page_write_only),
+        *set_octa(R245, stack_page_rwx),
+        insn(STOU, R245, R242, R250),
+        *set_octa(R244, physical_stack_pte),
+        *set_octa(R246, VM_RV_PAGE0),
+        wyde(SETL, R247, handler),
+        insn(PUT, SR_TT, 0, R247),
+        *set_octa(R248, RQ_PROGRAM_R),
+        insn(PUT, SR_K, 0, R248),
+        *set_octa(R249, RQ_PROGRAM_B),
+        insn(PUT, SR_Q, 0, R249),
+        insn(PUT, SR_V, 0, R246),
+        wyde(SETL, R0, 0x11),
+        wyde(SETL, R1, 0x22),
+        wyde(SETL, R60, 0x3344),
+        insn(SAVE, R32, 0, 0),
+        insn(STOUI, R243, R244, 0),
+        insn(PUT, SR_V, 0, R246),
+    ]
+    unsave_pc = len(b"".join(main))
+    main.extend([
+        insn(UNSAVE, 0, 0, R32),
+        insn(LDOUI, R220, R239, 0),
+        insn(LDOUI, R221, R239, 8),
+        insn(LDOUI, R222, R239, 16),
+        insn(LDOUI, R223, R239, 24),
+        insn(LDOUI, R224, R239, 32),
+        insn(LDOUI, R231, R239, 40),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(GET, R229, 0, SR_Q),
+        insn(GET, R230, 0, SR_K),
+        halt(),
+    ])
+    place(0, main)
+
+    place(handler, [
+        insn(LDOUI, R220, R239, 0),
+        insn(ADDUI, R220, R220, 1),
+        insn(STOUI, R220, R239, 0),
+        insn(GET, R221, 0, SR_Q),
+        insn(STOUI, R221, R239, 8),
+        insn(GET, R222, 0, SR_XX),
+        insn(STOUI, R222, R239, 16),
+        insn(GET, R223, 0, SR_WW),
+        insn(STOUI, R223, R239, 24),
+        insn(GET, R224, 0, SR_S),
+        insn(STOUI, R224, R239, 32),
+        insn(GET, R231, 0, SR_K),
+        insn(STOUI, R231, R239, 40),
+        insn(STOUI, R245, R244, 0),
+        insn(PUT, SR_V, 0, R246),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R248, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    exit_pc = unsave_pc + 12 * 4
+    return bytes(image), exit_pc, unsave_pc + 4
+
+
+UNSAVE_FAULT_RESUME = unsave_fault_resume_program()
+
+
+def handler_pop_fill_fault_resume_program(depth=10):
+    interrupted_base = 0x200
+    handler_entry = 0x1000
+    nested_handler = 0x1080
+    handler_body = 0x1100
+    handler_calls = 0x1200
+    page_table = VM_PAGE_TABLE
+    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    physical_stack_pte = (1 << 63) | stack_pte
+    stack_page_write_only = INITIAL_STACK | 2
+    stack_page_rwx = INITIAL_STACK | 7
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("handler POP fill-fault sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        *set_octa(R240, page_table),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R242, stack_pte),
+        *set_octa(R243, stack_page_write_only),
+        *set_octa(R245, stack_page_rwx),
+        insn(STOU, R245, R242, R250),
+        *set_octa(R244, physical_stack_pte),
+        *set_octa(R246, VM_RV_PAGE0),
+        wyde(SETL, R247, handler_entry),
+        insn(PUT, SR_TT, 0, R247),
+        *set_octa(R248, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R248),
+        insn(PUT, SR_V, 0, R246),
+    ]
+    call_pc = len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (interrupted_base - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(GET, R229, 0, SR_Q),
+        insn(GET, R230, 0, SR_K),
+        halt(),
+    ])
+    place(0, main)
+
+    nested = []
+    for level in range(depth):
+        nested.extend([
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    nested.extend([
+        wyde(SETL, R31, 0x77),
+        insn(GET, R20, 3, SR_M),
+        wyde(SETL, R0, 0x77),
+        insn(POP, 1, 0, 0),
+    ])
+    place(interrupted_base, nested)
+
+    outer_handler = [
+        branch(BNZ, R190, (nested_handler - handler_entry) // 4),
+        wyde(SETL, R190, 1),
+        insn(GET, R180, 0, SR_WW),
+        insn(GET, R181, 0, SR_XX),
+        insn(GET, R182, 0, SR_YY),
+        insn(GET, R183, 0, SR_ZZ),
+        insn(GET, R184, 0, SR_BB),
+        insn(ADDU, R185, R255, R250),
+    ]
+    handler_call_pc = handler_entry + len(b"".join(outer_handler))
+    outer_handler.extend([
+        branch(PUSHJ, R255, (handler_body - handler_call_pc) // 4),
+        insn(PUT, SR_WW, 0, R180),
+        insn(PUT, SR_XX, 0, R181),
+        insn(PUT, SR_YY, 0, R182),
+        insn(PUT, SR_ZZ, 0, R183),
+        insn(PUT, SR_BB, 0, R184),
+        insn(PUT, SR_J, 0, R185),
+        insn(ADDU, R255, R248, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+    place(handler_entry, outer_handler)
+
+    place(nested_handler, [
+        insn(ADDUI, R220, R220, 1),
+        insn(GET, R221, 0, SR_Q),
+        insn(GET, R222, 0, SR_XX),
+        insn(GET, R223, 0, SR_WW),
+        insn(GET, R224, 0, SR_S),
+        insn(GET, R231, 0, SR_K),
+        insn(STOUI, R245, R244, 0),
+        insn(PUT, SR_V, 0, R246),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R250, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    body = [insn(GET, R200, 0, SR_J)]
+    body_call_pc = handler_body + len(b"".join(body))
+    body.extend([
+        branch(PUSHJ, R31, (handler_calls - body_call_pc) // 4),
+        insn(PUT, SR_J, 0, R200),
+        insn(STOUI, R243, R244, 0),
+        insn(PUT, SR_V, 0, R246),
+    ])
+    pop_pc = handler_body + len(b"".join(body))
+    body.append(insn(POP, 0, 0, 0))
+    place(handler_body, body)
+
+    nested_calls = []
+    for level in range(depth):
+        nested_calls.extend([
+            insn(GET, R201 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R201 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    nested_calls.extend([
+        wyde(SETL, R0, 1),
+        insn(POP, 1, 0, 0),
+    ])
+    place(handler_calls, nested_calls)
+
+    exit_pc = call_pc + 7 * 4
+    return bytes(image), exit_pc, pop_pc + 4, 0x77 + depth
+
+
+HANDLER_POP_FILL_FAULT_RESUME = handler_pop_fill_fault_resume_program()
+
+
 INTERRUPT_TESTS = [
     MMIXTest(
         "masked-interrupt-request",
@@ -550,6 +873,66 @@ INTERRUPT_TESTS = [
             R228: 32,
             R229: 0,
             R230: RQ_PROGRAM_W,
+            R231: 0,
+        },
+    ),
+    MMIXTest(
+        "register-stack-pop-fill-fault-resume",
+        FILL_FAULT_RESUME[0],
+        pc=FILL_FAULT_RESUME[1],
+        regs={
+            R220: 2,
+            R221: RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R,
+            R223: 0x260,
+            R224: INITIAL_STACK + 0x310,
+            R225: FILL_FAULT_RESUME[2],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0,
+            R230: RQ_PROGRAM_R,
+            R231: 0,
+            R232: RQ_PROGRAM_B | RQ_PROGRAM_R,
+        },
+    ),
+    MMIXTest(
+        "register-stack-unsave-read-fault-resume",
+        UNSAVE_FAULT_RESUME[0],
+        pc=UNSAVE_FAULT_RESUME[1],
+        regs={
+            R0: 0x11,
+            R1: 0x22,
+            R60: 0x3344,
+            R220: 1,
+            R221: RQ_PROGRAM_B | RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R,
+            R223: UNSAVE_FAULT_RESUME[2],
+            R224: INITIAL_STACK + 0x780,
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 2,
+            R229: 0,
+            R230: RQ_PROGRAM_R,
+            R231: 0,
+        },
+    ),
+    MMIXTest(
+        "dynamic-trap-handler-pop-fill-fault-resume",
+        HANDLER_POP_FILL_FAULT_RESUME[0],
+        pc=HANDLER_POP_FILL_FAULT_RESUME[1],
+        regs={
+            R220: 1,
+            R221: RQ_PROGRAM_B | RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R,
+            R223: HANDLER_POP_FILL_FAULT_RESUME[2],
+            R224: INITIAL_STACK + 0xc08,
+            R225: HANDLER_POP_FILL_FAULT_RESUME[3],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0,
+            R230: RQ_PROGRAM_B,
             R231: 0,
         },
     ),

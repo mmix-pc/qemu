@@ -241,19 +241,44 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RBB]);
     }
 
-    if (trap_state && env->stack_access.kind == MMIX_STACK_ACCESS_SPILL) {
-        if ((exec & MMIX_RQ_PROGRAM_W) == 0 || where < 4) {
-            mmix_resume_unsupported(env, "invalid pending spill state", exec);
+    if (trap_state) {
+        bool pending_stack_access = true;
+        uint64_t cause;
+
+        switch (env->stack_access.kind) {
+        case MMIX_STACK_ACCESS_SPILL:
+            cause = MMIX_RQ_PROGRAM_W;
+            break;
+        case MMIX_STACK_ACCESS_FILL:
+        case MMIX_STACK_ACCESS_UNSAVE:
+            cause = MMIX_RQ_PROGRAM_R;
+            break;
+        default:
+            pending_stack_access = false;
+            cause = 0;
+            break;
         }
 
-        /*
-         * rWW points past the instruction whose helper faulted. Re-executing
-         * it continues at the first spill that did not commit.
-         */
-        g_assert(mmix_cpu_prepare_spill_retry(env));
-        env->pc = where - 4;
-        env->npc = where;
-        cpu_loop_exit_noexc(cs);
+        if (pending_stack_access) {
+            if ((exec & cause) == 0 || where < 4) {
+                mmix_resume_unsupported(env, "invalid pending stack access",
+                                        exec);
+            }
+
+            if (cause == MMIX_RQ_PROGRAM_W) {
+                g_assert(mmix_cpu_prepare_spill_retry(env));
+            } else {
+                g_assert(mmix_cpu_prepare_stack_load_retry(env));
+            }
+
+            /*
+             * rWW points past the instruction whose helper faulted.
+             * Re-execution continues at the first access that did not commit.
+             */
+            env->pc = where - 4;
+            env->npc = where;
+            cpu_loop_exit_noexc(cs);
+        }
     }
 
     if ((int64_t)exec < 0) {
