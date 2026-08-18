@@ -35,6 +35,35 @@ def bootinfo_probe_program():
 BOOTINFO_PROBE = bootinfo_probe_program()
 
 
+def argc_argv_probe_program():
+    program = [
+        insn(ADDI, R32, R0, 0),
+        insn(ADDI, R33, R1, 0),
+        insn(GET, R34, 0, SR_L),
+        *set_octa(R35, MMIX_POOL_SEGMENT_BASE),
+        insn(LDOU, R36, R35, R250),
+        insn(LDOUI, R37, R35, 8),
+        insn(LDOUI, R38, R35, 16),
+        insn(LDBUI, R39, R37, 0),
+        insn(LDBUI, R40, R37, 4),
+        halt(),
+    ]
+    regs = {
+        R32: 1,
+        R33: MMIX_POOL_SEGMENT_BASE + 8,
+        R34: 2,
+        R36: MMIX_POOL_SEGMENT_BASE + 0x20,
+        R37: MMIX_POOL_SEGMENT_BASE + 0x18,
+        R38: 0,
+        R39: ord("p"),
+        R40: 0,
+    }
+    return b"".join(program), (len(program) - 1) * 4, regs
+
+
+ARGC_ARGV_PROBE = argc_argv_probe_program()
+
+
 def platform_probe_program():
     entry = 0x1000
     kernel_stack_top = 0x00500000
@@ -254,6 +283,22 @@ ELF_LOADER_TESTS = [
         ),
         pc=0x10c,
         regs={R2: 0, R3: MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0], R4: 0x7e},
+        qemu_args=("-machine", "elf-startup-abi=bootinfo"),
+    ),
+    MMIXELFTest(
+        "elf-argc-argv-entry-state",
+        elf64_image(
+            0,
+            ARGC_ARGV_PROBE[0],
+        ),
+        pc=ARGC_ARGV_PROBE[1],
+        regs=ARGC_ARGV_PROBE[2],
+        qemu_args=(
+            "-machine",
+            "elf-startup-abi=argc-argv",
+            "-semihosting-config",
+            "enable=on,arg=prog",
+        ),
     ),
     MMIXELFTest(
         "elf-bootinfo",
@@ -295,5 +340,24 @@ ELF_LOADER_TESTS = [
         pc=PLATFORM_PROBE[1],
         regs=PLATFORM_PROBE[2],
         output=b"P",
+    ),
+]
+
+
+ELF_STARTUP_PROCESS_FAILURE_TESTS = [
+    MMIXProcessFailure(
+        "elf-argc-argv-semihosting-disabled",
+        elf64_image(0, halt()),
+        ("-machine", "elf-startup-abi=argc-argv"),
+        ("MMIX ELF startup ABI 'argc-argv' requires semihosting",),
+    ),
+    MMIXProcessFailure(
+        "elf-invalid-startup-abi",
+        elf64_image(0, halt()),
+        ("-machine", "elf-startup-abi=invalid"),
+        (
+            "Invalid MMIX ELF startup ABI 'invalid'",
+            "Valid values are bootinfo and argc-argv",
+        ),
     ),
 ]

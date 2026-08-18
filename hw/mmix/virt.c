@@ -25,6 +25,19 @@
 #include "virt.h"
 
 #define MMIX_ARG_OCTA_SIZE 8
+#define TYPE_MMIX_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
+
+typedef enum MMIXELFStartupABI {
+    MMIX_ELF_STARTUP_ABI_BOOTINFO,
+    MMIX_ELF_STARTUP_ABI_ARGC_ARGV,
+} MMIXELFStartupABI;
+
+OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
+
+struct MMIXVirtMachineState {
+    MachineState parent_obj;
+    MMIXELFStartupABI elf_startup_abi;
+};
 
 const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
     [MMIX_VIRT_LOW_RAM] =      { 0, MMIX_POOL_SEGMENT_PHYS_BASE },
@@ -399,14 +412,59 @@ static void mmix_apply_elf_bootinfo_startup_state(
                        mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base);
 }
 
-static void mmix_start_loaded_kernel(MachineState *machine, CPUState *cpu,
+static bool mmix_prepare_elf_startup(MMIXVirtMachineState *vms,
+                                     const MMIXKernelLoadInfo *info,
+                                     Error **errp)
+{
+    MachineState *machine = MACHINE(vms);
+
+    g_assert(info->image_type == MMIX_KERNEL_IMAGE_ELF);
+
+    switch (vms->elf_startup_abi) {
+    case MMIX_ELF_STARTUP_ABI_BOOTINFO:
+        if (!mmix_write_bootinfo(machine, info->boot_cpu_id, errp)) {
+            error_prepend(errp, "could not set up MMIX boot info: ");
+            return false;
+        }
+        return true;
+    case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
+        if (!semihosting_enabled(false)) {
+            error_setg(errp, "MMIX ELF startup ABI 'argc-argv' requires "
+                       "semihosting");
+            return false;
+        }
+        return true;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void mmix_apply_elf_startup_state(MMIXVirtMachineState *vms,
+                                         CPUState *cpu,
+                                         const MMIXKernelLoadInfo *info)
+{
+    switch (vms->elf_startup_abi) {
+    case MMIX_ELF_STARTUP_ABI_BOOTINFO:
+        mmix_apply_elf_bootinfo_startup_state(cpu, info);
+        return;
+    case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
+        mmix_setup_semihosting_arguments(MACHINE(vms), cpu);
+        return;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms, CPUState *cpu,
                                      const MMIXKernelLoadInfo *info)
 {
+    MachineState *machine = MACHINE(vms);
+
     if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
         Error *err = NULL;
 
-        if (!mmix_write_bootinfo(machine, info->boot_cpu_id, &err)) {
-            error_reportf_err(err, "could not set up MMIX boot info: ");
+        if (!mmix_prepare_elf_startup(vms, info, &err)) {
+            error_report_err(err);
             exit(1);
         }
     }
@@ -414,7 +472,7 @@ static void mmix_start_loaded_kernel(MachineState *machine, CPUState *cpu,
     mmix_apply_kernel_load_state(cpu, info);
 
     if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
-        mmix_apply_elf_bootinfo_startup_state(cpu, info);
+        mmix_apply_elf_startup_state(vms, cpu, info);
     } else {
         mmix_setup_semihosting_arguments(machine, cpu);
     }
@@ -422,6 +480,7 @@ static void mmix_start_loaded_kernel(MachineState *machine, CPUState *cpu,
 
 static void mmix_virt_init(MachineState *machine)
 {
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     MemoryRegion *sysmem = get_system_memory();
     CPUState *cpu;
     DeviceState *framebuffer;
@@ -482,10 +541,47 @@ static void mmix_virt_init(MachineState *machine)
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
-        mmix_start_loaded_kernel(machine, cpu, &load_info);
+        mmix_start_loaded_kernel(vms, cpu, &load_info);
     } else {
         mmix_setup_semihosting_arguments(machine, cpu);
     }
+}
+
+static char *mmix_virt_get_elf_startup_abi(Object *obj, Error **errp)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    switch (vms->elf_startup_abi) {
+    case MMIX_ELF_STARTUP_ABI_BOOTINFO:
+        return g_strdup("bootinfo");
+    case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
+        return g_strdup("argc-argv");
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void mmix_virt_set_elf_startup_abi(Object *obj, const char *value,
+                                          Error **errp)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    if (!strcmp(value, "bootinfo")) {
+        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BOOTINFO;
+    } else if (!strcmp(value, "argc-argv")) {
+        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_ARGC_ARGV;
+    } else {
+        error_setg(errp, "Invalid MMIX ELF startup ABI '%s'", value);
+        error_append_hint(errp,
+                          "Valid values are bootinfo and argc-argv.\n");
+    }
+}
+
+static void mmix_virt_instance_init(Object *obj)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BOOTINFO;
 }
 
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)
@@ -497,11 +593,20 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     mc->default_cpu_type = TYPE_MMIX_ANY_CPU;
     mc->default_ram_size = 256 * MiB;
     mc->default_ram_id = "mmix.ram";
+
+    object_class_property_add_str(oc, "elf-startup-abi",
+                                  mmix_virt_get_elf_startup_abi,
+                                  mmix_virt_set_elf_startup_abi);
+    object_class_property_set_description(
+        oc, "elf-startup-abi",
+        "Set the ELF startup ABI (bootinfo or argc-argv)");
 }
 
 static const TypeInfo mmix_virt_machine_typeinfo = {
-    .name = MACHINE_TYPE_NAME("virt"),
+    .name = TYPE_MMIX_VIRT_MACHINE,
     .parent = TYPE_MACHINE,
+    .instance_size = sizeof(MMIXVirtMachineState),
+    .instance_init = mmix_virt_instance_init,
     .class_init = mmix_virt_class_init,
 };
 
