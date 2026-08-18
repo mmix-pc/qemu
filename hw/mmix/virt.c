@@ -371,8 +371,8 @@ static void mmix_setup_semihosting_arguments(MachineState *machine,
     mmix_apply_semihosting_startup_state(cpu);
 }
 
-static void mmix_apply_kernel_load_info(CPUState *cpu,
-                                        const MMIXKernelLoadInfo *info)
+static void mmix_apply_kernel_load_state(CPUState *cpu,
+                                         const MMIXKernelLoadInfo *info)
 {
     CPUMMIXState *env = cpu_env(cpu);
     unsigned reg;
@@ -385,13 +385,39 @@ static void mmix_apply_kernel_load_info(CPUState *cpu,
         }
     }
 
+    cpu_set_pc(cpu, info->entry);
+}
+
+static void mmix_apply_elf_bootinfo_startup_state(
+    CPUState *cpu, const MMIXKernelLoadInfo *info)
+{
+    CPUMMIXState *env = cpu_env(cpu);
+
+    g_assert(info->image_type == MMIX_KERNEL_IMAGE_ELF);
+    mmix_cpu_write_reg(env, 0, info->boot_cpu_id);
+    mmix_cpu_write_reg(env, 1,
+                       mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base);
+}
+
+static void mmix_start_loaded_kernel(MachineState *machine, CPUState *cpu,
+                                     const MMIXKernelLoadInfo *info)
+{
     if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
-        mmix_cpu_write_reg(env, 0, info->boot_cpu_id);
-        mmix_cpu_write_reg(env, 1,
-                           mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base);
+        Error *err = NULL;
+
+        if (!mmix_write_bootinfo(machine, info->boot_cpu_id, &err)) {
+            error_reportf_err(err, "could not set up MMIX boot info: ");
+            exit(1);
+        }
     }
 
-    cpu_set_pc(cpu, info->entry);
+    mmix_apply_kernel_load_state(cpu, info);
+
+    if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
+        mmix_apply_elf_bootinfo_startup_state(cpu, info);
+    } else {
+        mmix_setup_semihosting_arguments(machine, cpu);
+    }
 }
 
 static void mmix_virt_init(MachineState *machine)
@@ -456,16 +482,7 @@ static void mmix_virt_init(MachineState *machine)
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
-        if (load_info.image_type == MMIX_KERNEL_IMAGE_ELF &&
-            !mmix_write_bootinfo(machine, load_info.boot_cpu_id, &err)) {
-            error_reportf_err(err, "could not set up MMIX boot info: ");
-            exit(1);
-        }
-        mmix_apply_kernel_load_info(cpu, &load_info);
-
-        if (load_info.image_type != MMIX_KERNEL_IMAGE_ELF) {
-            mmix_setup_semihosting_arguments(machine, cpu);
-        }
+        mmix_start_loaded_kernel(machine, cpu, &load_info);
     } else {
         mmix_setup_semihosting_arguments(machine, cpu);
     }
