@@ -756,6 +756,131 @@ def handler_pop_fill_fault_resume_program(depth=10):
 HANDLER_POP_FILL_FAULT_RESUME = handler_pop_fill_fault_resume_program()
 
 
+def pending_interrupt_spill_fill_program(depth=10):
+    sub_base = 0x200
+    handler = 0x1000
+    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
+    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                     MMIX_VIRT_TIMER_CONTEXT_COMPARE)
+    timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                     MMIX_VIRT_TIMER_CONTEXT_CONTROL)
+    timer_status = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                    MMIX_VIRT_TIMER_CONTEXT_STATUS)
+    intc_enable = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                   MMIX_VIRT_INTC_CONTEXT_ENABLE)
+    intc_claim = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                  MMIX_VIRT_INTC_CONTEXT_CLAIM)
+    intc_complete = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                     MMIX_VIRT_INTC_CONTEXT_COMPLETE)
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("pending-interrupt stack sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        insn(PUTI, SR_K, 0, 0),
+        *set_octa(R60, timer_compare),
+        *set_octa(R61, timer_control),
+        *set_octa(R62, timer_status),
+        *set_octa(R63, intc_claim),
+        *set_octa(R64, intc_complete),
+        *set_octa(R65, intc_enable),
+        *set_octa(R66, 1 << MMIX_VIRT_TIMER_IRQ_BASE),
+        wyde(SETL, R67, MMIX_VIRT_TIMER_IRQ_BASE),
+        wyde(SETL, R68, MMIX_VIRT_TIMER_STATUS_PENDING),
+        wyde(SETL, R69, MMIX_VIRT_TIMER_CONTROL_ENABLE |
+             MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
+        *set_octa(R70, RK_INTERRUPT_CONTROLLER),
+        wyde(SETL, R71, handler),
+        insn(PUT, SR_TT, 0, R71),
+        insn(STTU, R66, R65, R250),
+        insn(STOU, R250, R60, R250),
+        insn(STOU, R69, R61, R250),
+        insn(GET, R72, 0, SR_Q),
+        insn(AND, R72, R72, R70),
+        branch(BZB, R72, 0xfffe),
+    ]
+    call_pc = len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (sub_base - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(GET, R229, 0, SR_Q),
+        insn(GET, R230, 0, SR_K),
+        halt(),
+    ])
+    place(0, main)
+
+    nested = []
+    for level in range(depth):
+        tail = [
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+        ]
+        if level == 2:
+            tail.extend([
+                insn(GET, R181, 0, SR_S),
+                insn(PUT, SR_K, 0, R70),
+            ])
+        tail.append(insn(POP, 1, 0, 0))
+        nested.extend([
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, len(tail) + 1),
+            *tail,
+        ])
+
+    nested.extend([
+        insn(PUT, SR_K, 0, R70),
+        insn(ADDUI, R182, R182, 1),
+        insn(STOU, R250, R60, R250),
+        insn(STOU, R69, R61, R250),
+        insn(GET, R72, 0, SR_Q),
+        insn(AND, R72, R72, R70),
+        branch(BZB, R72, 0xfffe),
+        wyde(SETL, R0, 1),
+        insn(GET, R180, 0, SR_S),
+        insn(POP, 1, 0, 0),
+    ])
+    place(sub_base, nested)
+
+    place(handler, [
+        insn(ADDUI, R190, R190, 1),
+        insn(CMPUI, R191, R190, 1),
+        branch(BNZ, R191, 5),
+        insn(GET, R200, 0, SR_O),
+        insn(GET, R201, 0, SR_S),
+        insn(GET, R202, 0, SR_L),
+        branch(BZ, R250, 4),
+        insn(GET, R203, 0, SR_O),
+        insn(GET, R204, 0, SR_S),
+        insn(GET, R205, 0, SR_L),
+        insn(GET, R206, 0, SR_WW),
+        insn(GET, R207, 0, SR_Q),
+        insn(LDTU, R208, R63, R250),
+        insn(STOU, R250, R61, R250),
+        insn(STOU, R68, R62, R250),
+        insn(STTU, R67, R64, R250),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R250, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    exit_pc = call_pc + 7 * 4
+    return bytes(image), exit_pc, depth + 1
+
+
+PENDING_INTERRUPT_SPILL_FILL = pending_interrupt_spill_fill_program()
+
+
 INTERRUPT_TESTS = [
     MMIXTest(
         "masked-interrupt-request",
@@ -934,6 +1059,32 @@ INTERRUPT_TESTS = [
             R229: 0,
             R230: RQ_PROGRAM_B,
             R231: 0,
+        },
+    ),
+    MMIXTest(
+        "pending-external-interrupt-spill-fill",
+        PENDING_INTERRUPT_SPILL_FILL[0],
+        pc=PENDING_INTERRUPT_SPILL_FILL[1],
+        regs={
+            R180: INITIAL_STACK + 0x310,
+            R181: INITIAL_STACK + 0x300,
+            R182: 1,
+            R190: 2,
+            R200: INITIAL_STACK + 0xb00,
+            R201: INITIAL_STACK + 0x308,
+            R202: 0,
+            R203: INITIAL_STACK + 0x300,
+            R204: INITIAL_STACK + 0x300,
+            R205: 32,
+            R206: 0x24c,
+            R207: RQ_INTERRUPT_CONTROLLER,
+            R208: MMIX_VIRT_TIMER_IRQ_BASE,
+            R225: PENDING_INTERRUPT_SPILL_FILL[2],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0,
+            R230: 0,
         },
     ),
 ]
