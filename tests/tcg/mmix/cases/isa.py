@@ -2481,7 +2481,7 @@ ISA_TESTS = [
             R13: 1,
             R14: 1,
             R15: 0,
-            R16: 0x10,
+            R16: RA_EVENT_I,
             R17: MASK64,
             R18: 1,
             R19: 1,
@@ -2516,6 +2516,29 @@ ISA_TESTS = [
             R14: f64(1.0),
             R15: f64(2.0),
             R16: f64(2.0),
+        },
+    ),
+    MMIXTest(
+        "floating-point-default-nan",
+        b"".join(
+            [
+                *set_octa(R1, f64(float("inf"))),
+                *set_octa(R2, f64(-1.0)),
+                insn(FDIV, R10, R0, R0),
+                insn(FSUB, R11, R1, R1),
+                insn(FMUL, R12, R1, R0),
+                insn(FSQRT, R13, 0, R2),
+                insn(GET, R14, 0, SR_A),
+                halt(),
+            ]
+        ),
+        pc=0x34,
+        regs={
+            R10: 0x7ff8000000000000,
+            R11: 0x7ff8000000000000,
+            R12: 0x7ff8000000000000,
+            R13: 0x7ff8000000000000,
+            R14: RA_EVENT_I,
         },
     ),
     MMIXTest(
@@ -2780,11 +2803,11 @@ ISA_TESTS = [
         regs={
             R10: 0x7ff8000000001234,
             R11: 0x7ff8000000001234,
-            R12: 0x10,
+            R12: RA_EVENT_I,
             R13: f64(float("inf")),
-            R14: 0x19,
+            R14: RA_EVENT_I | RA_EVENT_O | RA_EVENT_X,
             R15: 0,
-            R16: 0x1d,
+            R16: RA_EVENT_I | RA_EVENT_O | RA_EVENT_U | RA_EVENT_X,
             R17: 0x7ff8000000001234,
             R18: 0x8000000000000000,
         },

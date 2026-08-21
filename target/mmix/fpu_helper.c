@@ -98,6 +98,7 @@ static uint32_t mmix_events_from_float_flags(FloatExceptionFlags flags)
 static void mmix_softfloat_status(float_status *status, FloatRoundMode mode)
 {
     memset(status, 0, sizeof(*status));
+    set_float_default_nan_pattern(0b01000000, status);
     set_float_rounding_mode(mode, status);
 }
 
