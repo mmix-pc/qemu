@@ -231,6 +231,9 @@ struct ArchCPU {
     CPUState parent_obj;
 
     CPUMMIXState env;
+    /* Architectural I/D translation caches, separate from QEMU's TLB. */
+    GArray *instruction_translation_cache;
+    GArray *data_translation_cache;
 };
 
 struct MMIXCPUClass {
@@ -267,6 +270,8 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                             MMUAccessType access_type, bool debug,
                             bool allow_traps,
                             MMIXAddressTranslation *translation);
+uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key);
+void mmix_cpu_flush_translation_caches(CPUMMIXState *env);
 
 void mmix_translate_init(void);
 void mmix_translate_code(CPUState *cs, TranslationBlock *tb,

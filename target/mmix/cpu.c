@@ -30,6 +30,17 @@
 #define MMIX_PTP_C_MASK ((1ULL << 50) - 1)
 #define MMIX_PT_BLOCK_SIZE (1ULL << 13)
 
+typedef enum MMIXTranslationCacheKind {
+    MMIX_TRANSLATION_CACHE_INSTRUCTION,
+    MMIX_TRANSLATION_CACHE_DATA,
+} MMIXTranslationCacheKind;
+
+typedef struct MMIXTranslationCacheEntry {
+    uint64_t key;
+    uint64_t pte;
+    uint8_t page_shift;
+} MMIXTranslationCacheEntry;
+
 static const char * const mmix_sreg_names[MMIX_SREGS] = {
     [MMIX_SREG_RB] = "rB",
     [MMIX_SREG_RD] = "rD",
@@ -149,7 +160,7 @@ void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
 
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
-    return 0;
+    return ifetch ? 1 : 0;
 }
 
 static uint64_t mmix_access_cause(MMUAccessType access_type)
@@ -193,6 +204,150 @@ static int mmix_pte_prot(uint64_t pte)
         prot |= PAGE_EXEC;
     }
     return prot;
+}
+
+static MMIXTranslationCacheKind
+mmix_translation_cache_kind(MMUAccessType access_type)
+{
+    return access_type == MMU_INST_FETCH ?
+           MMIX_TRANSLATION_CACHE_INSTRUCTION :
+           MMIX_TRANSLATION_CACHE_DATA;
+}
+
+static GArray *mmix_translation_cache(CPUMMIXState *env,
+                                      MMIXTranslationCacheKind kind)
+{
+    MMIXCPU *cpu = env_archcpu(env);
+
+    return kind == MMIX_TRANSLATION_CACHE_INSTRUCTION ?
+           cpu->instruction_translation_cache : cpu->data_translation_cache;
+}
+
+static uint64_t mmix_translation_key(vaddr address, uint8_t page_shift,
+                                     uint64_t address_space_number)
+{
+    uint64_t page_mask = ~((1ULL << page_shift) - 1);
+
+    return (address & page_mask) | (address_space_number << 3);
+}
+
+static MMIXTranslationCacheEntry *
+mmix_translation_cache_find(CPUMMIXState *env,
+                            MMIXTranslationCacheKind kind, uint64_t key)
+{
+    GArray *cache = mmix_translation_cache(env, kind);
+    unsigned int i;
+
+    for (i = 0; i < cache->len; i++) {
+        MMIXTranslationCacheEntry *entry =
+            &g_array_index(cache, MMIXTranslationCacheEntry, i);
+
+        if (entry->key == key) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+static void mmix_translation_cache_insert(CPUMMIXState *env,
+                                          MMUAccessType access_type,
+                                          vaddr address, uint8_t page_shift,
+                                          uint64_t address_space_number,
+                                          uint64_t pte)
+{
+    MMIXTranslationCacheKind kind =
+        mmix_translation_cache_kind(access_type);
+    GArray *cache = mmix_translation_cache(env, kind);
+    MMIXTranslationCacheEntry entry = {
+        .key = mmix_translation_key(address, page_shift,
+                                    address_space_number),
+        .pte = pte,
+        .page_shift = page_shift,
+    };
+    MMIXTranslationCacheEntry *existing =
+        mmix_translation_cache_find(env, kind, entry.key);
+
+    if (existing != NULL) {
+        *existing = entry;
+    } else {
+        g_array_append_val(cache, entry);
+    }
+}
+
+static bool mmix_translation_cache_lookup(CPUMMIXState *env,
+                                          MMUAccessType access_type,
+                                          vaddr address, uint8_t page_shift,
+                                          uint64_t address_space_number,
+                                          MMIXAddressTranslation *translation)
+{
+    MMIXTranslationCacheEntry *entry = mmix_translation_cache_find(
+        env, mmix_translation_cache_kind(access_type),
+        mmix_translation_key(address, page_shift, address_space_number));
+    uint64_t page_mask;
+
+    if (entry == NULL) {
+        return false;
+    }
+
+    page_mask = ~((1ULL << entry->page_shift) - 1);
+    translation->physical =
+        (entry->pte & MMIX_PHYS_MASK & page_mask) | (address & ~page_mask);
+    translation->page_size = 1ULL << entry->page_shift;
+    translation->prot = mmix_pte_prot(entry->pte);
+    return true;
+}
+
+void mmix_cpu_flush_translation_caches(CPUMMIXState *env)
+{
+    MMIXCPU *cpu = env_archcpu(env);
+
+    g_array_set_size(cpu->instruction_translation_cache, 0);
+    g_array_set_size(cpu->data_translation_cache, 0);
+    tlb_flush(env_cpu(env));
+}
+
+uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key)
+{
+    uint64_t rv = env->sregs[MMIX_SREG_RV];
+    uint8_t page_shift = extract64(rv, 40, 8);
+    uint64_t lookup_key;
+    uint64_t status = 0;
+    uint8_t permissions = key & MMIX_PTE_P_MASK;
+    int kind;
+
+    if (env->flat_translation || page_shift < 13 || page_shift > 48) {
+        return 0;
+    }
+
+    lookup_key = key & ~MMIX_PTE_P_MASK;
+    for (kind = MMIX_TRANSLATION_CACHE_INSTRUCTION;
+         kind <= MMIX_TRANSLATION_CACHE_DATA; kind++) {
+        GArray *cache = mmix_translation_cache(env, kind);
+        unsigned int i;
+
+        for (i = 0; i < cache->len; i++) {
+            MMIXTranslationCacheEntry *entry =
+                &g_array_index(cache, MMIXTranslationCacheEntry, i);
+
+            if (entry->key != lookup_key ||
+                entry->page_shift != page_shift) {
+                continue;
+            }
+
+            status |= kind == MMIX_TRANSLATION_CACHE_INSTRUCTION ? 1 : 2;
+            if (permissions == 0) {
+                g_array_remove_index(cache, i);
+            } else {
+                entry->pte = (entry->pte & ~MMIX_PTE_P_MASK) | permissions;
+            }
+            break;
+        }
+    }
+
+    if (status != 0) {
+        tlb_flush(env_cpu(env));
+    }
+    return status;
 }
 
 static bool mmix_read_phys_octa(CPUState *cs, hwaddr address, uint64_t *value)
@@ -306,6 +461,15 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                                              allow_traps && !debug);
     }
 
+    if (mmix_translation_cache_lookup(env, access_type, address, s,
+                                      address_space_number, translation)) {
+        if ((translation->prot & mmix_access_prot(access_type)) == 0) {
+            return mmix_finish_translation_fault(env, translation, causes,
+                                                 allow_traps && !debug);
+        }
+        return true;
+    }
+
     segment = address >> 61;
     segment_address = address & ((1ULL << 61) - 1);
     page_number = segment_address >> s;
@@ -377,6 +541,10 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
     translation->physical = page_base | page_offset;
     translation->page_size = 1ULL << s;
     translation->prot = prot;
+    if (!debug) {
+        mmix_translation_cache_insert(env, access_type, address, s,
+                                      address_space_number, pte);
+    }
     return true;
 }
 
@@ -391,6 +559,7 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     }
 
     mmix_cpu_release_semihosting_file_handles(&cpu->env);
+    mmix_cpu_flush_translation_caches(&cpu->env);
 
     memset(&cpu->env, 0, offsetof(CPUMMIXState, end_reset_fields));
     cpu->env.pc = 0;
@@ -407,6 +576,24 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     cpu->env.lring_size = MMIX_LOCAL_REGS;
     cpu->env.lring_mask = MMIX_LOCAL_REGS - 1;
     cs->exception_index = -1;
+}
+
+static void mmix_cpu_initfn(Object *obj)
+{
+    MMIXCPU *cpu = MMIX_CPU(obj);
+
+    cpu->instruction_translation_cache =
+        g_array_new(false, false, sizeof(MMIXTranslationCacheEntry));
+    cpu->data_translation_cache =
+        g_array_new(false, false, sizeof(MMIXTranslationCacheEntry));
+}
+
+static void mmix_cpu_finalize(Object *obj)
+{
+    MMIXCPU *cpu = MMIX_CPU(obj);
+
+    g_array_unref(cpu->instruction_translation_cache);
+    g_array_unref(cpu->data_translation_cache);
 }
 
 static ObjectClass *mmix_cpu_class_by_name(const char *cpu_model)
@@ -587,6 +774,8 @@ static const TypeInfo mmix_cpu_type_info[] = {
         .instance_size = sizeof(MMIXCPU),
         .instance_align = __alignof(MMIXCPU),
         .class_size = sizeof(MMIXCPUClass),
+        .instance_init = mmix_cpu_initfn,
+        .instance_finalize = mmix_cpu_finalize,
         .class_init = mmix_cpu_class_init,
         .abstract = true,
     },

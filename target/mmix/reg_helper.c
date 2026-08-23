@@ -310,7 +310,7 @@ static void mmix_cpu_put_rv(CPUMMIXState *env, uint64_t val)
 {
     env->sregs[MMIX_SREG_RV] = val;
     env->flat_translation = false;
-    mmix_cpu_update_translation_state(env);
+    mmix_cpu_flush_translation_caches(env);
 }
 
 uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
@@ -444,11 +444,7 @@ uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint64_t key)
         mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
     }
 
-    /*
-     * Translation caches are not modeled yet. No key can be present, and the
-     * requested low-bit protection-code update has no current-machine target.
-     */
-    return 0;
+    return mmix_cpu_ldvts(env, key);
 }
 
 void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
