@@ -4,6 +4,67 @@
 
 from .common import *
 
+FORCED_TRANSLATION_MAIN = 0x100
+FORCED_TRANSLATION_HANDLER = 0x200
+NEGATIVE_FORCED_TRANSLATION_MAIN = 0x8000000000000100
+NEGATIVE_FORCED_TRANSLATION_HANDLER = 0x8000000000000200
+FORCED_TRANSLATION_VIRTUAL = 0x2000
+FORCED_TRANSLATION_PHYSICAL = 0x4000
+
+
+def forced_data_translation_program(main, handler, initial_value,
+                                    extra_regions=()):
+    bootstrap = [
+        *set_octa(R1, FORCED_TRANSLATION_PHYSICAL),
+        *set_octa(R2, initial_value),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R3, NEGATIVE_FORCED_TRANSLATION_MAIN),
+        insn(GO, R4, R3, R0),
+    ]
+    main_setup = [
+        *set_octa(R20, NEGATIVE_FORCED_TRANSLATION_HANDLER),
+        insn(PUT, SR_T, 0, R20),
+        *set_octa(R21, VM_RV_SOFTWARE),
+        insn(PUT, SR_V, 0, R21),
+    ]
+    return program_with_regions(
+        (0, bootstrap),
+        (FORCED_TRANSLATION_MAIN, [*main_setup, *main]),
+        (FORCED_TRANSLATION_HANDLER, handler),
+        *extra_regions,
+    )
+
+
+def invalid_forced_data_translation_test(name, main, pte, expected_where,
+                                         expected_exec, initial_value):
+    return MMIXTest(
+        name,
+        forced_data_translation_program(
+            main,
+            [
+                insn(GET, R40, R0, SR_WW),
+                insn(GET, R41, R0, SR_XX),
+                insn(GET, R42, R0, SR_YY),
+                *set_octa(R50, pte),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+                insn(GET, R46, R0, SR_Q),
+                *set_octa(R51, 0x8000000000004000),
+                insn(LDOU, R47, R51, R0),
+                halt(),
+            ],
+            initial_value,
+        ),
+        pc=0x800000000000023c,
+        regs={
+            R40: expected_where,
+            R41: expected_exec,
+            R42: FORCED_TRANSLATION_VIRTUAL,
+            R46: RQ_PROGRAM_B,
+            R47: initial_value,
+        },
+    )
+
 
 def rule_break_enabled_test(name, instruction, *, setup=(), y=0, z=0,
                             handler_checks=(), regs=None, old_r255=0):
@@ -1385,6 +1446,20 @@ ISA_TESTS = [
             insn(PUT, SR_X, 0, R40),
         ),
     ),
+    rule_break_enabled_test(
+        "break-rules-resume1-ropcode3-location",
+        insn(RESUME, R0, R0, 1),
+        setup=(
+            wyde(SETL, R40, 0x20),
+            insn(PUT, SR_WW, R0, R40),
+            *set_octa(R41, 0x030000008e010200),
+            insn(PUT, SR_XX, R0, R41),
+            wyde(SETL, R42, FORCED_TRANSLATION_VIRTUAL),
+            insn(PUT, SR_YY, R0, R42),
+            wyde(SETL, R43, FORCED_TRANSLATION_PHYSICAL | 7),
+            insn(PUT, SR_ZZ, R0, R43),
+        ),
+    ),
     MMIXTest(
         "break-rules-runtime-forms-masked",
         RUNTIME_RULE_BREAKS_MASKED[0],
@@ -1771,6 +1846,200 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_W,
             R41: RQ_PROGRAM_W,
             R42: 0x6c,
+        },
+    ),
+    MMIXTest(
+        "software-translation-load-resume",
+        forced_data_translation_program(
+            [
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+                insn(LDOU, R11, R10, R0),
+                wyde(SETL, R12, 0x55),
+                halt(),
+            ],
+            [
+                insn(GET, R40, R0, SR_WW),
+                insn(GET, R41, R0, SR_XX),
+                insn(GET, R42, R0, SR_YY),
+                insn(GET, R43, R0, SR_ZZ),
+                insn(GET, R44, R0, SR_BB),
+                insn(GET, R45, R0, SR_K),
+                *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 7),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+            ],
+            0x1122334455667788,
+        ),
+        pc=0x8000000000000134,
+        regs={
+            R11: 0x1122334455667788,
+            R12: 0x55,
+            R40: 0x8000000000000130,
+            R41: 0x030000008e0b0a00,
+            R42: FORCED_TRANSLATION_VIRTUAL,
+            R43: 0,
+            R44: 0,
+            R45: 0,
+        },
+    ),
+    MMIXTest(
+        "software-translation-store-resume",
+        forced_data_translation_program(
+            [
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+                *set_octa(R11, 0x8877665544332211),
+                insn(STOU, R11, R10, R0),
+                insn(LDOU, R12, R10, R0),
+                halt(),
+            ],
+            [
+                insn(GET, R40, R0, SR_WW),
+                insn(GET, R41, R0, SR_XX),
+                insn(GET, R42, R0, SR_YY),
+                *set_octa(R50, 0x8000000000004000),
+                insn(LDOU, R51, R50, R0),
+                *set_octa(R52, FORCED_TRANSLATION_PHYSICAL | 7),
+                insn(PUT, SR_ZZ, R0, R52),
+                insn(RESUME, R0, R0, 1),
+            ],
+            0x0102030405060708,
+        ),
+        pc=0x8000000000000144,
+        regs={
+            R12: 0x8877665544332211,
+            R40: 0x8000000000000140,
+            R41: 0x03000000ae0b0a00,
+            R42: FORCED_TRANSLATION_VIRTUAL,
+            R51: 0x0102030405060708,
+        },
+    ),
+    MMIXTest(
+        "software-translation-store-repeated-miss",
+        forced_data_translation_program(
+            [
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+                wyde(SETL, R11, 0x1111),
+                insn(STOU, R11, R10, R0),
+                wyde(SETL, R13, FORCED_TRANSLATION_VIRTUAL),
+                insn(LDVTS, R14, R13, R0),
+                wyde(SETL, R11, 0x2222),
+                insn(STOU, R11, R10, R0),
+                insn(LDOU, R12, R10, R0),
+                halt(),
+            ],
+            [
+                insn(ADDI, R60, R60, 1),
+                *set_octa(R50, 0x8000000000004000),
+                insn(LDOU, R61, R50, R0),
+                *set_octa(R51, FORCED_TRANSLATION_PHYSICAL | 7),
+                insn(PUT, SR_ZZ, R0, R51),
+                insn(RESUME, R0, R0, 1),
+            ],
+            0x0102030405060708,
+        ),
+        pc=0x8000000000000148,
+        regs={
+            R12: 0x2222,
+            R14: 2,
+            R60: 2,
+            R61: 0x1111,
+        },
+    ),
+    invalid_forced_data_translation_test(
+        "software-translation-load-asn-mismatch",
+        [
+            wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+            insn(LDOU, R11, R10, R0),
+        ],
+        FORCED_TRANSLATION_PHYSICAL | 0xf,
+        0x8000000000000130,
+        0x030000008e0b0a00,
+        0x1122334455667788,
+    ),
+    invalid_forced_data_translation_test(
+        "software-translation-load-permission",
+        [
+            wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+            insn(LDOU, R11, R10, R0),
+        ],
+        FORCED_TRANSLATION_PHYSICAL | 2,
+        0x8000000000000130,
+        0x030000008e0b0a00,
+        0x1122334455667788,
+    ),
+    invalid_forced_data_translation_test(
+        "software-translation-store-permission",
+        [
+            wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+            wyde(SETL, R11, 0x55),
+            insn(STOU, R11, R10, R0),
+        ],
+        FORCED_TRANSLATION_PHYSICAL | 4,
+        0x8000000000000134,
+        0x03000000ae0b0a00,
+        0x1122334455667788,
+    ),
+    MMIXTest(
+        "software-translation-cached-protection-trap",
+        forced_data_translation_program(
+            [
+                *set_octa(R22, 0x8000000000000300),
+                insn(PUT, SR_TT, R0, R22),
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+                insn(LDOU, R11, R10, R0),
+                wyde(SETL, R12, 0x55),
+                insn(STOU, R12, R10, R0),
+                wyde(SETL, R13, 0xdead),
+            ],
+            [
+                insn(ADDI, R60, R60, 1),
+                *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 4),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+            ],
+            0x1122334455667788,
+            extra_regions=((
+                0x300,
+                [
+                    insn(GET, R70, R0, SR_Q),
+                    insn(GET, R71, R0, SR_XX),
+                    insn(GET, R72, R0, SR_WW),
+                    halt(),
+                ],
+            ),),
+        ),
+        pc=0x800000000000030c,
+        regs={
+            R11: 0x1122334455667788,
+            R13: 0,
+            R60: 1,
+            R70: RQ_PROGRAM_W,
+            R71: RQ_PROGRAM_W,
+            R72: 0x800000000000014c,
+        },
+    ),
+    MMIXTest(
+        "software-translation-malformed-saved-opcode",
+        forced_data_translation_program(
+            [
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+                insn(LDOU, R11, R10, R0),
+            ],
+            [
+                *set_octa(R50, 0x0300000021010001),
+                insn(PUT, SR_XX, R0, R50),
+                *set_octa(R51, FORCED_TRANSLATION_PHYSICAL | 7),
+                insn(PUT, SR_ZZ, R0, R51),
+                insn(RESUME, R0, R0, 1),
+                insn(GET, R52, R0, SR_Q),
+                halt(),
+            ],
+            0x1122334455667788,
+        ),
+        pc=0x8000000000000230,
+        regs={
+            R11: 0,
+            R52: RQ_PROGRAM_B,
         },
     ),
     MMIXTest(

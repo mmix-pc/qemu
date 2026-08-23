@@ -59,11 +59,10 @@ static hwaddr mmix_arithmetic_trip_handler(uint32_t event)
     }
 }
 
-static void mmix_cpu_enter_dynamic_trap(CPUState *cs, uint64_t where,
-                                        uint64_t exec, uint64_t y, uint64_t z)
+static void mmix_cpu_enter_trap(CPUState *cs, hwaddr handler, uint64_t where,
+                                uint64_t exec, uint64_t y, uint64_t z)
 {
     CPUMMIXState *env = cpu_env(cs);
-    hwaddr handler = env->sregs[MMIX_SREG_RTT];
 
     env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
     env->sregs[MMIX_SREG_RWW] = where;
@@ -75,6 +74,25 @@ static void mmix_cpu_enter_dynamic_trap(CPUState *cs, uint64_t where,
     env->pc = handler;
     env->npc = handler + 4;
     cs->exception_index = -1;
+}
+
+static bool mmix_resume_data_access(uint32_t insn,
+                                    MMUAccessType *access_type)
+{
+    uint8_t opcode = insn >> 24;
+
+    /* Explicit loads and stores occupy these MMIX opcode-chart ranges. */
+    if ((opcode >= 0x80 && opcode <= 0x93) ||
+        (opcode >= 0x96 && opcode <= 0x97)) {
+        *access_type = MMU_DATA_LOAD;
+        return true;
+    }
+    if ((opcode >= 0x94 && opcode <= 0x95) ||
+        (opcode >= 0xa0 && opcode <= 0xb7)) {
+        *access_type = MMU_DATA_STORE;
+        return true;
+    }
+    return false;
 }
 
 static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
@@ -214,6 +232,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     uint64_t z;
     uint8_t ropcode;
     uint32_t insn;
+    MMUAccessType translation_access;
 
     if (trap_state) {
         where = env->sregs[MMIX_SREG_RWW];
@@ -230,6 +249,21 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     if ((int64_t)exec >= 0) {
         ropcode = exec >> 56;
         if (ropcode > 3 || (ropcode == 3 && !trap_state)) {
+            mmix_cpu_break_rules_and_continue(
+                env, resume_insn, mmix_cpu_read_reg(env, 0),
+                mmix_cpu_read_reg(env, resume_z));
+        }
+        if (ropcode == 3 &&
+            ((int64_t)env->pc >= 0 ||
+             (exec & 0xffffffff00000000ULL) !=
+             MMIX_FORCED_TRANSLATION_EXEC_PREFIX ||
+             where < 4 || where != env->forced_translation_where ||
+             (uint32_t)exec != env->forced_translation_insn ||
+             (int64_t)y < 0 || y != env->forced_translation_address ||
+             !mmix_resume_data_access((uint32_t)exec,
+                                      &translation_access) ||
+             !mmix_cpu_install_data_translation(env, y, z,
+                                                translation_access))) {
             mmix_cpu_break_rules_and_continue(
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
@@ -312,8 +346,12 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         mmix_resume_unsupported(env, "ropcode 1 operand substitution", exec);
         break;
     case 3:
-        mmix_resume_unsupported(env, "ropcode 3 virtual translation", exec);
-        break;
+        env->forced_translation_insn = 0;
+        env->forced_translation_address = 0;
+        env->forced_translation_where = 0;
+        env->pc = where - 4;
+        env->npc = where;
+        cpu_loop_exit_noexc(cs);
     default:
         g_assert_not_reached();
     }
@@ -399,8 +437,8 @@ void mmix_cpu_do_interrupt(CPUState *cs)
                       " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
                       causes, env->pc, handler);
         if (causes & MMIX_RQ_PROGRAM_B) {
-            mmix_cpu_enter_dynamic_trap(
-                cs, env->npc,
+            mmix_cpu_enter_trap(
+                cs, handler, env->npc,
                 MMIX_DYNAMIC_TRAP_RESUME_NEXT | causes |
                 env->rule_break_insn,
                 env->rule_break_y, env->rule_break_z);
@@ -408,9 +446,22 @@ void mmix_cpu_do_interrupt(CPUState *cs)
             env->rule_break_y = 0;
             env->rule_break_z = 0;
         } else {
-            mmix_cpu_enter_dynamic_trap(cs, env->npc, causes, 0, 0);
+            mmix_cpu_enter_trap(cs, handler, env->npc, causes, 0, 0);
         }
         env->program_exception_causes = 0;
+        break;
+    case EXCP_MMIX_FORCED_TRANSLATION:
+        handler = env->sregs[MMIX_SREG_RT];
+        env->forced_translation_where = env->npc;
+        qemu_log_mask(CPU_LOG_INT,
+                      "MMIX forced translation trap address=0x%016" PRIx64
+                      " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
+                      env->forced_translation_address, env->pc, handler);
+        mmix_cpu_enter_trap(
+            cs, handler, env->npc,
+            MMIX_FORCED_TRANSLATION_EXEC_PREFIX |
+            env->forced_translation_insn,
+            env->forced_translation_address, 0);
         break;
     case EXCP_MMIX_INTERRUPT:
         requests = env->sregs[MMIX_SREG_RQ] & env->sregs[MMIX_SREG_RK];
@@ -419,8 +470,8 @@ void mmix_cpu_do_interrupt(CPUState *cs)
                       "MMIX external dynamic trap requests=0x%016" PRIx64
                       " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
                       requests, env->pc, handler);
-        mmix_cpu_enter_dynamic_trap(cs, env->pc,
-                                    MMIX_DYNAMIC_TRAP_RESUME_NEXT, 0, 0);
+        mmix_cpu_enter_trap(cs, handler, env->pc,
+                            MMIX_DYNAMIC_TRAP_RESUME_NEXT, 0, 0);
         break;
     default:
         qemu_log_mask(CPU_LOG_INT, "MMIX exception %d at 0x%016" PRIx64 "\n",

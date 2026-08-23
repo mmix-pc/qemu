@@ -350,6 +350,30 @@ uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key)
     return status;
 }
 
+bool mmix_cpu_install_data_translation(CPUMMIXState *env, vaddr address,
+                                       uint64_t pte,
+                                       MMUAccessType access_type)
+{
+    uint64_t rv = env->sregs[MMIX_SREG_RV];
+    uint8_t page_shift = extract64(rv, 40, 8);
+    uint64_t address_space_number = extract64(rv, 3, 10);
+    uint8_t function = extract64(rv, 0, 3);
+
+    if ((access_type != MMU_DATA_LOAD && access_type != MMU_DATA_STORE) ||
+        env->flat_translation || (int64_t)address < 0 ||
+        page_shift < 13 || page_shift > 48 || function != 1 ||
+        ((pte >> MMIX_PTE_N_SHIFT) & MMIX_PTE_N_MASK) !=
+        address_space_number ||
+        (mmix_pte_prot(pte) & mmix_access_prot(access_type)) == 0) {
+        return false;
+    }
+
+    mmix_translation_cache_insert(env, access_type, address, page_shift,
+                                  address_space_number, pte);
+    tlb_flush(env_cpu(env));
+    return true;
+}
+
 static bool mmix_read_phys_octa(CPUState *cs, hwaddr address, uint64_t *value)
 {
     MemTxResult result;
@@ -411,6 +435,7 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
         .page_size = TARGET_PAGE_SIZE,
         .prot = 0,
         .causes = 0,
+        .forced_translation = false,
     };
 
     if ((int64_t)address < 0) {
@@ -456,7 +481,7 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
     address_space_number = extract64(rv, 3, 10);
     function = extract64(rv, 0, 3);
 
-    if (s < 13 || s > 48 || function != 0) {
+    if (s < 13 || s > 48 || function > 1) {
         return mmix_finish_translation_fault(env, translation, causes,
                                              allow_traps && !debug);
     }
@@ -468,6 +493,15 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                                                  allow_traps && !debug);
         }
         return true;
+    }
+
+    if (function == 1) {
+        if (access_type != MMU_INST_FETCH) {
+            translation->forced_translation = true;
+            return false;
+        }
+        return mmix_finish_translation_fault(env, translation, causes,
+                                             allow_traps && !debug);
     }
 
     segment = address >> 61;
@@ -708,6 +742,12 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
                                 &translation)) {
         if (probe) {
             return false;
+        }
+        if (translation.forced_translation) {
+            env->forced_translation_insn = env->data_access_insn;
+            env->forced_translation_address = addr;
+            cs->exception_index = EXCP_MMIX_FORCED_TRANSLATION;
+            cpu_loop_exit_restore(cs, retaddr);
         }
         mmix_cpu_record_program_exception(env, translation.causes);
         cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;

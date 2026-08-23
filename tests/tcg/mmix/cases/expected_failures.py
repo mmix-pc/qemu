@@ -38,20 +38,6 @@ EXPECTED_FAILURE_TESTS = [
          "MMIX emulator failure"),
     ),
     MMIXExpectedFailure(
-        "unsupported-resume-translation",
-        b"".join(
-            [
-                wyde(SETL, R1, 0x20),
-                insn(PUT, SR_WW, 0, R1),
-                *set_octa(R2, 0x0300000021010001),
-                insn(PUT, SR_XX, 0, R2),
-                insn(RESUME, 0, 0, 1),
-            ]
-        ),
-        ("MMIX unsupported RESUME ropcode 3 virtual translation",
-         "MMIX emulator failure"),
-    ),
-    MMIXExpectedFailure(
         "register-stack-underflow",
         insn(POP, 0, 0, 0),
         ("MMIX register stack underflow during POP",

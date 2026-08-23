@@ -54,6 +54,7 @@ RK_INTERRUPT_CONTROLLER = RQ_INTERRUPT_CONTROLLER
 DYNAMIC_TRAP_RESUME_NEXT = 1 << 63
 VM_PAGE_TABLE = 0x2000
 VM_RV_PAGE0 = 0x11110d0000002000
+VM_RV_SOFTWARE = VM_RV_PAGE0 | 1
 VM_PAGE_TABLE_ROOT2 = 0x4000
 VM_RV_ROOT2 = 0x11110d0000004000
 NEGATIVE_HANDLER = 0x8000000000000080
@@ -360,6 +361,20 @@ def program_with_handler(prefix, handler_addr, handler):
         raise ValueError("handler address is not instruction-aligned")
     padding = insn(SWYM, 0, 0, 0) * ((handler_addr - len(prefix)) // 4)
     return prefix + padding + handler
+
+
+def program_with_regions(*regions):
+    image = bytearray()
+
+    for address, instructions in regions:
+        data = b"".join(instructions)
+        if len(image) > address:
+            raise ValueError("program regions overlap")
+        if (address - len(image)) % 4 != 0:
+            raise ValueError("program region is not instruction-aligned")
+        image.extend(insn(SWYM, 0, 0, 0) * ((address - len(image)) // 4))
+        image.extend(data)
+    return bytes(image)
 
 
 def register_stack_spill_fill_program(depth):
