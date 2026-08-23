@@ -157,6 +157,7 @@ enum {
 #define MMIX_RK_INTERRUPT_CONTROLLER MMIX_RQ_INTERRUPT_CONTROLLER
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
+#define MMIX_SWYM_INSN 0xfd000000U
 
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)
@@ -214,6 +215,7 @@ typedef struct CPUArchState {
     uint32_t forced_translation_insn;
     uint64_t forced_translation_address;
     uint64_t forced_translation_where;
+    uint8_t forced_translation_access;
     uint64_t rq_new_bits;
     bool interrupt_controller_level;
     bool flat_translation;
@@ -279,9 +281,9 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                             MMIXAddressTranslation *translation);
 uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key);
 void mmix_cpu_flush_translation_caches(CPUMMIXState *env);
-bool mmix_cpu_install_data_translation(CPUMMIXState *env, vaddr address,
-                                       uint64_t pte,
-                                       MMUAccessType access_type);
+bool mmix_cpu_install_translation(CPUMMIXState *env, vaddr address,
+                                  uint64_t pte,
+                                  MMUAccessType access_type);
 
 void mmix_translate_init(void);
 void mmix_translate_code(CPUState *cs, TranslationBlock *tb,

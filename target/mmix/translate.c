@@ -11,6 +11,7 @@
 #include "tcg/tcg-op.h"
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
+#include "exec/target_page.h"
 #include "exec/translator.h"
 #include "exec/translation-block.h"
 
@@ -1189,8 +1190,13 @@ static bool trans_SYNC(DisasContext *ctx, arg_xyz *a)
 static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
+    target_ulong page_insns;
 
     ctx->env = cpu_env(cs);
+
+    /* Keep instruction-fetch traps precise at translated page boundaries. */
+    page_insns = -(dcbase->pc_first | TARGET_PAGE_MASK) / 4;
+    dcbase->max_insns = MIN(dcbase->max_insns, page_insns);
 }
 
 static void mmix_tr_tb_start(DisasContextBase *dcbase, CPUState *cs)

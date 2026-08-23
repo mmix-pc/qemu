@@ -350,16 +350,17 @@ uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key)
     return status;
 }
 
-bool mmix_cpu_install_data_translation(CPUMMIXState *env, vaddr address,
-                                       uint64_t pte,
-                                       MMUAccessType access_type)
+bool mmix_cpu_install_translation(CPUMMIXState *env, vaddr address,
+                                  uint64_t pte,
+                                  MMUAccessType access_type)
 {
     uint64_t rv = env->sregs[MMIX_SREG_RV];
     uint8_t page_shift = extract64(rv, 40, 8);
     uint64_t address_space_number = extract64(rv, 3, 10);
     uint8_t function = extract64(rv, 0, 3);
 
-    if ((access_type != MMU_DATA_LOAD && access_type != MMU_DATA_STORE) ||
+    if ((access_type != MMU_INST_FETCH &&
+         access_type != MMU_DATA_LOAD && access_type != MMU_DATA_STORE) ||
         env->flat_translation || (int64_t)address < 0 ||
         page_shift < 13 || page_shift > 48 || function != 1 ||
         ((pte >> MMIX_PTE_N_SHIFT) & MMIX_PTE_N_MASK) !=
@@ -496,12 +497,8 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
     }
 
     if (function == 1) {
-        if (access_type != MMU_INST_FETCH) {
-            translation->forced_translation = true;
-            return false;
-        }
-        return mmix_finish_translation_fault(env, translation, causes,
-                                             allow_traps && !debug);
+        translation->forced_translation = true;
+        return false;
     }
 
     segment = address >> 61;
@@ -744,8 +741,11 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
             return false;
         }
         if (translation.forced_translation) {
-            env->forced_translation_insn = env->data_access_insn;
+            env->forced_translation_insn = access_type == MMU_INST_FETCH ?
+                                           MMIX_SWYM_INSN :
+                                           env->data_access_insn;
             env->forced_translation_address = addr;
+            env->forced_translation_access = access_type;
             cs->exception_index = EXCP_MMIX_FORCED_TRANSLATION;
             cpu_loop_exit_restore(cs, retaddr);
         }

@@ -35,6 +35,28 @@ def forced_data_translation_program(main, handler, initial_value,
     )
 
 
+def forced_instruction_translation_program(target_address, target_regions,
+                                           handler):
+    bootstrap = [
+        *set_octa(R1, NEGATIVE_FORCED_TRANSLATION_MAIN),
+        insn(GO, R2, R1, R0),
+    ]
+    main = [
+        *set_octa(R20, NEGATIVE_FORCED_TRANSLATION_HANDLER),
+        insn(PUT, SR_T, 0, R20),
+        *set_octa(R21, VM_RV_SOFTWARE),
+        insn(PUT, SR_V, 0, R21),
+        *set_octa(R22, target_address),
+        insn(GO, R23, R22, R0),
+    ]
+    return program_with_regions(
+        (0, bootstrap),
+        (FORCED_TRANSLATION_MAIN, main),
+        (FORCED_TRANSLATION_HANDLER, handler),
+        *target_regions,
+    )
+
+
 def invalid_forced_data_translation_test(name, main, pte, expected_where,
                                          expected_exec, initial_value):
     return MMIXTest(
@@ -2016,6 +2038,91 @@ ISA_TESTS = [
             R70: RQ_PROGRAM_W,
             R71: RQ_PROGRAM_W,
             R72: 0x800000000000014c,
+        },
+    ),
+    MMIXTest(
+        "software-translation-instruction-fetch-resume",
+        forced_instruction_translation_program(
+            FORCED_TRANSLATION_VIRTUAL,
+            ((FORCED_TRANSLATION_PHYSICAL, [
+                insn(ADDI, R12, R12, 1),
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL | 7),
+                insn(LDVTS, R11, R10, R0),
+                halt(),
+            ]),),
+            [
+                insn(GET, R40, R0, SR_WW),
+                insn(GET, R41, R0, SR_XX),
+                insn(GET, R42, R0, SR_YY),
+                insn(ADDI, R60, R60, 1),
+                *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 7),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+            ],
+        ),
+        pc=FORCED_TRANSLATION_VIRTUAL + 0xc,
+        regs={
+            R11: 1,
+            R12: 1,
+            R40: FORCED_TRANSLATION_VIRTUAL,
+            R41: 0x03000000fd000000,
+            R42: FORCED_TRANSLATION_VIRTUAL,
+            R60: 1,
+        },
+    ),
+    MMIXTest(
+        "software-translation-instruction-fetch-permission",
+        forced_instruction_translation_program(
+            FORCED_TRANSLATION_VIRTUAL,
+            ((FORCED_TRANSLATION_PHYSICAL, [
+                insn(ADDI, R12, R12, 1),
+                halt(),
+            ]),),
+            [
+                insn(GET, R40, R0, SR_WW),
+                insn(GET, R41, R0, SR_XX),
+                insn(GET, R42, R0, SR_YY),
+                *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 6),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+                insn(GET, R46, R0, SR_Q),
+                halt(),
+            ],
+        ),
+        pc=NEGATIVE_FORCED_TRANSLATION_HANDLER + 0x28,
+        regs={
+            R12: 0,
+            R40: FORCED_TRANSLATION_VIRTUAL,
+            R41: 0x03000000fd000000,
+            R42: FORCED_TRANSLATION_VIRTUAL,
+            R46: RQ_PROGRAM_B,
+        },
+    ),
+    MMIXTest(
+        "software-translation-instruction-fetch-cross-page",
+        forced_instruction_translation_program(
+            0x3ffc,
+            (
+                (0x5ffc, [insn(ADDI, R30, R30, 1)]),
+                (0x6000, [insn(ADDI, R30, R30, 1), halt()]),
+            ),
+            [
+                insn(GET, R40, R0, SR_YY),
+                *set_octa(R50, 0x1fff),
+                insn(ANDN, R51, R40, R50),
+                wyde(SETL, R52, 0x2000),
+                insn(ADDU, R53, R51, R52),
+                insn(ORI, R53, R53, 7),
+                insn(PUT, SR_ZZ, R0, R53),
+                insn(ADDI, R60, R60, 1),
+                insn(RESUME, R0, R0, 1),
+            ],
+        ),
+        pc=0x4004,
+        regs={
+            R30: 2,
+            R40: 0x4000,
+            R60: 2,
         },
     ),
     MMIXTest(

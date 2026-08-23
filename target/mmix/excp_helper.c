@@ -76,10 +76,15 @@ static void mmix_cpu_enter_trap(CPUState *cs, hwaddr handler, uint64_t where,
     cs->exception_index = -1;
 }
 
-static bool mmix_resume_data_access(uint32_t insn,
-                                    MMUAccessType *access_type)
+static bool mmix_resume_translation_access(uint32_t insn,
+                                           MMUAccessType *access_type)
 {
     uint8_t opcode = insn >> 24;
+
+    if (insn == MMIX_SWYM_INSN) {
+        *access_type = MMU_INST_FETCH;
+        return true;
+    }
 
     /* Explicit loads and stores occupy these MMIX opcode-chart ranges. */
     if ((opcode >= 0x80 && opcode <= 0x93) ||
@@ -232,7 +237,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     uint64_t z;
     uint8_t ropcode;
     uint32_t insn;
-    MMUAccessType translation_access;
+    MMUAccessType translation_access = MMU_DATA_LOAD;
 
     if (trap_state) {
         where = env->sregs[MMIX_SREG_RWW];
@@ -253,20 +258,26 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
         }
-        if (ropcode == 3 &&
-            ((int64_t)env->pc >= 0 ||
-             (exec & 0xffffffff00000000ULL) !=
-             MMIX_FORCED_TRANSLATION_EXEC_PREFIX ||
-             where < 4 || where != env->forced_translation_where ||
-             (uint32_t)exec != env->forced_translation_insn ||
-             (int64_t)y < 0 || y != env->forced_translation_address ||
-             !mmix_resume_data_access((uint32_t)exec,
-                                      &translation_access) ||
-             !mmix_cpu_install_data_translation(env, y, z,
-                                                translation_access))) {
-            mmix_cpu_break_rules_and_continue(
-                env, resume_insn, mmix_cpu_read_reg(env, 0),
-                mmix_cpu_read_reg(env, resume_z));
+        if (ropcode == 3) {
+            bool valid = (int64_t)env->pc < 0 &&
+                         (exec & 0xffffffff00000000ULL) ==
+                         MMIX_FORCED_TRANSLATION_EXEC_PREFIX &&
+                         where == env->forced_translation_where &&
+                         (uint32_t)exec == env->forced_translation_insn &&
+                         (int64_t)y >= 0 &&
+                         y == env->forced_translation_address &&
+                         mmix_resume_translation_access((uint32_t)exec,
+                                                        &translation_access);
+
+            if (!valid ||
+                (translation_access != MMU_INST_FETCH && where < 4) ||
+                translation_access != env->forced_translation_access ||
+                !mmix_cpu_install_translation(env, y, z,
+                                              translation_access)) {
+                mmix_cpu_break_rules_and_continue(
+                    env, resume_insn, mmix_cpu_read_reg(env, 0),
+                    mmix_cpu_read_reg(env, resume_z));
+            }
         }
     }
 
@@ -349,8 +360,14 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         env->forced_translation_insn = 0;
         env->forced_translation_address = 0;
         env->forced_translation_where = 0;
-        env->pc = where - 4;
-        env->npc = where;
+        env->forced_translation_access = 0;
+        if (translation_access == MMU_INST_FETCH) {
+            env->pc = where;
+            env->npc = where + 4;
+        } else {
+            env->pc = where - 4;
+            env->npc = where;
+        }
         cpu_loop_exit_noexc(cs);
     default:
         g_assert_not_reached();
@@ -407,6 +424,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
     uint32_t event;
     uint64_t causes;
     uint64_t requests;
+    uint64_t where;
     hwaddr handler;
 
     switch (cs->exception_index) {
@@ -452,13 +470,15 @@ void mmix_cpu_do_interrupt(CPUState *cs)
         break;
     case EXCP_MMIX_FORCED_TRANSLATION:
         handler = env->sregs[MMIX_SREG_RT];
-        env->forced_translation_where = env->npc;
+        where = env->forced_translation_access == MMU_INST_FETCH ?
+                env->forced_translation_address : env->npc;
+        env->forced_translation_where = where;
         qemu_log_mask(CPU_LOG_INT,
                       "MMIX forced translation trap address=0x%016" PRIx64
                       " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
                       env->forced_translation_address, env->pc, handler);
         mmix_cpu_enter_trap(
-            cs, handler, env->npc,
+            cs, handler, where,
             MMIX_FORCED_TRANSLATION_EXEC_PREFIX |
             env->forced_translation_insn,
             env->forced_translation_address, 0);
