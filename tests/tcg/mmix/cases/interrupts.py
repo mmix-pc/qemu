@@ -333,7 +333,8 @@ def dynamic_trap_register_stack_program(depth=10):
 DYNAMIC_TRAP_REGISTER_STACK = dynamic_trap_register_stack_program()
 
 
-def spill_fault_resume_program(depth=10, protect_before_push=False):
+def spill_fault_resume_program(depth=10, protect_before_push=False,
+                               nested_handler_stack=False):
     sub_base = 0x200
     handler = 0x1000
     page_table = VM_PAGE_TABLE
@@ -410,19 +411,60 @@ def spill_fault_resume_program(depth=10, protect_before_push=False):
     ])
     place(sub_base, nested)
 
-    place(handler, [
-        insn(ADDUI, R220, R220, 1),
-        insn(GET, R221, 0, SR_Q),
-        insn(GET, R222, 0, SR_XX),
-        insn(GET, R223, 0, SR_WW),
-        insn(GET, R224, 0, SR_S),
-        insn(STOUI, R245, R244, 0),
-        insn(GET, R231, 0, SR_K),
-        insn(PUT, SR_V, 0, R246),
-        insn(PUTI, SR_Q, 0, 0),
-        insn(ADDU, R255, R248, R250),
-        insn(RESUME, 0, 0, 1),
-    ])
+    if nested_handler_stack:
+        nested_handler = 0x1080
+        handler_body = 0x1100
+        outer = [
+            insn(ADDUI, R220, R220, 1),
+            insn(CMPUI, R219, R220, 1),
+            branch(BNZ, R219, (nested_handler - handler - 8) // 4),
+            insn(GET, R180, 0, SR_WW),
+            insn(GET, R181, 0, SR_XX),
+            insn(GET, R182, 0, SR_YY),
+            insn(GET, R183, 0, SR_ZZ),
+            insn(GET, R184, 0, SR_BB),
+            insn(ADDU, R185, R255, R250),
+        ]
+        handler_call_pc = handler + len(b"".join(outer))
+        outer.extend([
+            branch(PUSHJ, R255,
+                   (handler_body - handler_call_pc) // 4),
+            insn(PUT, SR_WW, 0, R180),
+            insn(PUT, SR_XX, 0, R181),
+            insn(PUT, SR_YY, 0, R182),
+            insn(PUT, SR_ZZ, 0, R183),
+            insn(PUT, SR_BB, 0, R184),
+            insn(PUT, SR_J, 0, R185),
+            insn(STOUI, R245, R244, 0),
+            insn(PUT, SR_V, 0, R246),
+            insn(PUTI, SR_Q, 0, 0),
+            insn(ADDU, R255, R248, R250),
+            insn(RESUME, 0, 0, 1),
+        ])
+        place(handler, outer)
+        place(nested_handler, [
+            insn(ADDUI, R220, R220, 1),
+            insn(STOUI, R245, R244, 0),
+            insn(PUT, SR_V, 0, R246),
+            insn(PUTI, SR_Q, 0, 0),
+            insn(ADDU, R255, R248, R250),
+            insn(RESUME, 0, 0, 1),
+        ])
+        place(handler_body, [insn(POP, 0, 0, 0)])
+    else:
+        place(handler, [
+            insn(ADDUI, R220, R220, 1),
+            insn(GET, R221, 0, SR_Q),
+            insn(GET, R222, 0, SR_XX),
+            insn(GET, R223, 0, SR_WW),
+            insn(GET, R224, 0, SR_S),
+            insn(STOUI, R245, R244, 0),
+            insn(GET, R231, 0, SR_K),
+            insn(PUT, SR_V, 0, R246),
+            insn(PUTI, SR_Q, 0, 0),
+            insn(ADDU, R255, R248, R250),
+            insn(RESUME, 0, 0, 1),
+        ])
 
     exit_pc = call_pc + 7 * 4
     result = depth + 4 if protect_before_push else depth + 1
@@ -431,6 +473,8 @@ def spill_fault_resume_program(depth=10, protect_before_push=False):
 
 SPILL_FAULT_LOCAL_GROWTH = spill_fault_resume_program()
 SPILL_FAULT_PUSHJ = spill_fault_resume_program(protect_before_push=True)
+NESTED_HANDLER_SPILL_FAULT = spill_fault_resume_program(
+    protect_before_push=True, nested_handler_stack=True)
 
 
 def fill_fault_resume_program(depth=10):
@@ -999,6 +1043,20 @@ INTERRUPT_TESTS = [
             R229: 0,
             R230: RQ_PROGRAM_W,
             R231: 0,
+        },
+    ),
+    MMIXTest(
+        "register-stack-nested-handler-spill-fault-resume",
+        NESTED_HANDLER_SPILL_FAULT[0],
+        pc=NESTED_HANDLER_SPILL_FAULT[1],
+        regs={
+            R220: 3,
+            R225: NESTED_HANDLER_SPILL_FAULT[2],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: RQ_PROGRAM_W,
+            R230: RQ_PROGRAM_W,
         },
     ),
     MMIXTest(

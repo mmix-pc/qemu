@@ -185,7 +185,17 @@ typedef struct MMIXStackAccessState {
     uint32_t ring_index;
     uint64_t address;
     uint64_t value;
+    bool completed;
 } MMIXStackAccessState;
+
+typedef struct MMIXTrapRestartState {
+    MMIXStackAccessState stack_access;
+    uint32_t forced_translation_insn;
+    uint64_t forced_translation_address;
+    uint64_t forced_translation_where;
+    uint8_t forced_translation_access;
+    bool forced_translation;
+} MMIXTrapRestartState;
 
 typedef enum MMIXSaveRestartPhase {
     MMIX_SAVE_RESTART_NONE,
@@ -264,6 +274,8 @@ struct ArchCPU {
     /* Architectural I/D translation caches, separate from QEMU's TLB. */
     GArray *instruction_translation_cache;
     GArray *data_translation_cache;
+    /* Internal restart state for nested architectural dynamic traps. */
+    GArray *trap_restart_stack;
 };
 
 struct MMIXCPUClass {
@@ -291,8 +303,10 @@ void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
-bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env);
-bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env);
+bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,
+                                        MMIXStackAccessState *access);
+bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env,
+                                       MMIXStackAccessState *access);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);

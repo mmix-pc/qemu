@@ -599,6 +599,7 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
 
     mmix_cpu_release_semihosting_file_handles(&cpu->env);
     mmix_cpu_flush_translation_caches(&cpu->env);
+    g_array_set_size(cpu->trap_restart_stack, 0);
 
     memset(&cpu->env, 0, offsetof(CPUMMIXState, end_reset_fields));
     cpu->env.pc = 0;
@@ -625,6 +626,8 @@ static void mmix_cpu_initfn(Object *obj)
         g_array_new(false, false, sizeof(MMIXTranslationCacheEntry));
     cpu->data_translation_cache =
         g_array_new(false, false, sizeof(MMIXTranslationCacheEntry));
+    cpu->trap_restart_stack =
+        g_array_new(false, false, sizeof(MMIXTrapRestartState));
 }
 
 static void mmix_cpu_finalize(Object *obj)
@@ -633,6 +636,7 @@ static void mmix_cpu_finalize(Object *obj)
 
     g_array_unref(cpu->instruction_translation_cache);
     g_array_unref(cpu->data_translation_cache);
+    g_array_unref(cpu->trap_restart_stack);
 }
 
 static ObjectClass *mmix_cpu_class_by_name(const char *cpu_model)

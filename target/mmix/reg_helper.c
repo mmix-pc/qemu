@@ -30,20 +30,47 @@ static void mmix_cpu_stack_access_begin(CPUMMIXState *env,
     access->value = value;
 }
 
-static void mmix_cpu_stack_access_commit(CPUMMIXState *env)
+static bool mmix_cpu_stack_access_matches(const MMIXStackAccessState *a,
+                                          const MMIXStackAccessState *b)
 {
-    memset(&env->stack_access, 0, sizeof(env->stack_access));
+    return a->kind == b->kind && a->address == b->address &&
+           a->ring_index == b->ring_index && a->value == b->value;
 }
 
-bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env)
+static void mmix_cpu_stack_access_commit(CPUMMIXState *env,
+                                         MMIXStackAccessState *access)
 {
-    MMIXStackAccessState *access = &env->stack_access;
+    if (access == &env->stack_access) {
+        GArray *stack = env_archcpu(env)->trap_restart_stack;
+        unsigned int i;
+
+        for (i = 0; i < stack->len; i++) {
+            MMIXTrapRestartState *restart =
+                &g_array_index(stack, MMIXTrapRestartState, i);
+
+            if (mmix_cpu_stack_access_matches(&restart->stack_access,
+                                              access)) {
+                restart->stack_access.completed = true;
+            }
+        }
+    }
+    memset(access, 0, sizeof(*access));
+}
+
+bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,
+                                        MMIXStackAccessState *access)
+{
     unsigned idx;
 
+    if (access->completed) {
+        g_assert(access->address + 8 == env->sregs[MMIX_SREG_RS]);
+        mmix_cpu_stack_access_commit(env, access);
+        return true;
+    }
     if (access->kind == MMIX_STACK_ACCESS_SAVE) {
         g_assert(access->address == env->sregs[MMIX_SREG_RS]);
         g_assert(access->ring_index == MMIX_STACK_NO_RING_INDEX);
-        mmix_cpu_stack_access_commit(env);
+        mmix_cpu_stack_access_commit(env, access);
         return true;
     }
     if (access->kind != MMIX_STACK_ACCESS_SPILL) {
@@ -54,15 +81,20 @@ bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env)
     g_assert(access->address == env->sregs[MMIX_SREG_RS]);
     g_assert(access->ring_index == idx);
     g_assert(access->value == env->local_regs[idx]);
-    mmix_cpu_stack_access_commit(env);
+    mmix_cpu_stack_access_commit(env, access);
     return true;
 }
 
-bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env)
+bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env,
+                                       MMIXStackAccessState *access)
 {
-    MMIXStackAccessState *access = &env->stack_access;
     unsigned idx;
 
+    if (access->completed) {
+        g_assert(access->address == env->sregs[MMIX_SREG_RS]);
+        mmix_cpu_stack_access_commit(env, access);
+        return true;
+    }
     switch (access->kind) {
     case MMIX_STACK_ACCESS_FILL:
         idx = (access->address >> 3) & env->lring_mask;
@@ -78,7 +110,7 @@ bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env)
     }
 
     g_assert(access->value == 0);
-    mmix_cpu_stack_access_commit(env);
+    mmix_cpu_stack_access_commit(env, access);
     return true;
 }
 
@@ -145,7 +177,7 @@ static void mmix_cpu_stack_store(CPUMMIXState *env)
                                 value);
     cpu_stq_be_data_ra(env, addr, value, ra);
     env->sregs[MMIX_SREG_RS] = addr + 8;
-    mmix_cpu_stack_access_commit(env);
+    mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
 
 static void mmix_cpu_stack_load(CPUMMIXState *env)
@@ -159,7 +191,7 @@ static void mmix_cpu_stack_load(CPUMMIXState *env)
     value = cpu_ldq_be_data_ra(env, addr, ra);
     env->local_regs[idx] = value;
     env->sregs[MMIX_SREG_RS] = addr;
-    mmix_cpu_stack_access_commit(env);
+    mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
 
 static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val)
@@ -171,7 +203,7 @@ static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val)
                                 MMIX_STACK_NO_RING_INDEX, val);
     cpu_stq_be_data_ra(env, addr, val, ra);
     env->sregs[MMIX_SREG_RS] = addr + 8;
-    mmix_cpu_stack_access_commit(env);
+    mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
 
 static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env)
@@ -184,7 +216,7 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env)
                                 MMIX_STACK_NO_RING_INDEX, 0);
     value = cpu_ldq_be_data_ra(env, addr, ra);
     env->sregs[MMIX_SREG_RS] = addr;
-    mmix_cpu_stack_access_commit(env);
+    mmix_cpu_stack_access_commit(env, &env->stack_access);
     return value;
 }
 
