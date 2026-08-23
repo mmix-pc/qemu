@@ -14,6 +14,7 @@
 #include "exec/page-protection.h"
 #include "exec/translation-block.h"
 #include "exec/target_page.h"
+#include "system/address-spaces.h"
 #include "system/memory.h"
 #include "tcg/debug-assert.h"
 #include "accel/tcg/cpu-ops.h"
@@ -358,6 +359,7 @@ bool mmix_cpu_install_translation(CPUMMIXState *env, vaddr address,
     uint8_t page_shift = extract64(rv, 40, 8);
     uint64_t address_space_number = extract64(rv, 3, 10);
     uint8_t function = extract64(rv, 0, 3);
+    hwaddr physical_page;
 
     if ((access_type != MMU_INST_FETCH &&
          access_type != MMU_DATA_LOAD && access_type != MMU_DATA_STORE) ||
@@ -366,6 +368,12 @@ bool mmix_cpu_install_translation(CPUMMIXState *env, vaddr address,
         ((pte >> MMIX_PTE_N_SHIFT) & MMIX_PTE_N_MASK) !=
         address_space_number ||
         (mmix_pte_prot(pte) & mmix_access_prot(access_type)) == 0) {
+        return false;
+    }
+
+    physical_page = pte & (MMIX_PHYS_MASK &
+                           ~((1ULL << page_shift) - 1));
+    if (!memory_region_present(get_system_memory(), physical_page)) {
         return false;
     }
 

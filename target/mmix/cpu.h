@@ -187,6 +187,26 @@ typedef struct MMIXStackAccessState {
     uint64_t value;
 } MMIXStackAccessState;
 
+typedef enum MMIXSaveRestartPhase {
+    MMIX_SAVE_RESTART_NONE,
+    MMIX_SAVE_RESTART_PREPARE,
+    MMIX_SAVE_RESTART_SPILL,
+    MMIX_SAVE_RESTART_GLOBALS,
+    MMIX_SAVE_RESTART_SPECIALS,
+    MMIX_SAVE_RESTART_PACKED,
+} MMIXSaveRestartPhase;
+
+typedef struct MMIXSaveRestartState {
+    MMIXSaveRestartPhase phase;
+    uint32_t x;
+    uint32_t rg;
+    uint32_t old_rl;
+    uint32_t index;
+    uint64_t regs[MMIX_REGS];
+    uint64_t sregs[MMIX_SREGS];
+    uint64_t packed;
+} MMIXSaveRestartState;
+
 typedef struct CPUArchState {
     /*
      * Architectural registers are split by rG: global registers are backed
@@ -204,6 +224,7 @@ typedef struct CPUArchState {
     uint32_t lring_size;
     uint32_t lring_mask;
     MMIXStackAccessState stack_access;
+    MMIXSaveRestartState save_restart;
     uint64_t unsave_restart_address;
     bool unsave_restart_active;
     uint32_t arithmetic_trip_event;
@@ -270,7 +291,7 @@ void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
-bool mmix_cpu_prepare_spill_retry(CPUMMIXState *env);
+bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env);
 bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);

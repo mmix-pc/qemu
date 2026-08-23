@@ -973,7 +973,6 @@ static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, align_mask);
     tcg_gen_qemu_ld_i64(val, addr, 0, memop);
     gen_store_reg(a->x, val);
@@ -985,7 +984,6 @@ static bool gen_ldht(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, 3);
     tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
     tcg_gen_shli_i64(val, val, 32);
@@ -1033,7 +1031,6 @@ static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, 3);
     tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
     gen_helper_mmix_ldsf(val, val);
@@ -1053,7 +1050,6 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 next_rp = tcg_temp_new_i64();
     TCGv_i64 success = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, 7);
     gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
     tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
@@ -1080,7 +1076,6 @@ static bool gen_store_value(DisasContext *ctx, arg_xyz *a, bool immediate,
 {
     TCGv_i64 addr = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, align_mask);
     tcg_gen_qemu_st_i64(val, addr, 0, memop);
     return true;
@@ -1105,7 +1100,6 @@ static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, 3);
     tcg_gen_shri_i64(val, gen_load_reg(a->x), 32);
     tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
@@ -1140,7 +1134,6 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_data_access_insn(ctx);
     gen_effective_address(addr, a, immediate, 3);
     gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
                          gen_load_reg(a->x));
@@ -1219,6 +1212,7 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     ctx->insn = insn;
     ctx->base.pc_next += 4;
 
+    gen_data_access_insn(ctx);
     tcg_gen_movi_i64(cpu_pc, pc);
     tcg_gen_movi_i64(cpu_npc, ctx->base.pc_next);
     if (!decode(ctx, insn)) {

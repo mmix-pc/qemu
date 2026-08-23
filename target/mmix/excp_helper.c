@@ -77,27 +77,18 @@ static void mmix_cpu_enter_trap(CPUState *cs, hwaddr handler, uint64_t where,
 }
 
 static bool mmix_resume_translation_access(uint32_t insn,
+                                           MMUAccessType pending_access,
                                            MMUAccessType *access_type)
 {
-    uint8_t opcode = insn >> 24;
-
     if (insn == MMIX_SWYM_INSN) {
         *access_type = MMU_INST_FETCH;
-        return true;
+    } else if (pending_access == MMU_DATA_LOAD ||
+               pending_access == MMU_DATA_STORE) {
+        *access_type = pending_access;
+    } else {
+        return false;
     }
-
-    /* Explicit loads and stores occupy these MMIX opcode-chart ranges. */
-    if ((opcode >= 0x80 && opcode <= 0x93) ||
-        (opcode >= 0x96 && opcode <= 0x97)) {
-        *access_type = MMU_DATA_LOAD;
-        return true;
-    }
-    if ((opcode >= 0x94 && opcode <= 0x95) ||
-        (opcode >= 0xa0 && opcode <= 0xb7)) {
-        *access_type = MMU_DATA_STORE;
-        return true;
-    }
-    return false;
+    return *access_type == pending_access;
 }
 
 static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
@@ -235,7 +226,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     uint64_t exec;
     uint64_t y;
     uint64_t z;
-    uint8_t ropcode;
+    uint8_t ropcode = 0;
     uint32_t insn;
     MMUAccessType translation_access = MMU_DATA_LOAD;
 
@@ -266,8 +257,9 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                          (uint32_t)exec == env->forced_translation_insn &&
                          (int64_t)y >= 0 &&
                          y == env->forced_translation_address &&
-                         mmix_resume_translation_access((uint32_t)exec,
-                                                        &translation_access);
+                         mmix_resume_translation_access(
+                             (uint32_t)exec, env->forced_translation_access,
+                             &translation_access);
 
             if (!valid ||
                 (translation_access != MMU_INST_FETCH && where < 4) ||
@@ -292,6 +284,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
 
         switch (env->stack_access.kind) {
         case MMIX_STACK_ACCESS_SPILL:
+        case MMIX_STACK_ACCESS_SAVE:
             cause = MMIX_RQ_PROGRAM_W;
             break;
         case MMIX_STACK_ACCESS_FILL:
@@ -305,24 +298,27 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         }
 
         if (pending_stack_access) {
-            if ((exec & cause) == 0 || where < 4) {
+            if ((ropcode != 3 && (exec & cause) == 0) || where < 4) {
                 mmix_resume_unsupported(env, "invalid pending stack access",
                                         exec);
             }
 
             if (cause == MMIX_RQ_PROGRAM_W) {
-                g_assert(mmix_cpu_prepare_spill_retry(env));
+                g_assert(mmix_cpu_prepare_stack_store_retry(env));
             } else {
                 g_assert(mmix_cpu_prepare_stack_load_retry(env));
             }
 
-            /*
-             * rWW points past the instruction whose helper faulted.
-             * Re-execution continues at the first access that did not commit.
-             */
-            env->pc = where - 4;
-            env->npc = where;
-            cpu_loop_exit_noexc(cs);
+            if (ropcode != 3) {
+                /*
+                 * rWW points past the instruction whose helper faulted.
+                 * Re-execution continues at the first access that did not
+                 * commit.
+                 */
+                env->pc = where - 4;
+                env->npc = where;
+                cpu_loop_exit_noexc(cs);
+            }
         }
     }
 

@@ -57,6 +57,246 @@ def forced_instruction_translation_program(target_address, target_regions,
     )
 
 
+def forced_stack_spill_fill_program(depth=40):
+    sub_base = 0x800
+    bootstrap = [
+        *set_octa(R1, NEGATIVE_FORCED_TRANSLATION_MAIN),
+        insn(GO, R2, R1, R0),
+    ]
+    main = [
+        *set_octa(R20, NEGATIVE_FORCED_TRANSLATION_HANDLER),
+        insn(PUT, SR_T, 0, R20),
+        *set_octa(R21, VM_RV_SOFTWARE),
+        insn(PUT, SR_V, 0, R21),
+    ]
+    call_pc = FORCED_TRANSLATION_MAIN + len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (sub_base - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        halt(),
+    ])
+
+    nested = []
+    for level in range(depth):
+        nested.extend([
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    nested.extend([
+        *set_octa(R150, INITIAL_STACK),
+        insn(LDVTS, R151, R150, R0),
+        *set_octa(R152, INITIAL_STACK + 0x2000),
+        insn(LDVTS, R153, R152, R0),
+        wyde(SETL, R0, 1),
+        insn(POP, 1, 0, 0),
+    ])
+
+    handler = [
+        insn(GET, R240, R0, SR_YY),
+        *set_octa(R241, 0x1fff),
+        insn(ANDN, R242, R240, R241),
+        insn(ORI, R242, R242, 7),
+        insn(PUT, SR_ZZ, R0, R242),
+        insn(ADDI, R250, R250, 1),
+        wyde(SETL, R255, 0),
+        insn(RESUME, R0, R0, 1),
+    ]
+    image = program_with_regions(
+        (0, bootstrap),
+        (FORCED_TRANSLATION_MAIN, main),
+        (FORCED_TRANSLATION_HANDLER, handler),
+        (sub_base, nested),
+    )
+    return image, NEGATIVE_FORCED_TRANSLATION_MAIN + (len(main) - 1) * 4
+
+
+def forced_stack_save_unsave_program():
+    count_address = 0x8000000000003000
+    bootstrap = [
+        *set_octa(R1, NEGATIVE_FORCED_TRANSLATION_MAIN),
+        insn(GO, R2, R1, R0),
+    ]
+    main = [
+        *set_octa(R20, NEGATIVE_FORCED_TRANSLATION_HANDLER),
+        insn(PUT, SR_T, 0, R20),
+        *set_octa(R21, VM_RV_SOFTWARE),
+        insn(PUT, SR_V, 0, R21),
+        wyde(SETL, R0, 0x11),
+        wyde(SETL, R1, 0x22),
+        *set_octa(R40, 0x1122334455667788),
+        insn(SAVE, R32, 0, 0),
+        insn(ADDUI, R60, R32, 0),
+        *set_octa(R61, INITIAL_STACK),
+        insn(LDVTS, R62, R61, R0),
+        wyde(SETL, R0, 0xaa),
+        wyde(SETL, R1, 0xbb),
+        wyde(SETL, R40, 0),
+        insn(UNSAVE, R0, R0, R60),
+        insn(ADDI, R70, R0, 0),
+        insn(ADDI, R71, R1, 0),
+        insn(ADDUI, R72, R40, 0),
+        *set_octa(R73, count_address),
+        insn(LDOUI, R74, R73, 0),
+        halt(),
+    ]
+    handler = [
+        insn(GET, R240, R0, SR_YY),
+        *set_octa(R241, 0x1fff),
+        insn(ANDN, R242, R240, R241),
+        insn(ORI, R242, R242, 7),
+        insn(PUT, SR_ZZ, R0, R242),
+        *set_octa(R245, count_address),
+        insn(LDOUI, R246, R245, 0),
+        insn(ADDI, R246, R246, 1),
+        insn(STOUI, R246, R245, 0),
+        wyde(SETL, R255, 0),
+        insn(RESUME, R0, R0, 1),
+    ]
+    image = program_with_regions(
+        (0, bootstrap),
+        (FORCED_TRANSLATION_MAIN, main),
+        (FORCED_TRANSLATION_HANDLER, handler),
+    )
+    return image, NEGATIVE_FORCED_TRANSLATION_MAIN + (len(main) - 1) * 4
+
+
+def forced_translation_nested_handler_program(depth=40, handler_depth=10):
+    sub_base = 0x800
+    outer_handler = 0x1000
+    handler_body = 0x1100
+    handler_calls = 0x1200
+    bootstrap = [
+        *set_octa(R1, NEGATIVE_FORCED_TRANSLATION_MAIN),
+        insn(GO, R2, R1, R0),
+    ]
+    main = [
+        *set_octa(R20, NEGATIVE_FORCED_TRANSLATION_HANDLER),
+        insn(PUT, SR_T, 0, R20),
+        *set_octa(R21, 0x8000000000001000),
+        insn(PUT, SR_TT, 0, R21),
+        *set_octa(R80, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R80),
+        wyde(SETL, R255, 0x55),
+        *set_octa(R23, VM_RV_SOFTWARE),
+        insn(PUT, SR_V, 0, R23),
+    ]
+    call_pc = FORCED_TRANSLATION_MAIN + len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (sub_base - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(ADDUI, R229, R255, 0),
+        insn(GET, R230, 0, SR_K),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+
+    nested = []
+    for level in range(depth):
+        nested.extend([
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    nested.extend([
+        *set_octa(R150, INITIAL_STACK),
+        insn(LDVTS, R151, R150, R0),
+        *set_octa(R152, INITIAL_STACK + 0x2000),
+        insn(LDVTS, R153, R152, R0),
+    ])
+    illegal_pc = sub_base + len(b"".join(nested))
+    illegal = insn(GET, R20, 3, SR_M)
+    nested.extend([
+        illegal,
+        insn(GET, R170, 0, SR_WW),
+        insn(GET, R171, 0, SR_XX),
+        insn(GET, R172, 0, SR_YY),
+        insn(GET, R173, 0, SR_ZZ),
+        insn(GET, R174, 0, SR_BB),
+        wyde(SETL, R0, 1),
+        insn(POP, 1, 0, 0),
+    ])
+
+    forced_handler = [
+        insn(GET, R240, R0, SR_YY),
+        *set_octa(R241, 0x1fff),
+        insn(ANDN, R242, R240, R241),
+        insn(ORI, R242, R242, 7),
+        insn(PUT, SR_ZZ, R0, R242),
+        insn(ADDI, R250, R250, 1),
+        insn(ADDUI, R255, R80, 0),
+        insn(RESUME, R0, R0, 1),
+    ]
+    handler = [
+        insn(GET, R180, 0, SR_WW),
+        insn(GET, R181, 0, SR_XX),
+        insn(GET, R182, 0, SR_YY),
+        insn(GET, R183, 0, SR_ZZ),
+        insn(GET, R184, 0, SR_BB),
+        insn(ADDUI, R185, R255, 0),
+    ]
+    handler_call_pc = outer_handler + len(b"".join(handler))
+    handler.extend([
+        branch(PUSHJ, R255, (handler_body - handler_call_pc) // 4),
+        insn(PUT, SR_WW, 0, R180),
+        insn(PUT, SR_XX, 0, R181),
+        insn(PUT, SR_YY, 0, R182),
+        insn(PUT, SR_ZZ, 0, R183),
+        insn(PUT, SR_BB, 0, R184),
+        insn(PUT, SR_J, 0, R185),
+        insn(ADDUI, R255, R80, 0),
+        insn(RESUME, R0, R0, 1),
+    ])
+
+    body = [insn(GET, R200, 0, SR_J)]
+    body_call_pc = handler_body + len(b"".join(body))
+    body.extend([
+        branch(PUSHJ, R31, (handler_calls - body_call_pc) // 4),
+        insn(PUT, SR_J, 0, R200),
+        insn(POP, 0, 0, 0),
+    ])
+    calls = []
+    for level in range(handler_depth):
+        calls.extend([
+            insn(GET, R201 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R201 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    calls.extend([wyde(SETL, R0, 1), insn(POP, 1, 0, 0)])
+
+    image = program_with_regions(
+        (0, bootstrap),
+        (FORCED_TRANSLATION_MAIN, main),
+        (FORCED_TRANSLATION_HANDLER, forced_handler),
+        (sub_base, nested),
+        (outer_handler, handler),
+        (handler_body, body),
+        (handler_calls, calls),
+    )
+    exit_pc = NEGATIVE_FORCED_TRANSLATION_MAIN + (len(main) - 1) * 4
+    return image, exit_pc, 0x8000000000000000 | illegal_pc, illegal
+
+
+FORCED_STACK_SPILL_FILL = forced_stack_spill_fill_program()
+FORCED_STACK_SAVE_UNSAVE = forced_stack_save_unsave_program()
+FORCED_TRANSLATION_NESTED_HANDLER = forced_translation_nested_handler_program()
+
+
 def invalid_forced_data_translation_test(name, main, pte, expected_where,
                                          expected_exec, initial_value):
     return MMIXTest(
@@ -966,6 +1206,27 @@ ISA_TESTS = [
                 *set_octa(R2, 0x11110c0000002000),
                 insn(PUT, SR_V, 0, R2),
                 wyde(SETL, R3, 0x00ff),    # skipped
+            ],
+            0x80,
+            [
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                halt(),
+            ],
+        ),
+        pc=0x800000000000008c,
+        regs={R3: 0, R40: RQ_PROGRAM_X, R41: RQ_PROGRAM_X, R42: 0x2c},
+    ),
+    MMIXTest(
+        "virtual-translation-reserved-function",
+        program_with_handler(
+            [
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, VM_RV_PAGE0 | 2),
+                insn(PUT, SR_V, 0, R2),
+                wyde(SETL, R3, 0x00ff),
             ],
             0x80,
             [
@@ -1967,6 +2228,40 @@ ISA_TESTS = [
             R61: 0x1111,
         },
     ),
+    MMIXTest(
+        "software-translation-put-rv-invalidates-cache",
+        forced_data_translation_program(
+            [
+                wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+                insn(LDOU, R11, R10, R0),
+                *set_octa(R12, 0x8000000000006000),
+                *set_octa(R13, 0x8877665544332211),
+                insn(STOU, R13, R12, R0),
+                *set_octa(R14, VM_RV_SOFTWARE),
+                insn(PUT, SR_V, R0, R14),
+                insn(LDOU, R15, R10, R0),
+                halt(),
+            ],
+            [
+                insn(ADDI, R60, R60, 1),
+                insn(CMPUI, R61, R60, 1),
+                branch(BNZ, R61, 7),
+                *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 7),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+                *set_octa(R50, 0x6007),
+                insn(PUT, SR_ZZ, R0, R50),
+                insn(RESUME, R0, R0, 1),
+            ],
+            0x1122334455667788,
+        ),
+        pc=0x800000000000016c,
+        regs={
+            R11: 0x1122334455667788,
+            R15: 0x8877665544332211,
+            R60: 2,
+        },
+    ),
     invalid_forced_data_translation_test(
         "software-translation-load-asn-mismatch",
         [
@@ -1999,6 +2294,28 @@ ISA_TESTS = [
         FORCED_TRANSLATION_PHYSICAL | 4,
         0x8000000000000134,
         0x03000000ae0b0a00,
+        0x1122334455667788,
+    ),
+    invalid_forced_data_translation_test(
+        "software-translation-load-zero-permissions",
+        [
+            wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+            insn(LDOU, R11, R10, R0),
+        ],
+        FORCED_TRANSLATION_PHYSICAL,
+        0x8000000000000130,
+        0x030000008e0b0a00,
+        0x1122334455667788,
+    ),
+    invalid_forced_data_translation_test(
+        "software-translation-load-physical-outside-machine",
+        [
+            wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
+            insn(LDOU, R11, R10, R0),
+        ],
+        0x0000001000000007,
+        0x8000000000000130,
+        0x030000008e0b0a00,
         0x1122334455667788,
     ),
     MMIXTest(
@@ -2123,6 +2440,55 @@ ISA_TESTS = [
             R30: 2,
             R40: 0x4000,
             R60: 2,
+        },
+    ),
+    MMIXTest(
+        "software-translation-register-stack-spill-fill",
+        FORCED_STACK_SPILL_FILL[0],
+        pc=FORCED_STACK_SPILL_FILL[1],
+        regs={
+            R151: 2,
+            R153: 2,
+            R225: 41,
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R250: 4,
+        },
+    ),
+    MMIXTest(
+        "software-translation-register-stack-save-unsave",
+        FORCED_STACK_SAVE_UNSAVE[0],
+        pc=FORCED_STACK_SAVE_UNSAVE[1],
+        regs={
+            R0: 0x11,
+            R1: 0x22,
+            R40: 0x1122334455667788,
+            R62: 0,
+            R70: 0x11,
+            R71: 0x22,
+            R72: 0x1122334455667788,
+            R74: 2,
+        },
+    ),
+    MMIXTest(
+        "software-translation-dynamic-handler-register-stack",
+        FORCED_TRANSLATION_NESTED_HANDLER[0],
+        pc=FORCED_TRANSLATION_NESTED_HANDLER[1],
+        regs={
+            R170: FORCED_TRANSLATION_NESTED_HANDLER[2] + 4,
+            R171: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                  int.from_bytes(FORCED_TRANSLATION_NESTED_HANDLER[3], "big"),
+            R172: 0,
+            R173: 0,
+            R174: 0x55,
+            R225: 41,
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0x55,
+            R230: RQ_PROGRAM_B,
+            R250: 4,
         },
     ),
     MMIXTest(
