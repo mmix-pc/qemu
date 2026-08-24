@@ -364,7 +364,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
         }
-        if (ropcode == 0 && trap_state &&
+        if ((ropcode == 0 || ropcode == 1) && trap_state &&
             restart->stack_access.kind == MMIX_STACK_ACCESS_NONE &&
             ((int64_t)env->pc >= 0 || !tracked_restart)) {
             mmix_cpu_break_rules_and_continue(
@@ -508,10 +508,6 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         env->npc = env->insn_replay.continuation;
         cpu_loop_exit_noexc(cs);
     case 1:
-        if (trap_state) {
-            mmix_resume_unsupported(
-                env, "privileged ropcode 1 operand substitution", exec);
-        }
         if (!mmix_resume_ropcode1_supported(insn)) {
             mmix_resume_unsupported(env, "ropcode 1 instruction", exec);
         }
@@ -526,6 +522,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
             .y = y,
             .z = z,
             .insn = insn,
+            .owns_trap_restart = trap_state,
             .substitute_operands = true,
             .active = true,
         };

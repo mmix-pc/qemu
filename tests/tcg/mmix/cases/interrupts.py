@@ -931,7 +931,7 @@ def pending_interrupt_spill_fill_program(depth=10):
 PENDING_INTERRUPT_SPILL_FILL = pending_interrupt_spill_fill_program()
 
 
-def nested_interrupt_replay_program():
+def nested_interrupt_replay_program(substitute_operands=False):
     handler_phys = 0x1800
     handler = (1 << 63) | handler_phys
     timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
@@ -949,6 +949,7 @@ def nested_interrupt_replay_program():
     intc_complete = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
                      MMIX_VIRT_INTC_CONTEXT_COMPLETE)
     saved_insn = int.from_bytes(insn(ADDI, R10, R10, 1), "big")
+    saved_exec = saved_insn | ((1 << 56) if substitute_operands else 0)
 
     prefix = [
         *set_octa(R1, handler),
@@ -966,7 +967,9 @@ def nested_interrupt_replay_program():
              MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
         *set_octa(R70, RK_INTERRUPT_CONTROLLER),
         *set_octa(R71, RQ_PROGRAM_B),
-        *set_octa(R72, saved_insn),
+        *set_octa(R72, saved_exec),
+        wyde(SETL, R73, 0x30),
+        wyde(SETL, R74, 2),
         insn(STTU, R66, R65, R0),
         insn(PUT, SR_K, 0, R71),
         wyde(SETL, R255, 0x55),
@@ -988,6 +991,10 @@ def nested_interrupt_replay_program():
         insn(STOU, R0, R60, R0),
         insn(STOU, R69, R61, R0),
         insn(PUT, SR_XX, 0, R72),
+        *([
+            insn(PUT, SR_YY, 0, R73),
+            insn(PUT, SR_ZZ, 0, R74),
+        ] if substitute_operands else []),
         insn(ADDU, R255, R70, R0),
         insn(RESUME, 0, 0, 1),
     ]
@@ -1010,6 +1017,7 @@ def nested_interrupt_replay_program():
 
 
 NESTED_INTERRUPT_REPLAY = nested_interrupt_replay_program()
+NESTED_INTERRUPT_SUBSTITUTION = nested_interrupt_replay_program(True)
 
 
 INTERRUPT_TESTS = [
@@ -1073,6 +1081,20 @@ INTERRUPT_TESTS = [
             R50: 2,
             R52: MMIX_VIRT_TIMER_IRQ_BASE,
             R53: NESTED_INTERRUPT_REPLAY[2],
+            R54: DYNAMIC_TRAP_RESUME_NEXT,
+        },
+    ),
+    MMIXTest(
+        "resume1-ropcode1-nested-interrupt",
+        NESTED_INTERRUPT_SUBSTITUTION[0],
+        pc=NESTED_INTERRUPT_SUBSTITUTION[1],
+        regs={
+            R10: 0x32,
+            R40: 0,
+            R41: 0x55,
+            R50: 2,
+            R52: MMIX_VIRT_TIMER_IRQ_BASE,
+            R53: NESTED_INTERRUPT_SUBSTITUTION[2],
             R54: DYNAMIC_TRAP_RESUME_NEXT,
         },
     ),

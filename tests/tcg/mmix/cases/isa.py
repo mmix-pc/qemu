@@ -528,6 +528,151 @@ def resume1_ropcode0_replay_program():
 RESUME1_ROPCODE0_REPLAY = resume1_ropcode0_replay_program()
 
 
+def resume1_privileged_substitution_program():
+    saved_insn = int.from_bytes(insn(ADDU, R40, R20, R21), "big")
+    prefix = [
+        *set_octa(R1, NEGATIVE_HANDLER),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        wyde(SETL, R255, 0x55),
+    ]
+    replay_pc = len(b"".join(prefix))
+    prefix.extend([
+        jump(SYNC, 8),
+        insn(GET, R42, 0, SR_K),
+        insn(ADDU, R43, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+    program = program_with_handler(
+        prefix,
+        NEGATIVE_HANDLER & ~(1 << 63),
+        [
+            *set_octa(R3, (1 << 56) | saved_insn),
+            insn(PUT, SR_XX, 0, R3),
+            wyde(SETL, R4, 0xaa),
+            insn(PUT, SR_YY, 0, R4),
+            wyde(SETL, R5, 0xbb),
+            insn(PUT, SR_ZZ, 0, R5),
+            insn(ADDU, R255, R2, R0),
+            insn(RESUME, 0, 0, 1),
+        ],
+    )
+    return program, replay_pc + 4 * 4
+
+
+RESUME1_PRIVILEGED_SUBSTITUTION = resume1_privileged_substitution_program()
+
+
+def resume1_privileged_substitution_trip_program():
+    main = 0x100
+    handler_phys = 0x300
+    handler = (1 << 63) | handler_phys
+    saved_insn = int.from_bytes(insn(ADD, R40, R20, R21), "big")
+    main_code = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        wyde(SETL, R255, 0x55),
+    ]
+    replay_pc = main + len(b"".join(main_code))
+    main_code.extend([
+        jump(SYNC, 8),
+        wyde(SETL, R60, 0xdead),
+        halt(),
+    ])
+    trip_handler = [
+        insn(GET, R41, 0, SR_W),
+        insn(GET, R42, 0, SR_X),
+        insn(GET, R43, 0, SR_Y),
+        insn(GET, R44, 0, SR_Z),
+        insn(GET, R45, 0, SR_K),
+        halt(),
+    ]
+    trap_handler = [
+        *set_octa(R3, RA_EVENT_V << RA_ENABLE_SHIFT),
+        insn(PUT, SR_A, 0, R3),
+        *set_octa(R4, (1 << 56) | saved_insn),
+        insn(PUT, SR_XX, 0, R4),
+        *set_octa(R5, 0x7fffffffffffffff),
+        insn(PUT, SR_YY, 0, R5),
+        wyde(SETL, R6, 1),
+        insn(PUT, SR_ZZ, 0, R6),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    return (
+        program_with_regions(
+            (0, [jump(JMP, main // 4)]),
+            (32, trip_handler),
+            (main, main_code),
+            (handler_phys, trap_handler),
+        ),
+        32 + (len(trip_handler) - 1) * 4,
+        replay_pc + 4,
+        saved_insn,
+    )
+
+
+RESUME1_PRIVILEGED_SUBSTITUTION_TRIP = (
+    resume1_privileged_substitution_trip_program()
+)
+
+
+def resume1_privileged_substitution_trap_program():
+    handler_phys = 0x200
+    handler = (1 << 63) | handler_phys
+    saved_insn = int.from_bytes(insn(FLOT, R40, 0, R20), "big")
+    prefix = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        *set_octa(R3, (1 << 56) | saved_insn),
+        wyde(SETL, R4, 7),
+        wyde(SETL, R5, 9),
+    ]
+    replay_pc = len(b"".join(prefix))
+    prefix.extend([
+        jump(SYNC, 8),
+        insn(ADDUI, R60, R60, 1),
+        halt(),
+    ])
+    handler_code = [
+        insn(ADDUI, R50, R50, 1),
+        insn(CMPI, R51, R50, 1),
+        None,
+        insn(PUT, SR_XX, 0, R3),
+        insn(PUT, SR_YY, 0, R4),
+        insn(PUT, SR_ZZ, 0, R5),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    nested_index = len(handler_code)
+    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code.extend([
+        insn(GET, R52, 0, SR_WW),
+        insn(GET, R53, 0, SR_XX),
+        insn(GET, R54, 0, SR_YY),
+        insn(GET, R55, 0, SR_ZZ),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ])
+    return (
+        program_with_handler(prefix, handler_phys, handler_code),
+        replay_pc + 2 * 4,
+        replay_pc + 4,
+        saved_insn,
+    )
+
+
+RESUME1_PRIVILEGED_SUBSTITUTION_TRAP = (
+    resume1_privileged_substitution_trap_program()
+)
+
+
 def resume1_nested_replay_trap_program():
     handler_phys = 0x200
     handler = (1 << 63) | handler_phys
@@ -4795,6 +4940,45 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
+        "resume1-ropcode1-privileged-substitution",
+        RESUME1_PRIVILEGED_SUBSTITUTION[0],
+        pc=RESUME1_PRIVILEGED_SUBSTITUTION[1],
+        regs={
+            R40: 0x165,
+            R42: RQ_PROGRAM_B,
+            R43: 0x55,
+        },
+    ),
+    MMIXTest(
+        "resume1-ropcode1-privileged-arithmetic-trip",
+        RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[0],
+        pc=RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[1],
+        regs={
+            R40: 0,
+            R41: RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[2],
+            R42: (1 << 63) | RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[3],
+            R43: 0x7fffffffffffffff,
+            R44: 1,
+            R45: RQ_PROGRAM_B,
+            R60: 0,
+        },
+    ),
+    MMIXTest(
+        "resume1-ropcode1-privileged-nested-trap",
+        RESUME1_PRIVILEGED_SUBSTITUTION_TRAP[0],
+        pc=RESUME1_PRIVILEGED_SUBSTITUTION_TRAP[1],
+        regs={
+            R40: 0,
+            R50: 2,
+            R52: RESUME1_PRIVILEGED_SUBSTITUTION_TRAP[2],
+            R53: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 RESUME1_PRIVILEGED_SUBSTITUTION_TRAP[3],
+            R54: 7,
+            R55: 9,
+            R60: 1,
+        },
+    ),
+    MMIXTest(
         "resume1-ropcode0-positive-location",
         program_with_handler(
             [
@@ -4821,6 +5005,39 @@ ISA_TESTS = [
         ),
         pc=0x128,
         regs={R10: 0x20, R20: 0x55, R21: RQ_PROGRAM_B},
+    ),
+    MMIXTest(
+        "resume1-ropcode1-positive-location",
+        program_with_handler(
+            [
+                wyde(SETL, R1, 0x100),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_B),
+                insn(PUT, SR_K, 0, R2),
+                jump(SYNC, 8),
+            ],
+            0x100,
+            [
+                *set_octa(
+                    R3,
+                    (1 << 56) |
+                    int.from_bytes(insn(ADDU, R40, R10, R11), "big"),
+                ),
+                insn(PUT, SR_XX, 0, R3),
+                wyde(SETL, R4, 0xaa),
+                insn(PUT, SR_YY, 0, R4),
+                wyde(SETL, R5, 0xbb),
+                insn(PUT, SR_ZZ, 0, R5),
+                insn(ADDU, R255, R2, R0),
+                insn(RESUME, 0, 0, 1),
+                wyde(SETL, R20, 0x55),
+                insn(GET, R21, 0, SR_Q),
+                wyde(SETL, R255, 0),
+                halt(),
+            ],
+        ),
+        pc=0x138,
+        regs={R20: 0x55, R21: RQ_PROGRAM_B, R40: 0},
     ),
     MMIXTest(
         "resume1-ropcode0-nested-trap",
