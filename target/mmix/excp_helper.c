@@ -396,7 +396,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                     env, &restart->stack_access));
             }
 
-            if (ropcode != 3) {
+            if ((int64_t)exec < 0 || ropcode == 1 || ropcode == 2) {
                 /*
                  * rWW points past the instruction whose helper faulted.
                  * Re-execution continues at the first access that did not
@@ -579,17 +579,17 @@ void mmix_cpu_do_interrupt(CPUState *cs)
             env->rule_break_y = 0;
             env->rule_break_z = 0;
         } else {
-            exec = causes;
+            exec = causes | env->program_exception_insn;
             y = 0;
             z = 0;
             if (env->program_exception_data_access) {
-                exec |= env->data_access.insn;
                 y = env->data_access.address;
                 z = env->data_access.value;
             }
             mmix_cpu_enter_trap(cs, handler, env->npc, exec, y, z);
         }
         env->program_exception_causes = 0;
+        env->program_exception_insn = 0;
         env->program_exception_data_access = false;
         break;
     }

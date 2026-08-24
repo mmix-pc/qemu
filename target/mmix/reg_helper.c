@@ -327,6 +327,7 @@ void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes)
 {
     CPUState *cs = env_cpu(env);
 
+    env->program_exception_insn = env->data_access_insn;
     mmix_cpu_record_program_exception(env, causes);
     cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
     cpu_loop_exit(cs);

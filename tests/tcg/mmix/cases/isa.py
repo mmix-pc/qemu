@@ -1674,7 +1674,13 @@ ISA_TESTS = [
             ],
         ),
         pc=0x800000000000008c,
-        regs={R5: 0, R40: RQ_PROGRAM_X, R41: RQ_PROGRAM_X, R42: 0x44},
+        regs={
+            R5: 0,
+            R40: RQ_PROGRAM_X,
+            R41: RQ_PROGRAM_X |
+                 int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
+            R42: 0x44,
+        },
     ),
     MMIXTest(
         "virtual-translation-asn-mismatch",
@@ -1730,7 +1736,13 @@ ISA_TESTS = [
             ],
         ),
         pc=0x800000000000008c,
-        regs={R3: 0, R40: RQ_PROGRAM_X, R41: RQ_PROGRAM_X, R42: 0x2c},
+        regs={
+            R3: 0,
+            R40: RQ_PROGRAM_X,
+            R41: RQ_PROGRAM_X |
+                 int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
+            R42: 0x2c,
+        },
     ),
     MMIXTest(
         "virtual-translation-reserved-function",
@@ -1751,7 +1763,13 @@ ISA_TESTS = [
             ],
         ),
         pc=0x800000000000008c,
-        regs={R3: 0, R40: RQ_PROGRAM_X, R41: RQ_PROGRAM_X, R42: 0x2c},
+        regs={
+            R3: 0,
+            R40: RQ_PROGRAM_X,
+            R41: RQ_PROGRAM_X |
+                 int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
+            R42: 0x2c,
+        },
     ),
     MMIXTest(
         "negative-address-load-user-trap",
@@ -2469,7 +2487,8 @@ ISA_TESTS = [
             R3: 0,
             R40: 0,
             R41: RQ_PROGRAM_K,
-            R42: RQ_PROGRAM_K,
+            R42: RQ_PROGRAM_K |
+                 int.from_bytes(insn(PUTI, SR_C, 0, 0xaa), "big"),
             R43: 0x20,
             R44: 0,
         },
@@ -2498,7 +2517,7 @@ ISA_TESTS = [
         regs={
             R3: 0,
             R40: RQ_PROGRAM_K,
-            R41: RQ_PROGRAM_K,
+            R41: RQ_PROGRAM_K | int.from_bytes(jump(SYNC, 4), "big"),
             R42: 0x20,
             R43: 0,
         },
@@ -2527,7 +2546,7 @@ ISA_TESTS = [
         regs={
             R3: 0,
             R40: RQ_PROGRAM_K,
-            R41: RQ_PROGRAM_K,
+            R41: RQ_PROGRAM_K | int.from_bytes(jump(SYNC, 7), "big"),
             R42: 0x20,
             R43: 0,
         },
@@ -3071,7 +3090,8 @@ ISA_TESTS = [
             R3: 0,
             R4: 0,
             R40: RQ_PROGRAM_K,
-            R41: RQ_PROGRAM_K,
+            R41: RQ_PROGRAM_K |
+                 int.from_bytes(insn(LDVTSI, R3, R0, 7), "big"),
             R42: 0x20,
             R43: 0,
         },
@@ -4221,6 +4241,50 @@ ISA_TESTS = [
         ),
         pc=0xa0,
         regs={R12: 0x0ff00ff0f00ff00f},
+    ),
+    MMIXTest(
+        "resume-ropcode0-inserted-resume-rule-break",
+        program_with_regions(
+            (
+                0,
+                [
+                    wyde(SETL, R1, 0x100),
+                    insn(PUT, SR_TT, 0, R1),
+                    *set_octa(R2, RQ_PROGRAM_B),
+                    insn(PUT, SR_K, 0, R2),
+                    wyde(SETL, R3, 0x80),
+                    insn(PUT, SR_W, 0, R3),
+                    *set_octa(
+                        R4,
+                        int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
+                    ),
+                    insn(PUT, SR_X, 0, R4),
+                    insn(RESUME, 0, 0, 0),
+                ],
+            ),
+            (0x7c, [wyde(SETL, R10, 0xdead)]),
+            (0x80, [wyde(SETL, R11, 0x55), halt()]),
+            (
+                0x100,
+                [
+                    insn(GET, R40, 0, SR_Q),
+                    insn(GET, R41, 0, SR_WW),
+                    insn(GET, R42, 0, SR_XX),
+                    insn(PUTI, SR_Q, 0, 0),
+                    insn(ADDU, R255, R2, R0),
+                    insn(RESUME, 0, 0, 1),
+                ],
+            ),
+        ),
+        pc=0x84,
+        regs={
+            R10: 0,
+            R11: 0x55,
+            R40: RQ_PROGRAM_B,
+            R41: 0x80,
+            R42: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
+        },
     ),
     MMIXTest(
         "resume-ropcode0-branch-taken-replay",

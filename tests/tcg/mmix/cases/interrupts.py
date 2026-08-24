@@ -645,6 +645,12 @@ def unsave_fault_resume_program():
         insn(STOUI, R224, R239, 32),
         insn(GET, R231, 0, SR_K),
         insn(STOUI, R231, R239, 40),
+        insn(GET, R238, 0, SR_WW),
+        insn(SUBUI, R238, R238, 4),
+        *set_octa(R237, 1 << 63),
+        insn(OR, R238, R238, R237),
+        *set_octa(R236, int.from_bytes(insn(SWYM, 0, 0, 0), "big")),
+        insn(STTUI, R236, R238, 0),
         insn(STOUI, R245, R244, 0),
         insn(PUT, SR_V, 0, R246),
         insn(PUTI, SR_Q, 0, 0),
@@ -1109,7 +1115,9 @@ INTERRUPT_TESTS = [
         regs={
             R220: 1,
             R221: RQ_PROGRAM_B | RQ_PROGRAM_W,
-            R222: RQ_PROGRAM_W,
+            R222: RQ_PROGRAM_W | int.from_bytes(
+                SPILL_FAULT_LOCAL_GROWTH[0][0x294:0x298], "big"
+            ),
             R223: 0x298,
             R224: INITIAL_STACK,
             R225: SPILL_FAULT_LOCAL_GROWTH[2],
@@ -1128,7 +1136,9 @@ INTERRUPT_TESTS = [
         regs={
             R220: 1,
             R221: RQ_PROGRAM_B | RQ_PROGRAM_W,
-            R222: RQ_PROGRAM_W,
+            R222: RQ_PROGRAM_W | int.from_bytes(
+                SPILL_FAULT_PUSHJ[0][0x2a0:0x2a4], "big"
+            ),
             R223: 0x2a4,
             R224: INITIAL_STACK + 8,
             R225: SPILL_FAULT_PUSHJ[2],
@@ -1161,7 +1171,9 @@ INTERRUPT_TESTS = [
         regs={
             R220: 2,
             R221: RQ_PROGRAM_R,
-            R222: RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R | int.from_bytes(
+                FILL_FAULT_RESUME[0][0x25c:0x260], "big"
+            ),
             R223: 0x260,
             R224: INITIAL_STACK + 0x310,
             R225: FILL_FAULT_RESUME[2],
@@ -1184,7 +1196,10 @@ INTERRUPT_TESTS = [
             R60: 0x3344,
             R220: 1,
             R221: RQ_PROGRAM_B | RQ_PROGRAM_R,
-            R222: RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R | int.from_bytes(
+                UNSAVE_FAULT_RESUME[0][UNSAVE_FAULT_RESUME[2] - 4:
+                                      UNSAVE_FAULT_RESUME[2]], "big"
+            ),
             R223: UNSAVE_FAULT_RESUME[2],
             R224: INITIAL_STACK + 0x780,
             R226: INITIAL_STACK,
@@ -1202,7 +1217,12 @@ INTERRUPT_TESTS = [
         regs={
             R220: 1,
             R221: RQ_PROGRAM_B | RQ_PROGRAM_R,
-            R222: RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R | int.from_bytes(
+                HANDLER_POP_FILL_FAULT_RESUME[0][
+                    HANDLER_POP_FILL_FAULT_RESUME[2] - 4:
+                    HANDLER_POP_FILL_FAULT_RESUME[2]
+                ], "big"
+            ),
             R223: HANDLER_POP_FILL_FAULT_RESUME[2],
             R224: INITIAL_STACK + 0xc08,
             R225: HANDLER_POP_FILL_FAULT_RESUME[3],

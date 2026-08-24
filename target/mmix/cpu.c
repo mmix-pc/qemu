@@ -773,6 +773,9 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
         env->program_exception_data_access =
             access_type != MMU_INST_FETCH && env->data_access.valid &&
             (env->data_access.access_mask & (1u << access_type)) != 0;
+        env->program_exception_insn = access_type == MMU_INST_FETCH ?
+                                      MMIX_SWYM_INSN :
+                                      env->data_access_insn;
         mmix_cpu_record_program_exception(env, translation.causes);
         cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
         cpu_loop_exit_restore(cs, retaddr);

@@ -260,6 +260,7 @@ typedef struct CPUArchState {
     bool unsave_restart_active;
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
+    uint32_t program_exception_insn;
     uint32_t rule_break_insn;
     uint64_t rule_break_y;
     uint64_t rule_break_z;

@@ -172,7 +172,7 @@ static bool trans_TRIP(DisasContext *ctx, arg_xyz *a)
 
 static bool trans_RESUME(DisasContext *ctx, arg_xyz *a)
 {
-    if (a->x != 0 || a->y != 0 || a->z > 1) {
+    if (ctx->replay || a->x != 0 || a->y != 0 || a->z > 1) {
         return gen_mmix_break_rules(ctx, a, false);
     }
 
