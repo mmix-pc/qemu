@@ -573,6 +573,147 @@ def resume1_nested_replay_trap_program():
 RESUME1_NESTED_REPLAY_TRAP = resume1_nested_replay_trap_program()
 
 
+def resume0_replay_setup(instruction, continuation, *, setup=()):
+    return [
+        *setup,
+        *set_octa(R1, continuation),
+        insn(PUT, SR_W, 0, R1),
+        *set_octa(R2, int.from_bytes(instruction, "big")),
+        insn(PUT, SR_X, 0, R2),
+        insn(RESUME, 0, 0, 0),
+    ]
+
+
+def resume0_branch_replay_program(taken):
+    replay_pc = 0x7c
+    continuation = replay_pc + 4
+    target = 0x90
+    saved_insn = branch(BZ, R10, (target - replay_pc) // 4)
+    setup = [wyde(SETL, R10, 0 if taken else 1)]
+
+    return program_with_regions(
+        (0, resume0_replay_setup(saved_insn, continuation, setup=setup)),
+        (replay_pc, [wyde(SETL, R12, 0x77)]),
+        (continuation, [wyde(SETL, R13, 0x55), halt()]),
+        (
+            target,
+            [
+                wyde(SETL, R11, 0x33),
+                jump(JMPB, ((replay_pc - target - 4) // 4) & 0xffffff),
+            ],
+        ),
+    )
+
+
+def resume0_arithmetic_trip_replay_program():
+    replay_pc = 0x17c
+    continuation = replay_pc + 4
+    saved_insn = insn(ADD, R12, R10, R11)
+    handler = [
+        insn(GET, R40, 0, SR_W),
+        insn(GET, R41, 0, SR_X),
+        insn(GET, R42, 0, SR_Y),
+        insn(GET, R43, 0, SR_Z),
+        insn(ADDUI, R50, R50, 1),
+        insn(PUTI, SR_A, 0, 0),
+        wyde(SETH, R51, 0x8000),
+        insn(ANDN, R52, R41, R51),
+        insn(PUT, SR_X, 0, R52),
+        insn(RESUME, 0, 0, 0),
+    ]
+    setup = [
+        *set_octa(R10, 0x7fffffffffffffff),
+        wyde(SETL, R11, 1),
+        wyde(SETL, R3, RA_EVENT_V << RA_ENABLE_SHIFT),
+        insn(PUT, SR_A, 0, R3),
+    ]
+
+    return program_with_regions(
+        (0, [jump(JMP, 0x100 // 4)]),
+        (32, handler),
+        (0x100, resume0_replay_setup(saved_insn, continuation, setup=setup)),
+        (replay_pc, [wyde(SETL, R12, 0xdead)]),
+        (continuation, [insn(GET, R44, 0, SR_A), halt()]),
+    )
+
+
+def resume0_explicit_trip_replay_program():
+    replay_pc = 0x17c
+    continuation = replay_pc + 4
+    saved_insn = insn(TRIP, 7, R10, R11)
+    handler = [
+        branch(BZ, R50, 0x100 // 4),
+        insn(GET, R40, 0, SR_W),
+        insn(GET, R41, 0, SR_X),
+        insn(GET, R42, 0, SR_Y),
+        insn(GET, R43, 0, SR_Z),
+        insn(RESUME, 0, 0, 0),
+    ]
+    setup = [
+        wyde(SETL, R50, 1),
+        wyde(SETL, R10, 0xaa),
+        wyde(SETL, R11, 0xbb),
+    ]
+
+    return program_with_regions(
+        (0, handler),
+        (0x100, resume0_replay_setup(saved_insn, continuation, setup=setup)),
+        (replay_pc, [wyde(SETL, R12, 0xdead)]),
+        (continuation, [wyde(SETL, R13, 0x55), halt()]),
+    )
+
+
+def resume0_explicit_trap_replay_program():
+    replay_pc = 0xfc
+    continuation = replay_pc + 4
+    handler_phys = 0x200
+    handler = (1 << 63) | handler_phys
+    saved_insn = insn(TRAP, 1, R10, R11)
+    setup = [
+        *set_octa(R20, handler),
+        insn(PUT, SR_T, 0, R20),
+        *set_octa(R21, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R21),
+        wyde(SETL, R10, 0xaa),
+        wyde(SETL, R11, 0xbb),
+        wyde(SETL, R22, 0xdd),
+        insn(PUT, SR_J, 0, R22),
+        wyde(SETL, R255, 0xcc),
+    ]
+    trap_handler = [
+        insn(GET, R40, 0, SR_WW),
+        insn(GET, R41, 0, SR_XX),
+        insn(GET, R42, 0, SR_YY),
+        insn(GET, R43, 0, SR_ZZ),
+        insn(GET, R44, 0, SR_BB),
+        insn(ADDU, R45, R255, R0),
+        insn(ADDU, R255, R21, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+
+    return program_with_regions(
+        (0, resume0_replay_setup(saved_insn, continuation, setup=setup)),
+        (replay_pc, [wyde(SETL, R12, 0xdead)]),
+        (
+            continuation,
+            [
+                insn(GET, R46, 0, SR_K),
+                insn(ADDU, R47, R255, R0),
+                wyde(SETL, R255, 0),
+                halt(),
+            ],
+        ),
+        (handler_phys, trap_handler),
+    )
+
+
+RESUME0_BRANCH_TAKEN_REPLAY = resume0_branch_replay_program(True)
+RESUME0_BRANCH_NOT_TAKEN_REPLAY = resume0_branch_replay_program(False)
+RESUME0_ARITHMETIC_TRIP_REPLAY = resume0_arithmetic_trip_replay_program()
+RESUME0_EXPLICIT_TRIP_REPLAY = resume0_explicit_trip_replay_program()
+RESUME0_EXPLICIT_TRAP_REPLAY = resume0_explicit_trap_replay_program()
+
+
 ISA_TESTS = [
     MMIXTest(
         "raw-image-startup-registers",
@@ -3777,6 +3918,129 @@ ISA_TESTS = [
         ),
         pc=0xa0,
         regs={R12: 0x0ff00ff0f00ff00f},
+    ),
+    MMIXTest(
+        "resume-ropcode0-branch-taken-replay",
+        RESUME0_BRANCH_TAKEN_REPLAY,
+        pc=0x84,
+        regs={R11: 0x33, R12: 0x77, R13: 0x55},
+    ),
+    MMIXTest(
+        "resume-ropcode0-branch-not-taken-replay",
+        RESUME0_BRANCH_NOT_TAKEN_REPLAY,
+        pc=0x84,
+        regs={R11: 0, R12: 0, R13: 0x55},
+    ),
+    MMIXTest(
+        "resume-ropcode0-geta-replay",
+        program_with_regions(
+            (
+                0,
+                resume0_replay_setup(
+                    branch(GETA, R12, (0xb0 - 0x9c) // 4), 0xa0
+                ),
+            ),
+            (0x9c, [wyde(SETL, R12, 0xdead)]),
+            (0xa0, [insn(ADDU, R40, R12, R0), halt()]),
+        ),
+        pc=0xa4,
+        regs={R12: 0xb0, R40: 0xb0},
+    ),
+    MMIXTest(
+        "resume-ropcode0-jump-replay",
+        program_with_regions(
+            (
+                0,
+                resume0_replay_setup(
+                    jump(JMP, (0xd0 - 0xbc) // 4), 0xc0
+                ),
+            ),
+            (0xbc, [wyde(SETL, R10, 0xdead)]),
+            (0xc0, [wyde(SETL, R11, 0xdead), halt()]),
+            (0xd0, [wyde(SETL, R12, 0x55), halt()]),
+        ),
+        pc=0xd4,
+        regs={R10: 0, R11: 0, R12: 0x55},
+    ),
+    MMIXTest(
+        "resume-ropcode0-go-replay",
+        program_with_regions(
+            (
+                0,
+                resume0_replay_setup(
+                    insn(GO, R12, R10, R0),
+                    0xa0,
+                    setup=set_octa(R10, 0xb0),
+                ),
+            ),
+            (0x9c, [wyde(SETL, R12, 0xdead)]),
+            (0xa0, [wyde(SETL, R13, 0xdead), halt()]),
+            (0xb0, [insn(ADDU, R40, R12, R0), halt()]),
+        ),
+        pc=0xb4,
+        regs={R12: 0xa0, R13: 0, R40: 0xa0},
+    ),
+    MMIXTest(
+        "resume-ropcode0-pushj-pop-replay",
+        program_with_regions(
+            (
+                0,
+                resume0_replay_setup(
+                    branch(PUSHJ, R0, (0xa0 - 0x7c) // 4), 0x80
+                ),
+            ),
+            (0x7c, [wyde(SETL, R0, 0xdead)]),
+            (0x80, [halt()]),
+            (0xa0, [wyde(SETL, R0, 42), insn(POP, 1, 0, 0)]),
+        ),
+        pc=0x80,
+        regs={R0: 42},
+    ),
+    MMIXTest(
+        "resume-ropcode0-arithmetic-trip-replay",
+        RESUME0_ARITHMETIC_TRIP_REPLAY,
+        pc=0x184,
+        regs={
+            R12: 0x8000000000000000,
+            R40: 0x180,
+            R41: DYNAMIC_TRAP_RESUME_NEXT |
+                 int.from_bytes(insn(ADD, R12, R10, R11), "big"),
+            R42: 0x7fffffffffffffff,
+            R43: 1,
+            R44: RA_EVENT_V,
+            R50: 1,
+        },
+    ),
+    MMIXTest(
+        "resume-ropcode0-explicit-trip-replay",
+        RESUME0_EXPLICIT_TRIP_REPLAY,
+        pc=0x184,
+        regs={
+            R12: 0,
+            R13: 0x55,
+            R40: 0x180,
+            R41: DYNAMIC_TRAP_RESUME_NEXT |
+                 int.from_bytes(insn(TRIP, 7, R10, R11), "big"),
+            R42: 0xaa,
+            R43: 0xbb,
+        },
+    ),
+    MMIXTest(
+        "resume-ropcode0-explicit-trap-replay",
+        RESUME0_EXPLICIT_TRAP_REPLAY,
+        pc=0x10c,
+        regs={
+            R12: 0,
+            R40: 0x100,
+            R41: DYNAMIC_TRAP_RESUME_NEXT |
+                 int.from_bytes(insn(TRAP, 1, R10, R11), "big"),
+            R42: 0xaa,
+            R43: 0xbb,
+            R44: 0xcc,
+            R45: 0xdd,
+            R46: RQ_PROGRAM_B,
+            R47: 0xcc,
+        },
     ),
     MMIXTest(
         "resume1-ropcode0-replay",
