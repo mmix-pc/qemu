@@ -822,7 +822,8 @@ def resume0_substitution_trip_test(name, instruction, y, z, event):
     )
 
 
-def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140):
+def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140,
+                           *, setup=(), expected_regs=None):
     handler = 0x180
     saved_insn = int.from_bytes(instruction, "big")
     resume_insn = insn(RESUME, 0, 0, 0)
@@ -835,6 +836,7 @@ def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140):
         insn(PUT, SR_W, 0, R3),
         *set_octa(R4, (ropcode << 56) | saved_insn),
         insn(PUT, SR_X, 0, R4),
+        *setup,
         insn(RESUME, 0, 0, 0),
         wyde(SETL, R10, 0xdead),
     ]
@@ -844,17 +846,64 @@ def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140):
         insn(GET, R42, 0, SR_XX),
         halt(),
     ]
+    regs = {
+        R10: 0,
+        R40: RQ_PROGRAM_B,
+        R41: (len(prefix) - 1) * 4,
+        R42: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+             int.from_bytes(resume_insn, "big"),
+    }
+    if expected_regs is not None:
+        regs.update(expected_regs)
     return MMIXTest(
         name,
         program_with_handler(prefix, handler, trap_handler),
         pc=handler + (len(trap_handler) - 1) * 4,
-        regs={
-            R10: 0,
-            R40: RQ_PROGRAM_B,
-            R41: (len(prefix) - 1) * 4,
-            R42: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
-                 int.from_bytes(resume_insn, "big"),
-        },
+        regs=regs,
+    )
+
+
+ROPCODE1_ELIGIBLE_OPCODES = frozenset((
+    *range(0x01, 0x40),
+    *range(0x60, 0x80),
+    *range(0xc0, 0xf0),
+))
+
+
+def ropcode1_opcode_audit_test(opcode):
+    instruction = bytes((opcode, R200, R20, R21))
+    name = f"resume-ropcode1-opcode-{opcode:02x}"
+
+    if opcode not in ROPCODE1_ELIGIBLE_OPCODES:
+        return resume_rule_break_test(
+            f"{name}-rejected",
+            instruction,
+            setup=set_octa(R200, 0x1122334455667788),
+            expected_regs={R200: 0x1122334455667788},
+        )
+
+    continuation = 0x100
+    saved_insn = int.from_bytes(instruction, "big")
+    program = program_with_regions(
+        (
+            0,
+            [
+                *set_octa(R1, continuation),
+                insn(PUT, SR_W, 0, R1),
+                *set_octa(R2, (1 << 56) | saved_insn),
+                insn(PUT, SR_X, 0, R2),
+                insn(PUTI, SR_Y, 0, 0),
+                insn(PUTI, SR_Z, 0, 0),
+                insn(RESUME, 0, 0, 0),
+            ],
+        ),
+        (continuation, [wyde(SETL, R250, opcode + 1), halt()]),
+    )
+    return MMIXTest(
+        f"{name}-eligible",
+        program,
+        pc=continuation + 4,
+        regs={R250: opcode + 1},
     )
 
 
@@ -1082,6 +1131,14 @@ ROPCODE1_RULE_BREAK_TESTS = [
         insn(ADD, R200, R20, R21),
         continuation=0,
     ),
+    resume_rule_break_test(
+        "resume-ropcode1-at-local-boundary",
+        insn(ADD, R5, R20, R21),
+    ),
+    resume_rule_break_test(
+        "resume-ropcode1-below-global-boundary",
+        insn(ADD, R31, R20, R21),
+    ),
     *[
         resume_rule_break_test(
             f"resume-ropcode1-nonnormal-{high:x}",
@@ -1089,7 +1146,125 @@ ROPCODE1_RULE_BREAK_TESTS = [
         )
         for high in (0x4, 0x5, 0x8, 0x9, 0xa, 0xb, 0xf)
     ],
+    *[
+        resume_rule_break_test(
+            f"resume-ropcode1-optional-{name}-deferred",
+            instruction,
+        )
+        for name, instruction in (
+            ("syncd", insn(SYNCD, R200, R20, R21)),
+            ("syncdi", insn(SYNCDI, R200, R20, R21)),
+            ("syncid", insn(SYNCID, R200, R20, R21)),
+            ("syncidi", insn(SYNCIDI, R200, R20, R21)),
+        )
+    ],
 ]
+
+ROPCODE1_OPCODE_AUDIT_TESTS = [
+    ropcode1_opcode_audit_test(opcode) for opcode in range(0x100)
+]
+
+
+def repeated_ropcode1_rule_break_program():
+    handler = 0x180
+    invalid_exec = (1 << 56) | int.from_bytes(
+        insn(TRAP, R200, R20, R21), "big"
+    )
+    program = [
+        wyde(SETL, R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        *set_octa(R3, invalid_exec),
+        *set_octa(R200, 0x1122334455667788),
+    ]
+    for _ in range(2):
+        continuation = (len(program) + 7) * 4
+        program.extend([
+            *set_octa(R4, continuation),
+            insn(PUT, SR_W, 0, R4),
+            insn(PUT, SR_X, 0, R3),
+            insn(RESUME, 0, 0, 0),
+            insn(ADDUI, R60, R60, 1),
+        ])
+    program.append(halt())
+    handler_code = [
+        insn(ADDUI, R50, R50, 1),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    return (
+        program_with_handler(program, handler, handler_code),
+        (len(program) - 1) * 4,
+    )
+
+
+REPEATED_ROPCODE1_RULE_BREAK = repeated_ropcode1_rule_break_program()
+
+
+def nested_ropcode1_rule_break_program():
+    handler_phys = 0x200
+    handler = (1 << 63) | handler_phys
+    invalid_exec = (1 << 56) | int.from_bytes(
+        insn(TRAP, R200, R20, R21), "big"
+    )
+    prefix = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        *set_octa(R3, invalid_exec),
+        wyde(SETL, R255, 0x55),
+    ]
+    continuation = len(b"".join(prefix)) + 4
+    prefix.extend([
+        jump(SYNC, 8),
+        insn(GET, R40, 0, SR_K),
+        insn(ADDU, R41, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+
+    handler_code = [
+        insn(ADDUI, R50, R50, 1),
+        insn(CMPI, R51, R50, 1),
+        None,
+        insn(GET, R60, 0, SR_WW),
+        insn(GET, R61, 0, SR_XX),
+        insn(GET, R62, 0, SR_YY),
+        insn(GET, R63, 0, SR_ZZ),
+        insn(GET, R64, 0, SR_BB),
+        insn(PUT, SR_K, 0, R2),
+        insn(PUT, SR_XX, 0, R3),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+        insn(PUT, SR_WW, 0, R60),
+        insn(PUT, SR_XX, 0, R61),
+        insn(PUT, SR_YY, 0, R62),
+        insn(PUT, SR_ZZ, 0, R63),
+        insn(PUT, SR_BB, 0, R64),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    nested_index = len(handler_code)
+    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code.extend([
+        insn(GET, R70, 0, SR_WW),
+        insn(GET, R71, 0, SR_XX),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ])
+    return (
+        program_with_handler(prefix, handler_phys, handler_code),
+        continuation + 3 * 4,
+        continuation,
+        handler + 12 * 4,
+    )
+
+
+NESTED_ROPCODE1_RULE_BREAK = nested_ropcode1_rule_break_program()
 
 
 def resume0_branch_replay_program(taken):
@@ -4756,6 +4931,33 @@ ISA_TESTS = [
     ),
     *ROPCODE1_SUBSTITUTION_TESTS,
     *ROPCODE1_RULE_BREAK_TESTS,
+    *ROPCODE1_OPCODE_AUDIT_TESTS,
+    MMIXTest(
+        "resume-ropcode1-repeated-rule-break",
+        REPEATED_ROPCODE1_RULE_BREAK[0],
+        pc=REPEATED_ROPCODE1_RULE_BREAK[1],
+        regs={
+            R50: 2,
+            R60: 2,
+            R200: 0x1122334455667788,
+        },
+    ),
+    MMIXTest(
+        "resume-ropcode1-nested-rule-break",
+        NESTED_ROPCODE1_RULE_BREAK[0],
+        pc=NESTED_ROPCODE1_RULE_BREAK[1],
+        regs={
+            R40: RQ_PROGRAM_B,
+            R41: 0x55,
+            R50: 2,
+            R60: NESTED_ROPCODE1_RULE_BREAK[2],
+            R61: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 int.from_bytes(jump(SYNC, 8), "big"),
+            R70: NESTED_ROPCODE1_RULE_BREAK[3],
+            R71: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 int.from_bytes(insn(RESUME, 0, 0, 1), "big"),
+        },
+    ),
     MMIXTest(
         "resume-ropcode0-inserted-resume-rule-break",
         program_with_regions(

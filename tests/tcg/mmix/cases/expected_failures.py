@@ -4,25 +4,8 @@
 
 from .common import *
 
-def unsupported_ropcode1_program(instruction):
-    return b"".join(
-        [
-            wyde(SETL, R1, 0x80),
-            insn(PUT, SR_W, 0, R1),
-            *set_octa(R2, (1 << 56) | int.from_bytes(instruction, "big")),
-            insn(PUT, SR_X, 0, R2),
-            insn(RESUME, 0, 0, 0),
-        ]
-    )
-
 
 EXPECTED_FAILURE_TESTS = [
-    MMIXExpectedFailure(
-        "unsupported-resume-ropcode1-trap",
-        unsupported_ropcode1_program(insn(TRAP, R200, R20, R21)),
-        ("MMIX unsupported RESUME ropcode 1 instruction",
-         "MMIX emulator failure"),
-    ),
     MMIXExpectedFailure(
         "register-stack-underflow",
         insn(POP, 0, 0, 0),
