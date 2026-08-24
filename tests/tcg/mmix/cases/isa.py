@@ -486,6 +486,93 @@ def runtime_rule_breaks_masked_program():
 RUNTIME_RULE_BREAKS_MASKED = runtime_rule_breaks_masked_program()
 
 
+def resume1_ropcode0_replay_program():
+    saved_insn = int.from_bytes(insn(ADDI, R10, R10, 7), "big")
+    prefix = [
+        *set_octa(R1, NEGATIVE_HANDLER),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        wyde(SETL, R255, 0x55),
+        wyde(SETL, R10, 0x20),
+    ]
+    replay_pc = len(b"".join(prefix))
+    prefix.extend([
+        jump(SYNC, 8),
+        insn(GET, R40, 0, SR_WW),
+        insn(GET, R41, 0, SR_XX),
+        insn(GET, R42, 0, SR_YY),
+        insn(GET, R43, 0, SR_ZZ),
+        insn(GET, R44, 0, SR_K),
+        insn(ADDU, R45, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+    program = program_with_handler(
+        prefix,
+        NEGATIVE_HANDLER & ~(1 << 63),
+        [
+            *set_octa(R3, saved_insn),
+            insn(PUT, SR_XX, 0, R3),
+            wyde(SETL, R4, 0xaa),
+            insn(PUT, SR_YY, 0, R4),
+            wyde(SETL, R5, 0xbb),
+            insn(PUT, SR_ZZ, 0, R5),
+            insn(ADDU, R255, R2, R0),
+            insn(RESUME, 0, 0, 1),
+        ],
+    )
+    return program, replay_pc + 8 * 4, replay_pc + 4, saved_insn
+
+
+RESUME1_ROPCODE0_REPLAY = resume1_ropcode0_replay_program()
+
+
+def resume1_nested_replay_trap_program():
+    handler_phys = 0x200
+    handler = (1 << 63) | handler_phys
+    saved_insn = int.from_bytes(insn(GET, R10, 3, SR_M), "big")
+    prefix = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        *set_octa(R3, saved_insn),
+        wyde(SETL, R255, 0x55),
+    ]
+    replay_pc = len(b"".join(prefix))
+    prefix.extend([
+        jump(SYNC, 8),
+        insn(GET, R40, 0, SR_K),
+        insn(ADDU, R41, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+
+    handler_code = [
+        insn(ADDUI, R50, R50, 1),
+        insn(CMPI, R51, R50, 1),
+        None,
+        insn(PUT, SR_XX, 0, R3),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    nested_index = len(handler_code)
+    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code.extend([
+        insn(GET, R52, 0, SR_WW),
+        insn(GET, R53, 0, SR_XX),
+        insn(ADDU, R255, R2, R0),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    program = program_with_handler(prefix, handler_phys, handler_code)
+    return program, replay_pc + 4 * 4, replay_pc + 4, saved_insn
+
+
+RESUME1_NESTED_REPLAY_TRAP = resume1_nested_replay_trap_program()
+
+
 ISA_TESTS = [
     MMIXTest(
         "raw-image-startup-registers",
@@ -3690,6 +3777,61 @@ ISA_TESTS = [
         ),
         pc=0xa0,
         regs={R12: 0x0ff00ff0f00ff00f},
+    ),
+    MMIXTest(
+        "resume1-ropcode0-replay",
+        RESUME1_ROPCODE0_REPLAY[0],
+        pc=RESUME1_ROPCODE0_REPLAY[1],
+        regs={
+            R10: 0x27,
+            R40: RESUME1_ROPCODE0_REPLAY[2],
+            R41: RESUME1_ROPCODE0_REPLAY[3],
+            R42: 0xaa,
+            R43: 0xbb,
+            R44: RQ_PROGRAM_B,
+            R45: 0x55,
+        },
+    ),
+    MMIXTest(
+        "resume1-ropcode0-positive-location",
+        program_with_handler(
+            [
+                wyde(SETL, R1, 0x100),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_B),
+                insn(PUT, SR_K, 0, R2),
+                wyde(SETL, R10, 0x20),
+                jump(SYNC, 8),
+            ],
+            0x100,
+            [
+                *set_octa(
+                    R3, int.from_bytes(insn(ADDI, R10, R10, 7), "big")
+                ),
+                insn(PUT, SR_XX, 0, R3),
+                insn(ADDU, R255, R2, R0),
+                insn(RESUME, 0, 0, 1),
+                wyde(SETL, R20, 0x55),
+                insn(GET, R21, 0, SR_Q),
+                wyde(SETL, R255, 0),
+                halt(),
+            ],
+        ),
+        pc=0x128,
+        regs={R10: 0x20, R20: 0x55, R21: RQ_PROGRAM_B},
+    ),
+    MMIXTest(
+        "resume1-ropcode0-nested-trap",
+        RESUME1_NESTED_REPLAY_TRAP[0],
+        pc=RESUME1_NESTED_REPLAY_TRAP[1],
+        regs={
+            R40: RQ_PROGRAM_B,
+            R41: 0x55,
+            R50: 2,
+            R52: RESUME1_NESTED_REPLAY_TRAP[2],
+            R53: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 RESUME1_NESTED_REPLAY_TRAP[3],
+        },
     ),
     MMIXTest(
         "floating-point-exceptions",

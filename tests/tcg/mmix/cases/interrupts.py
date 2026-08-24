@@ -925,6 +925,87 @@ def pending_interrupt_spill_fill_program(depth=10):
 PENDING_INTERRUPT_SPILL_FILL = pending_interrupt_spill_fill_program()
 
 
+def nested_interrupt_replay_program():
+    handler_phys = 0x1800
+    handler = (1 << 63) | handler_phys
+    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
+    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                     MMIX_VIRT_TIMER_CONTEXT_COMPARE)
+    timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                     MMIX_VIRT_TIMER_CONTEXT_CONTROL)
+    timer_status = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                    MMIX_VIRT_TIMER_CONTEXT_STATUS)
+    intc_enable = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                   MMIX_VIRT_INTC_CONTEXT_ENABLE)
+    intc_claim = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                  MMIX_VIRT_INTC_CONTEXT_CLAIM)
+    intc_complete = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                     MMIX_VIRT_INTC_CONTEXT_COMPLETE)
+    saved_insn = int.from_bytes(insn(ADDI, R10, R10, 1), "big")
+
+    prefix = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R60, timer_compare),
+        *set_octa(R61, timer_control),
+        *set_octa(R62, timer_status),
+        *set_octa(R63, intc_claim),
+        *set_octa(R64, intc_complete),
+        *set_octa(R65, intc_enable),
+        *set_octa(R66, 1 << MMIX_VIRT_TIMER_IRQ_BASE),
+        wyde(SETL, R67, MMIX_VIRT_TIMER_IRQ_BASE),
+        wyde(SETL, R68, MMIX_VIRT_TIMER_STATUS_PENDING),
+        wyde(SETL, R69, MMIX_VIRT_TIMER_CONTROL_ENABLE |
+             MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
+        *set_octa(R70, RK_INTERRUPT_CONTROLLER),
+        *set_octa(R71, RQ_PROGRAM_B),
+        *set_octa(R72, saved_insn),
+        insn(STTU, R66, R65, R0),
+        insn(PUT, SR_K, 0, R71),
+        wyde(SETL, R255, 0x55),
+        wyde(SETL, R10, 0x20),
+    ]
+    replay_pc = len(b"".join(prefix))
+    prefix.extend([
+        jump(SYNC, 8),
+        insn(GET, R40, 0, SR_K),
+        insn(ADDU, R41, R255, R0),
+        insn(ADDU, R255, R70, R0),
+        halt(),
+    ])
+
+    handler_code = [
+        insn(ADDUI, R50, R50, 1),
+        insn(CMPI, R51, R50, 1),
+        None,
+        insn(STOU, R0, R60, R0),
+        insn(STOU, R69, R61, R0),
+        insn(PUT, SR_XX, 0, R72),
+        insn(ADDU, R255, R70, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    nested_index = len(handler_code)
+    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code.extend([
+        insn(LDTU, R52, R63, R0),
+        insn(STOU, R0, R61, R0),
+        insn(STOU, R68, R62, R0),
+        insn(STTU, R67, R64, R0),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(GET, R53, 0, SR_WW),
+        insn(GET, R54, 0, SR_XX),
+        wyde(SETL, R255, 0),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    program = program_with_handler(prefix, handler_phys, handler_code)
+    return program, replay_pc + 4 * 4, replay_pc
+
+
+NESTED_INTERRUPT_REPLAY = nested_interrupt_replay_program()
+
+
 INTERRUPT_TESTS = [
     MMIXTest(
         "masked-interrupt-request",
@@ -973,6 +1054,20 @@ INTERRUPT_TESTS = [
             R53: 0,
             R54: EXTERNAL_DYNAMIC_TRAP_RESUME[3],
             R55: DYNAMIC_TRAP_RESUME_NEXT,
+        },
+    ),
+    MMIXTest(
+        "resume1-ropcode0-nested-interrupt",
+        NESTED_INTERRUPT_REPLAY[0],
+        pc=NESTED_INTERRUPT_REPLAY[1],
+        regs={
+            R10: 0x21,
+            R40: 0,
+            R41: 0x55,
+            R50: 2,
+            R52: MMIX_VIRT_TIMER_IRQ_BASE,
+            R53: NESTED_INTERRUPT_REPLAY[2],
+            R54: DYNAMIC_TRAP_RESUME_NEXT,
         },
     ),
     MMIXTest(

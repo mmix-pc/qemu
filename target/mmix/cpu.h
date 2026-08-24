@@ -189,21 +189,23 @@ typedef struct MMIXStackAccessState {
     bool completed;
 } MMIXStackAccessState;
 
+typedef struct MMIXInsnReplayState {
+    uint64_t insn_pc;
+    uint64_t continuation;
+    uint32_t insn;
+    bool owns_trap_restart;
+    bool active;
+} MMIXInsnReplayState;
+
 typedef struct MMIXTrapRestartState {
     MMIXStackAccessState stack_access;
+    MMIXInsnReplayState interrupted_replay;
     uint32_t forced_translation_insn;
     uint64_t forced_translation_address;
     uint64_t forced_translation_where;
     uint8_t forced_translation_access;
     bool forced_translation;
 } MMIXTrapRestartState;
-
-typedef struct MMIXInsnReplayState {
-    uint64_t insn_pc;
-    uint64_t continuation;
-    uint32_t insn;
-    bool active;
-} MMIXInsnReplayState;
 
 typedef enum MMIXSaveRestartPhase {
     MMIX_SAVE_RESTART_NONE,

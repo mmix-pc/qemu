@@ -1217,8 +1217,7 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
         g_assert(pc == ctx->env->insn_replay.insn_pc);
         insn = ctx->base.tb->cs_base;
         ctx->base.pc_next = ctx->env->insn_replay.continuation;
-        tcg_gen_st8_i32(tcg_constant_i32(false), tcg_env,
-                        offsetof(CPUMMIXState, insn_replay.active));
+        gen_helper_mmix_consume_insn_replay(tcg_env);
     } else {
         insn = translator_ldl_end(ctx->env, &ctx->base, pc, MO_BE);
         ctx->base.pc_next += 4;
