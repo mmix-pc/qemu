@@ -159,6 +159,8 @@ enum {
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_SWYM_INSN 0xfd000000U
 #define MMIX_TB_REPLAY_FLAG (1ULL << 63)
+#define MMIX_DATA_ACCESS_LOAD  (1u << MMU_DATA_LOAD)
+#define MMIX_DATA_ACCESS_STORE (1u << MMU_DATA_STORE)
 
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)
@@ -196,6 +198,15 @@ typedef struct MMIXInsnReplayState {
     bool owns_trap_restart;
     bool active;
 } MMIXInsnReplayState;
+
+typedef struct MMIXDataAccessState {
+    /* Captured before an explicit TCG memory operation can fault. */
+    uint64_t address;
+    uint64_t value;
+    uint32_t insn;
+    uint8_t access_mask;
+    bool valid;
+} MMIXDataAccessState;
 
 typedef struct MMIXTrapRestartState {
     MMIXStackAccessState stack_access;
@@ -253,6 +264,8 @@ typedef struct CPUArchState {
     uint64_t rule_break_y;
     uint64_t rule_break_z;
     uint32_t data_access_insn;
+    MMIXDataAccessState data_access;
+    bool program_exception_data_access;
     MMIXInsnReplayState insn_replay;
     uint32_t forced_translation_insn;
     uint64_t forced_translation_address;

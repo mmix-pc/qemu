@@ -966,6 +966,24 @@ static void gen_data_access_insn(DisasContext *ctx)
 {
     tcg_gen_st_i32(tcg_constant_i32(ctx->insn), tcg_env,
                    offsetof(CPUMMIXState, data_access_insn));
+    tcg_gen_st8_i32(tcg_constant_i32(false), tcg_env,
+                    offsetof(CPUMMIXState, data_access.valid));
+}
+
+static void gen_explicit_data_access(DisasContext *ctx, TCGv_i64 address,
+                                     TCGv_i64 value,
+                                     uint8_t access_mask)
+{
+    tcg_gen_st_i64(address, tcg_env,
+                   offsetof(CPUMMIXState, data_access.address));
+    tcg_gen_st_i64(value, tcg_env,
+                   offsetof(CPUMMIXState, data_access.value));
+    tcg_gen_st_i32(tcg_constant_i32(ctx->insn), tcg_env,
+                   offsetof(CPUMMIXState, data_access.insn));
+    tcg_gen_st8_i32(tcg_constant_i32(access_mask), tcg_env,
+                    offsetof(CPUMMIXState, data_access.access_mask));
+    tcg_gen_st8_i32(tcg_constant_i32(true), tcg_env,
+                    offsetof(CPUMMIXState, data_access.valid));
 }
 
 static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
@@ -975,6 +993,8 @@ static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, align_mask);
+    gen_explicit_data_access(ctx, addr, gen_load_z(a, immediate),
+                             MMIX_DATA_ACCESS_LOAD);
     tcg_gen_qemu_ld_i64(val, addr, 0, memop);
     gen_store_reg(a->x, val);
     return true;
@@ -986,6 +1006,8 @@ static bool gen_ldht(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
+    gen_explicit_data_access(ctx, addr, gen_load_z(a, immediate),
+                             MMIX_DATA_ACCESS_LOAD);
     tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
     tcg_gen_shli_i64(val, val, 32);
     gen_store_reg(a->x, val);
@@ -1033,6 +1055,8 @@ static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
+    gen_explicit_data_access(ctx, addr, gen_load_z(a, immediate),
+                             MMIX_DATA_ACCESS_LOAD);
     tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
     gen_helper_mmix_ldsf(val, val);
     gen_store_reg(a->x, val);
@@ -1053,6 +1077,9 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_effective_address(addr, a, immediate, 7);
     gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
+    gen_explicit_data_access(ctx, addr, new,
+                             MMIX_DATA_ACCESS_LOAD |
+                             MMIX_DATA_ACCESS_STORE);
     tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
 
     tcg_gen_movcond_i64(TCG_COND_EQ, next_rp, old, rp, rp, old);
@@ -1078,6 +1105,7 @@ static bool gen_store_value(DisasContext *ctx, arg_xyz *a, bool immediate,
     TCGv_i64 addr = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, align_mask);
+    gen_explicit_data_access(ctx, addr, val, MMIX_DATA_ACCESS_STORE);
     tcg_gen_qemu_st_i64(val, addr, 0, memop);
     return true;
 }
@@ -1103,6 +1131,7 @@ static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_effective_address(addr, a, immediate, 3);
     tcg_gen_shri_i64(val, gen_load_reg(a->x), 32);
+    gen_explicit_data_access(ctx, addr, val, MMIX_DATA_ACCESS_STORE);
     tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
     return true;
 }
@@ -1138,6 +1167,7 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     gen_effective_address(addr, a, immediate, 3);
     gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
                          gen_load_reg(a->x));
+    gen_explicit_data_access(ctx, addr, val, MMIX_DATA_ACCESS_STORE);
     tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
     return true;
 }

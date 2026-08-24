@@ -714,6 +714,264 @@ RESUME0_EXPLICIT_TRIP_REPLAY = resume0_explicit_trip_replay_program()
 RESUME0_EXPLICIT_TRAP_REPLAY = resume0_explicit_trap_replay_program()
 
 
+REPLAY_DATA_VIRTUAL = 0x2000
+REPLAY_DATA_PHYSICAL = 0x6000
+REPLAY_DATA_PTE = VM_PAGE_TABLE + 8
+REPLAY_DATA_HANDLER_PHYS = 0x400
+REPLAY_DATA_HANDLER = (1 << 63) | REPLAY_DATA_HANDLER_PHYS
+REPLAY_DATA_VALUE = 0x80ff12343fc00000
+
+
+def recoverable_data_access_handler(*, repeated=False):
+    handler = [
+        insn(GET, R200, 0, SR_WW),
+        insn(GET, R201, 0, SR_XX),
+        insn(GET, R202, 0, SR_YY),
+        insn(GET, R203, 0, SR_ZZ),
+        insn(ADDU, R204, R111, R0),
+        *set_octa(R205, (1 << 63) | REPLAY_DATA_PHYSICAL),
+        insn(LDOU, R207, R205, R0),
+        insn(ADDUI, R210, R210, 1),
+    ]
+
+    if repeated:
+        handler.append(insn(CMPI, R211, R210, 1))
+        branch_index = len(handler)
+        handler.extend([
+            None,
+            insn(ADDU, R255, R103, R0),
+            insn(RESUME, 0, 0, 1),
+        ])
+        repair_index = len(handler)
+        handler[branch_index] = branch(BNZ, R211,
+                                       repair_index - branch_index)
+
+    handler.extend([
+        *set_octa(R220, (1 << 63) | REPLAY_DATA_PTE),
+        *set_octa(R221, REPLAY_DATA_PHYSICAL | 7),
+        insn(STOU, R221, R220, R0),
+        insn(PUT, SR_V, 0, R102),
+        insn(ADDU, R255, R103, R0),
+        insn(RESUME, 0, 0, 1),
+    ])
+    return handler
+
+
+def recoverable_data_access_program(instruction, cause, initial_pte,
+                                    initial_memory, operand_setup, post,
+                                    *, repeated=False):
+    prefix = [
+        *set_octa(R100, VM_PAGE_TABLE),
+        wyde(SETL, R101, 7),
+        insn(STOU, R101, R100, R0),
+        *set_octa(R100, REPLAY_DATA_PTE),
+        *set_octa(R101, initial_pte),
+        insn(STOU, R101, R100, R0),
+        *set_octa(R100, REPLAY_DATA_PHYSICAL),
+        *set_octa(R101, initial_memory),
+        insn(STOU, R101, R100, R0),
+        *set_octa(R100, REPLAY_DATA_HANDLER),
+        insn(PUT, SR_TT, 0, R100),
+        *set_octa(R102, VM_RV_PAGE0),
+        insn(PUT, SR_V, 0, R102),
+        *set_octa(R103, cause),
+        insn(PUT, SR_K, 0, R103),
+        *operand_setup,
+    ]
+    fault_pc = len(b"".join(prefix))
+    prefix.extend([instruction, *post])
+    exit_pc = fault_pc + len(b"".join(post))
+
+    return (
+        program_with_regions(
+            (0, prefix),
+            (
+                REPLAY_DATA_HANDLER_PHYS,
+                recoverable_data_access_handler(repeated=repeated),
+            ),
+        ),
+        fault_pc,
+        exit_pc,
+    )
+
+
+def recoverable_load_test(name, instruction, address, expected,
+                          *, missing=False, repeated=False):
+    initial_pte = 0 if missing else REPLAY_DATA_PHYSICAL | 3
+    marker = 0xdeadbeefcafebabe
+    program, fault_pc, exit_pc = recoverable_data_access_program(
+        instruction,
+        RQ_PROGRAM_R,
+        initial_pte,
+        REPLAY_DATA_VALUE,
+        [*set_octa(R110, address), *set_octa(R111, marker)],
+        [halt()],
+        repeated=repeated,
+    )
+    return MMIXTest(
+        name,
+        program,
+        pc=exit_pc,
+        regs={
+            R111: expected,
+            R200: fault_pc + 4,
+            R201: RQ_PROGRAM_R | int.from_bytes(instruction, "big"),
+            R202: address,
+            R203: 0,
+            R204: marker,
+            R207: REPLAY_DATA_VALUE,
+            R210: 2 if repeated else 1,
+        },
+    )
+
+
+def recoverable_store_test(name, instruction, address, source, expected,
+                           *, missing=False, repeated=False, setup=(),
+                           saved_value=None, final_source=None, regs=None,
+                           cause=RQ_PROGRAM_W):
+    if saved_value is None:
+        saved_value = source
+    if final_source is None:
+        final_source = source
+    initial_pte = 0 if missing else REPLAY_DATA_PHYSICAL | 5
+    program, fault_pc, exit_pc = recoverable_data_access_program(
+        instruction,
+        cause,
+        initial_pte,
+        REPLAY_DATA_VALUE,
+        [
+            *set_octa(R110, address),
+            *set_octa(R111, source),
+            *setup,
+        ],
+        [
+            *set_octa(R113, REPLAY_DATA_VIRTUAL),
+            insn(LDOU, R112, R113, R0),
+            halt(),
+        ],
+        repeated=repeated,
+    )
+    expected_regs = {
+        R111: final_source,
+        R112: expected,
+        R200: fault_pc + 4,
+        R201: cause | int.from_bytes(instruction, "big"),
+        R202: address,
+        R203: saved_value,
+        R204: source,
+        R207: REPLAY_DATA_VALUE,
+        R210: 2 if repeated else 1,
+    }
+    if regs is not None:
+        expected_regs.update(regs)
+    return MMIXTest(
+        name,
+        program,
+        pc=exit_pc,
+        regs=expected_regs,
+    )
+
+
+RECOVERABLE_LOAD_REPLAY_TESTS = [
+    recoverable_load_test(
+        "resume-ropcode0-load-byte-missing-page",
+        insn(LDB, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL,
+        0xffffffffffffff80,
+        missing=True,
+        repeated=True,
+    ),
+    recoverable_load_test(
+        "resume-ropcode0-load-wyde-repaired-permission",
+        insn(LDWU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 2,
+        0x1234,
+    ),
+    recoverable_load_test(
+        "resume-ropcode0-load-tetra-repaired-permission",
+        insn(LDTU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 4,
+        0x3fc00000,
+    ),
+    recoverable_load_test(
+        "resume-ropcode0-load-octa-repaired-permission",
+        insn(LDOU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL,
+        REPLAY_DATA_VALUE,
+    ),
+    recoverable_load_test(
+        "resume-ropcode0-load-short-float-repaired-permission",
+        insn(LDSF, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 4,
+        f64(1.5),
+    ),
+]
+
+
+RECOVERABLE_STORE_REPLAY_TESTS = [
+    recoverable_store_test(
+        "resume-ropcode0-store-byte-missing-page",
+        insn(STBU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 1,
+        0xaa,
+        0x80aa12343fc00000,
+        missing=True,
+    ),
+    recoverable_store_test(
+        "resume-ropcode0-store-wyde-repaired-permission",
+        insn(STWU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 2,
+        0xbbcc,
+        0x80ffbbcc3fc00000,
+    ),
+    recoverable_store_test(
+        "resume-ropcode0-store-tetra-repaired-permission",
+        insn(STTU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 4,
+        0xddeeff00,
+        0x80ff1234ddeeff00,
+    ),
+    recoverable_store_test(
+        "resume-ropcode0-store-octa-repaired-permission",
+        insn(STOU, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL,
+        0x0102030405060708,
+        0x0102030405060708,
+    ),
+    recoverable_store_test(
+        "resume-ropcode0-store-short-float-repaired-permission",
+        insn(STSF, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL + 4,
+        f64(1.5),
+        0x80ff12343fc00000,
+        saved_value=0x3fc00000,
+    ),
+    recoverable_store_test(
+        "resume-ropcode0-store-constant-repaired-permission",
+        insn(STCO, 0x5a, R110, R0),
+        REPLAY_DATA_VIRTUAL,
+        0x5a,
+        0x5a,
+    ),
+    recoverable_store_test(
+        "resume-ropcode0-cswap-repeated-fault-exactly-once",
+        insn(CSWAP, R111, R110, R0),
+        REPLAY_DATA_VIRTUAL,
+        0x0102030405060708,
+        0x0102030405060708,
+        missing=True,
+        repeated=True,
+        final_source=1,
+        cause=RQ_PROGRAM_R,
+        setup=[
+            *set_octa(R114, REPLAY_DATA_VALUE),
+            insn(PUT, SR_P, 0, R114),
+        ],
+        regs={R114: REPLAY_DATA_VALUE},
+    ),
+]
+
+
 ISA_TESTS = [
     MMIXTest(
         "raw-image-startup-registers",
@@ -1276,7 +1534,15 @@ ISA_TESTS = [
             ],
         ),
         pc=0x90,
-        regs={R4: 0, R5: 0, R40: RQ_PROGRAM_R, R41: RQ_PROGRAM_R, R42: 0x30, R43: 0},
+        regs={
+            R4: 0,
+            R5: 0,
+            R40: RQ_PROGRAM_R,
+            R41: RQ_PROGRAM_R | int.from_bytes(insn(LDOU, R4, R3, R0),
+                                                "big"),
+            R42: 0x30,
+            R43: 0,
+        },
     ),
     MMIXTest(
         "virtual-translation-page0-rwx",
@@ -1323,7 +1589,13 @@ ISA_TESTS = [
             ],
         ),
         pc=0x90,
-        regs={R40: RQ_PROGRAM_W, R41: RQ_PROGRAM_W, R42: 0x40, R43: 0},
+        regs={
+            R40: RQ_PROGRAM_W,
+            R41: RQ_PROGRAM_W | int.from_bytes(insn(STOU, R13, R14, R0),
+                                                "big"),
+            R42: 0x40,
+            R43: 0,
+        },
     ),
     MMIXTest(
         "virtual-translation-nonidentity-load",
@@ -1371,7 +1643,14 @@ ISA_TESTS = [
             ],
         ),
         pc=0x800000000000008c,
-        regs={R6: 0, R7: 0, R40: RQ_PROGRAM_R, R41: RQ_PROGRAM_R, R42: 0x48},
+        regs={
+            R6: 0,
+            R7: 0,
+            R40: RQ_PROGRAM_R,
+            R41: RQ_PROGRAM_R | int.from_bytes(insn(LDOU, R6, R5, R0),
+                                                "big"),
+            R42: 0x48,
+        },
     ),
     MMIXTest(
         "virtual-translation-execute-protection",
@@ -1423,7 +1702,14 @@ ISA_TESTS = [
             ],
         ),
         pc=0x800000000000008c,
-        regs={R7: 0, R8: 0, R40: RQ_PROGRAM_R, R41: RQ_PROGRAM_R, R42: 0x68},
+        regs={
+            R7: 0,
+            R8: 0,
+            R40: RQ_PROGRAM_R,
+            R41: RQ_PROGRAM_R | int.from_bytes(insn(LDOU, R7, R6, R0),
+                                                "big"),
+            R42: 0x68,
+        },
     ),
     MMIXTest(
         "virtual-translation-invalid-rv",
@@ -1489,7 +1775,15 @@ ISA_TESTS = [
             ],
         ),
         pc=0x90,
-        regs={R4: 0, R5: 0, R40: RQ_PROGRAM_N, R41: RQ_PROGRAM_N, R42: 0x30, R43: 0},
+        regs={
+            R4: 0,
+            R5: 0,
+            R40: RQ_PROGRAM_N,
+            R41: RQ_PROGRAM_N | int.from_bytes(insn(LDOU, R4, R3, R0),
+                                                "big"),
+            R42: 0x30,
+            R43: 0,
+        },
     ),
     MMIXTest(
         "negative-address-store-user-trap",
@@ -1514,7 +1808,14 @@ ISA_TESTS = [
             ],
         ),
         pc=0x90,
-        regs={R5: 0, R40: RQ_PROGRAM_N, R41: RQ_PROGRAM_N, R42: 0x34, R43: 0},
+        regs={
+            R5: 0,
+            R40: RQ_PROGRAM_N,
+            R41: RQ_PROGRAM_N | int.from_bytes(insn(STOU, R4, R3, R0),
+                                                "big"),
+            R42: 0x34,
+            R43: 0,
+        },
     ),
     MMIXTest(
         "negative-address-fetch-direct",
@@ -2355,7 +2656,8 @@ ISA_TESTS = [
             R9: 2,
             R11: 0,
             R40: RQ_PROGRAM_W,
-            R41: RQ_PROGRAM_W,
+            R41: RQ_PROGRAM_W |
+                 int.from_bytes(insn(STOU, R10, R6, R0), "big"),
             R42: 0x6c,
         },
     ),
@@ -2581,7 +2883,8 @@ ISA_TESTS = [
             R13: 0,
             R60: 1,
             R70: RQ_PROGRAM_W,
-            R71: RQ_PROGRAM_W,
+            R71: RQ_PROGRAM_W |
+                 int.from_bytes(insn(STOU, R12, R10, R0), "big"),
             R72: 0x800000000000014c,
         },
     ),
@@ -4042,6 +4345,8 @@ ISA_TESTS = [
             R47: 0xcc,
         },
     ),
+    *RECOVERABLE_LOAD_REPLAY_TESTS,
+    *RECOVERABLE_STORE_REPLAY_TESTS,
     MMIXTest(
         "resume1-ropcode0-replay",
         RESUME1_ROPCODE0_REPLAY[0],

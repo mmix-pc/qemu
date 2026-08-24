@@ -558,7 +558,11 @@ void mmix_cpu_do_interrupt(CPUState *cs)
         env->arithmetic_trip_event = 0;
         cs->exception_index = -1;
         break;
-    case EXCP_MMIX_DYNAMIC_TRAP:
+    case EXCP_MMIX_DYNAMIC_TRAP: {
+        uint64_t exec;
+        uint64_t y;
+        uint64_t z;
+
         causes = env->program_exception_causes & MMIX_RQ_PROGRAM_MASK;
         handler = env->sregs[MMIX_SREG_RTT];
         qemu_log_mask(CPU_LOG_INT,
@@ -575,10 +579,20 @@ void mmix_cpu_do_interrupt(CPUState *cs)
             env->rule_break_y = 0;
             env->rule_break_z = 0;
         } else {
-            mmix_cpu_enter_trap(cs, handler, env->npc, causes, 0, 0);
+            exec = causes;
+            y = 0;
+            z = 0;
+            if (env->program_exception_data_access) {
+                exec |= env->data_access.insn;
+                y = env->data_access.address;
+                z = env->data_access.value;
+            }
+            mmix_cpu_enter_trap(cs, handler, env->npc, exec, y, z);
         }
         env->program_exception_causes = 0;
+        env->program_exception_data_access = false;
         break;
+    }
     case EXCP_MMIX_FORCED_TRANSLATION:
         handler = env->sregs[MMIX_SREG_RT];
         where = env->forced_translation_access == MMU_INST_FETCH ?
