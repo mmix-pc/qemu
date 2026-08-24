@@ -47,7 +47,7 @@ static FloatRoundMode mmix_round_mode_from_ra(CPUMMIXState *env)
     }
 }
 
-static bool mmix_round_mode_from_y(uint32_t y, CPUMMIXState *env,
+static bool mmix_round_mode_from_y(uint64_t y, CPUMMIXState *env,
                                    FloatRoundMode *mode)
 {
     switch (y) {
@@ -130,7 +130,7 @@ static uint64_t mmix_binary_nan_result(CPUMMIXState *env, uint32_t insn,
 }
 
 static uint64_t mmix_unary_nan_result(CPUMMIXState *env, uint32_t insn,
-                                      uint32_t y, uint64_t z)
+                                      uint64_t y, uint64_t z)
 {
     if (mmix_fp_is_snan(z)) {
         mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
@@ -316,7 +316,7 @@ uint64_t helper_mmix_fp_binary(CPUMMIXState *env, uint32_t selector,
 }
 
 uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t selector,
-                              uint32_t insn, uint32_t y, uint64_t z)
+                              uint32_t insn, uint64_t y, uint64_t z)
 {
     MMIXFPKind fp = (MMIXFPKind)selector;
     FloatRoundMode mode;
@@ -347,7 +347,7 @@ uint64_t helper_mmix_fp_unary(CPUMMIXState *env, uint32_t selector,
 }
 
 uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t selector,
-                            uint32_t insn, uint32_t y, uint64_t z)
+                            uint32_t insn, uint64_t y, uint64_t z)
 {
     MMIXFPKind fp = (MMIXFPKind)selector;
     FloatRoundMode mode;
@@ -379,7 +379,7 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t selector,
 }
 
 uint64_t helper_mmix_fp_float(CPUMMIXState *env, uint32_t selector,
-                              uint32_t insn, uint32_t y, uint64_t z)
+                              uint32_t insn, uint64_t y, uint64_t z)
 {
     MMIXFPKind fp = (MMIXFPKind)selector;
     FloatRoundMode mode;

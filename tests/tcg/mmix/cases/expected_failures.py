@@ -4,16 +4,6 @@
 
 from .common import *
 
-ROPCODE1_UNSUPPORTED_NORMAL_INSNS = [
-    ("floating", insn(FADD, R200, R20, R21)),
-    ("multiply", insn(MUL, R200, R20, R21)),
-    ("conditional", insn(CSN, R200, R20, R21)),
-    ("zero-or-set", insn(ZSN, R200, R20, R21)),
-    ("difference", insn(BDIF, R200, R20, R21)),
-    ("wyde", insn(SETH, R200, 0, 1)),
-]
-
-
 def unsupported_ropcode1_program(instruction):
     return b"".join(
         [
@@ -27,15 +17,12 @@ def unsupported_ropcode1_program(instruction):
 
 
 EXPECTED_FAILURE_TESTS = [
-    *[
-        MMIXExpectedFailure(
-            f"unsupported-resume-ropcode1-{name}",
-            unsupported_ropcode1_program(instruction),
-            ("MMIX unsupported RESUME ropcode 1 instruction",
-             "MMIX emulator failure"),
-        )
-        for name, instruction in ROPCODE1_UNSUPPORTED_NORMAL_INSNS
-    ],
+    MMIXExpectedFailure(
+        "unsupported-resume-ropcode1-trap",
+        unsupported_ropcode1_program(insn(TRAP, R200, R20, R21)),
+        ("MMIX unsupported RESUME ropcode 1 instruction",
+         "MMIX emulator failure"),
+    ),
     MMIXExpectedFailure(
         "register-stack-underflow",
         insn(POP, 0, 0, 0),

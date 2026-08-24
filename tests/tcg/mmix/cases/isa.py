@@ -584,7 +584,10 @@ def resume0_replay_setup(instruction, continuation, *, setup=()):
     ]
 
 
-def resume0_substitution_test(name, instruction, y, z, expected, *, setup=()):
+def resume0_substitution_test(
+    name, instruction, y, z, expected, *, setup=(), continuation_code=(),
+    expected_regs=None,
+):
     continuation = 0x100
     x = instruction[1]
     saved_insn = int.from_bytes(instruction, "big")
@@ -605,9 +608,73 @@ def resume0_substitution_test(name, instruction, y, z, expected, *, setup=()):
             ],
         ),
         (continuation - 4, [wyde(SETL, x, 0xdead)]),
-        (continuation, [halt()]),
+        (continuation, [*continuation_code, halt()]),
     )
-    return MMIXTest(name, program, pc=continuation, regs={x: expected})
+    regs = {x: expected}
+    if expected_regs is not None:
+        regs.update(expected_regs)
+    return MMIXTest(
+        name,
+        program,
+        pc=continuation + len(continuation_code) * 4,
+        regs=regs,
+    )
+
+
+def resume0_substitution_trip_test(name, instruction, y, z, event):
+    handler = {
+        RA_EVENT_V: 32,
+        RA_EVENT_I: 64,
+        RA_EVENT_O: 80,
+        RA_EVENT_U: 96,
+        RA_EVENT_Z: 112,
+        RA_EVENT_X: 128,
+    }[event]
+    main = 0x100
+    continuation = 0x200
+    saved_insn = int.from_bytes(instruction, "big")
+    prefix = [
+        *set_octa(R1, event << RA_ENABLE_SHIFT),
+        insn(PUT, SR_A, 0, R1),
+        *set_octa(R2, continuation),
+        insn(PUT, SR_W, 0, R2),
+        *set_octa(R3, (1 << 56) | saved_insn),
+        insn(PUT, SR_X, 0, R3),
+        *set_octa(R4, y),
+        insn(PUT, SR_Y, 0, R4),
+        *set_octa(R5, z),
+        insn(PUT, SR_Z, 0, R5),
+        insn(RESUME, 0, 0, 0),
+    ]
+    trap_handler = [
+        insn(GET, R40, 0, SR_W),
+        insn(GET, R41, 0, SR_X),
+        insn(GET, R42, 0, SR_Y),
+        insn(GET, R43, 0, SR_Z),
+        insn(GET, R44, 0, SR_A),
+        insn(ADDUI, R50, R50, 1),
+        halt(),
+    ]
+    return MMIXTest(
+        name,
+        program_with_regions(
+            (0, [jump(JMP, main // 4)]),
+            (handler, trap_handler),
+            (main, prefix),
+            (continuation, [wyde(SETL, R51, 0xdead), halt()]),
+        ),
+        pc=handler + (len(trap_handler) - 1) * 4,
+        regs={
+            instruction[1]: 0,
+            R40: continuation,
+            R41: (1 << 63) | saved_insn,
+            R42: y,
+            R43: z,
+            R44: event << RA_ENABLE_SHIFT,
+            R50: 1,
+            R51: 0,
+        },
+    )
 
 
 def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140):
@@ -676,6 +743,182 @@ ROPCODE1_SUBSTITUTION_TESTS = [
     resume0_substitution_test(
         "resume-ropcode1-shift-immediate", insn(SRUI, R200, R20, 1),
         1 << 63, 63, 1,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-scaled-add", insn(TWO_ADDU, R200, R20, R21),
+        5, 3, 13,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-negate", insn(NEG, R200, 7, R21),
+        3, 5, MASK64 - 1,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-signed-multiply", insn(MUL, R200, R20, R21),
+        MASK64, 2, MASK64 - 1,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-unsigned-multiply",
+        insn(MULU, R200, R20, R21), MASK64, 2, MASK64 - 1,
+        continuation_code=(insn(GET, R201, 0, SR_H),),
+        expected_regs={R201: 1},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-signed-divide", insn(DIV, R200, R20, R21),
+        7, 3, 2,
+        continuation_code=(insn(GET, R201, 0, SR_R),),
+        expected_regs={R201: 1},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-unsigned-divide",
+        insn(DIVU, R200, R20, R21), 0, 2, 1 << 63,
+        setup=(*set_octa(R5, 1), insn(PUT, SR_D, 0, R5)),
+        continuation_code=(insn(GET, R201, 0, SR_R),),
+        expected_regs={R201: 0},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-difference", insn(BDIF, R200, R20, R21),
+        0x2010, 0x1020, 0x1000,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-mux", insn(MUX, R200, R20, R21),
+        0xaa, 0x55, 0xaa,
+        setup=(*set_octa(R5, 0xff), insn(PUT, SR_M, 0, R5)),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-sideways-add", insn(SADD, R200, R20, R21),
+        0xf, 3, 2,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-matrix", insn(MOR, R200, R20, R21),
+        0x1122334455667788, 0x8040201008040201,
+        matrix_multiply(0x1122334455667788, 0x8040201008040201,
+                        False),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-wyde-set", wyde(SETH, R200, 0xdead),
+        0xaa, 0x55, 0x55,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-wyde-increment", wyde(INCH, R200, 0xdead),
+        0xaa, 0x55, 0xff,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-wyde-or", wyde(ORH, R200, 0xdead),
+        0xaa, 0x55, 0xff,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-wyde-and-not", wyde(ANDNH, R200, 0xdead),
+        0xaa, 0x0f, 0xa0,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-overflow-status", insn(ADD, R200, R20, R21),
+        0x7fffffffffffffff, 1, 0x8000000000000000,
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: RA_EVENT_V},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-divide-status", insn(DIV, R200, R20, R21),
+        7, 0, 0,
+        continuation_code=(
+            insn(GET, R201, 0, SR_R),
+            insn(GET, R202, 0, SR_A),
+        ),
+        expected_regs={R201: 7, R202: RA_EVENT_D},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-conditional-true", insn(CSN, R200, R20, R21),
+        MASK64, 0x55, 0x55,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-conditional-false", insn(CSN, R200, R20, R21),
+        1, 0x55, 0xaaaa,
+        setup=(*set_octa(R200, 0xaaaa),),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-zero-or-set-false", insn(ZSN, R200, R20, R21),
+        1, 0x55, 0,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-zero-or-set-immediate",
+        insn(ZSNI, R200, R20, 0x77), MASK64, 0x55, 0x55,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-add", insn(FADD, R200, R20, R21),
+        f64(1.5), f64(2.25), f64(3.75),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-compare", insn(FCMP, R200, R20, R21),
+        f64(2.0), f64(1.0), 1,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-epsilon-compare",
+        insn(FCMPE, R200, R20, R21), f64(1.0), f64(1.05), 0,
+        setup=(*set_octa(R5, f64(0.1)), insn(PUT, SR_E, 0, R5)),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-convert", insn(FLOTI, R200, 4, 7),
+        0, 42, f64(42.0),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-round-from-ra",
+        insn(FINT, R200, 4, R21), 0, f64(1.5), f64(1.0),
+        setup=(
+            *set_octa(R5, 3 << 16),
+            insn(PUT, SR_A, 0, R5),
+        ),
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: (3 << 16) | RA_EVENT_X},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-signed-zero",
+        insn(FADD, R200, R20, R21),
+        0x8000000000000000, 0x8000000000000000,
+        0x8000000000000000,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-signaling-nan",
+        insn(FADD, R200, R20, R21),
+        0x7ff0000000001234, f64(1.0), 0x7ff8000000001234,
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: RA_EVENT_I},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-overflow",
+        insn(FMUL, R200, R20, R21),
+        0x7fefffffffffffff, f64(2.0), f64(float("inf")),
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: RA_EVENT_O | RA_EVENT_X},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-underflow",
+        insn(FMUL, R200, R20, R21),
+        0x0010000000000000, 0x0010000000000000, 0,
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: RA_EVENT_U | RA_EVENT_X},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-invalid",
+        insn(FSQRT, R200, 0, R21), 0, f64(-1.0),
+        0x7ff8000000000000,
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: RA_EVENT_I},
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-floating-inexact",
+        insn(FDIV, R200, R20, R21), f64(1.0), f64(3.0),
+        f64(1.0 / 3.0),
+        continuation_code=(insn(GET, R201, 0, SR_A),),
+        expected_regs={R201: RA_EVENT_X},
+    ),
+    resume0_substitution_trip_test(
+        "resume-ropcode1-enabled-overflow-trip",
+        insn(ADD, R200, R20, R21),
+        0x7fffffffffffffff, 1, RA_EVENT_V,
+    ),
+    resume0_substitution_trip_test(
+        "resume-ropcode1-enabled-floating-divide-trip",
+        insn(FDIV, R200, R20, R21),
+        f64(1.0), 0, RA_EVENT_Z,
     ),
 ]
 

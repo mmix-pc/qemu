@@ -286,11 +286,10 @@ static bool mmix_resume_ropcode1_supported(uint32_t insn)
 {
     uint8_t op = insn >> 24;
 
-    /* Operand substitution currently covers straight-line integer groups. */
-    return (op >= 0x20 && op <= 0x27) ||
-           (op >= 0x30 && op <= 0x33) ||
-           (op >= 0x38 && op <= 0x3f) ||
-           (op >= 0xc0 && op <= 0xcf);
+    /* TRAP substitution remains separate from arithmetic substitution. */
+    return (op >= 0x01 && op <= 0x3f) ||
+           (op >= 0x60 && op <= 0x7f) ||
+           (op >= 0xc0 && op <= 0xef);
 }
 
 static bool mmix_resume_destination_marginal(CPUMMIXState *env,

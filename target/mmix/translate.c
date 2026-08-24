@@ -131,6 +131,13 @@ static TCGv_i64 gen_load_replay_y(DisasContext *ctx, const arg_xyz *a)
     return ctx->substitute_operands ? ctx->replay_y : gen_load_reg(a->y);
 }
 
+static TCGv_i64 gen_load_replay_y_immediate(DisasContext *ctx,
+                                            const arg_xyz *a)
+{
+    return ctx->substitute_operands ? ctx->replay_y :
+           tcg_constant_i64(a->y);
+}
+
 static TCGv_i64 gen_load_replay_z(DisasContext *ctx, const arg_xyz *a,
                                   bool immediate)
 {
@@ -231,7 +238,8 @@ static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 
     gen_helper_mmix_fp_binary(val, tcg_env, tcg_constant_i32(fp),
                               tcg_constant_i32(ctx->insn),
-                              gen_load_reg(a->y), gen_load_reg(a->z));
+                              gen_load_replay_y(ctx, a),
+                              gen_load_replay_z(ctx, a, false));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -242,7 +250,8 @@ static bool gen_fp_unary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 
     gen_helper_mmix_fp_unary(val, tcg_env, tcg_constant_i32(fp),
                              tcg_constant_i32(ctx->insn),
-                             tcg_constant_i32(a->y), gen_load_reg(a->z));
+                             gen_load_replay_y_immediate(ctx, a),
+                             gen_load_replay_z(ctx, a, false));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -253,7 +262,8 @@ static bool gen_fp_fix(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 
     gen_helper_mmix_fp_fix(val, tcg_env, tcg_constant_i32(fp),
                            tcg_constant_i32(ctx->insn),
-                           tcg_constant_i32(a->y), gen_load_reg(a->z));
+                           gen_load_replay_y_immediate(ctx, a),
+                           gen_load_replay_z(ctx, a, false));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -265,8 +275,8 @@ static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp,
 
     gen_helper_mmix_fp_float(val, tcg_env, tcg_constant_i32(fp),
                              tcg_constant_i32(ctx->insn),
-                             tcg_constant_i32(a->y),
-                             gen_load_z(a, immediate));
+                             gen_load_replay_y_immediate(ctx, a),
+                             gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -373,7 +383,8 @@ static bool gen_neg_checked(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_sub(val, tcg_env, tcg_constant_i32(ctx->insn),
-                        tcg_constant_i64(a->y), gen_load_z(a, immediate));
+                        gen_load_replay_y_immediate(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -392,7 +403,8 @@ static bool gen_mul(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_mul(val, tcg_env, tcg_constant_i32(ctx->insn),
-                        gen_load_reg(a->y), gen_load_z(a, immediate));
+                        gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -401,8 +413,8 @@ static bool gen_mulu(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_mulu(val, tcg_env, gen_load_reg(a->y),
-                         gen_load_z(a, immediate));
+    gen_helper_mmix_mulu(val, tcg_env, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -412,7 +424,8 @@ static bool gen_div(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_helper_mmix_div(val, tcg_env, tcg_constant_i32(ctx->insn),
-                        gen_load_reg(a->y), gen_load_z(a, immediate));
+                        gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -421,8 +434,8 @@ static bool gen_divu(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_divu(val, tcg_env, gen_load_reg(a->y),
-                         gen_load_z(a, immediate));
+    gen_helper_mmix_divu(val, tcg_env, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -457,8 +470,8 @@ static bool gen_scaled_addu(DisasContext *ctx, arg_xyz *a, unsigned shift,
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    tcg_gen_shli_i64(val, gen_load_reg(a->y), shift);
-    tcg_gen_add_i64(val, val, gen_load_z(a, immediate));
+    tcg_gen_shli_i64(val, gen_load_replay_y(ctx, a), shift);
+    tcg_gen_add_i64(val, val, gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -467,7 +480,8 @@ static bool gen_negu(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    tcg_gen_sub_i64(val, tcg_constant_i64(a->y), gen_load_z(a, immediate));
+    tcg_gen_sub_i64(val, gen_load_replay_y_immediate(ctx, a),
+                    gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -545,7 +559,11 @@ static uint64_t mmix_wyde_value(const arg_xyz *a, unsigned shift)
 
 static bool gen_set_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
 {
-    gen_store_reg(a->x, tcg_constant_i64(mmix_wyde_value(a, shift)));
+    TCGv_i64 val = ctx->substitute_operands ?
+                   ctx->replay_z :
+                   tcg_constant_i64(mmix_wyde_value(a, shift));
+
+    gen_store_reg(a->x, val);
     return true;
 }
 
@@ -553,8 +571,12 @@ static bool gen_inc_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    tcg_gen_add_i64(val, gen_load_reg(a->x),
-                    tcg_constant_i64(mmix_wyde_value(a, shift)));
+    if (ctx->substitute_operands) {
+        tcg_gen_add_i64(val, ctx->replay_y, ctx->replay_z);
+    } else {
+        tcg_gen_add_i64(val, gen_load_reg(a->x),
+                        tcg_constant_i64(mmix_wyde_value(a, shift)));
+    }
     gen_store_reg(a->x, val);
     return true;
 }
@@ -563,7 +585,12 @@ static bool gen_or_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    tcg_gen_ori_i64(val, gen_load_reg(a->x), mmix_wyde_value(a, shift));
+    if (ctx->substitute_operands) {
+        tcg_gen_or_i64(val, ctx->replay_y, ctx->replay_z);
+    } else {
+        tcg_gen_ori_i64(val, gen_load_reg(a->x),
+                        mmix_wyde_value(a, shift));
+    }
     gen_store_reg(a->x, val);
     return true;
 }
@@ -572,7 +599,12 @@ static bool gen_andn_wyde(DisasContext *ctx, arg_xyz *a, unsigned shift)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    tcg_gen_andi_i64(val, gen_load_reg(a->x), ~mmix_wyde_value(a, shift));
+    if (ctx->substitute_operands) {
+        tcg_gen_andc_i64(val, ctx->replay_y, ctx->replay_z);
+    } else {
+        tcg_gen_andi_i64(val, gen_load_reg(a->x),
+                         ~mmix_wyde_value(a, shift));
+    }
     gen_store_reg(a->x, val);
     return true;
 }
@@ -598,7 +630,8 @@ static bool gen_bdif(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_bdif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_helper_mmix_bdif(val, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -607,7 +640,8 @@ static bool gen_wdif(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_wdif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_helper_mmix_wdif(val, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -616,7 +650,8 @@ static bool gen_tdif(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_tdif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_helper_mmix_tdif(val, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -625,7 +660,8 @@ static bool gen_odif(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_odif(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_helper_mmix_odif(val, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -634,8 +670,8 @@ static bool gen_mux(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_mux(val, tcg_env, gen_load_reg(a->y),
-                        gen_load_z(a, immediate));
+    gen_helper_mmix_mux(val, tcg_env, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -644,7 +680,8 @@ static bool gen_sadd(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    tcg_gen_andc_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    tcg_gen_andc_i64(val, gen_load_replay_y(ctx, a),
+                     gen_load_replay_z(ctx, a, immediate));
     tcg_gen_ctpop_i64(val, val);
     gen_store_reg(a->x, val);
     return true;
@@ -654,7 +691,8 @@ static bool gen_mor(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_mor(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_helper_mmix_mor(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -663,7 +701,8 @@ static bool gen_mxor(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_helper_mmix_mxor(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+    gen_helper_mmix_mxor(val, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
     gen_store_reg(a->x, val);
     return true;
 }
@@ -750,15 +789,16 @@ static void gen_predicate(TCGv_i64 pred, TCGv_i64 val,
     }
 }
 
-static bool gen_cond_result(arg_xyz *a, MMIXPredicateKind predicate,
+static bool gen_cond_result(DisasContext *ctx, arg_xyz *a,
+                            MMIXPredicateKind predicate,
                             bool immediate, bool zero_false)
 {
     TCGv_i64 pred = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
 
-    gen_predicate(pred, gen_load_reg(a->y), predicate);
+    gen_predicate(pred, gen_load_replay_y(ctx, a), predicate);
     tcg_gen_movcond_i64(TCG_COND_NE, val, pred, tcg_constant_i64(0),
-                        gen_load_z(a, immediate),
+                        gen_load_replay_z(ctx, a, immediate),
                         zero_false ? tcg_constant_i64(0) : gen_load_reg(a->x));
     gen_store_reg(a->x, val);
     return true;
@@ -767,13 +807,13 @@ static bool gen_cond_result(arg_xyz *a, MMIXPredicateKind predicate,
 static bool gen_cs(DisasContext *ctx, arg_xyz *a, MMIXPredicateKind predicate,
                    bool immediate)
 {
-    return gen_cond_result(a, predicate, immediate, false);
+    return gen_cond_result(ctx, a, predicate, immediate, false);
 }
 
 static bool gen_zs(DisasContext *ctx, arg_xyz *a, MMIXPredicateKind predicate,
                    bool immediate)
 {
-    return gen_cond_result(a, predicate, immediate, true);
+    return gen_cond_result(ctx, a, predicate, immediate, true);
 }
 
 TRANS_GEN2(CSN, gen_cs, MMIX_PRED_NEGATIVE, false)
