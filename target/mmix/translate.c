@@ -24,7 +24,10 @@ typedef struct DisasContext {
     CPUMMIXState *env;
     vaddr insn_pc;
     uint32_t insn;
+    TCGv_i64 replay_y;
+    TCGv_i64 replay_z;
     bool replay;
+    bool substitute_operands;
 } DisasContext;
 
 typedef enum MMIXALUKind {
@@ -121,6 +124,18 @@ static TCGv_i64 gen_load_z(const arg_xyz *a, bool immediate)
         return tcg_constant_i64(a->z);
     }
     return gen_load_reg(a->z);
+}
+
+static TCGv_i64 gen_load_replay_y(DisasContext *ctx, const arg_xyz *a)
+{
+    return ctx->substitute_operands ? ctx->replay_y : gen_load_reg(a->y);
+}
+
+static TCGv_i64 gen_load_replay_z(DisasContext *ctx, const arg_xyz *a,
+                                  bool immediate)
+{
+    return ctx->substitute_operands ? ctx->replay_z :
+           gen_load_z(a, immediate);
 }
 
 static void gen_store_reg(unsigned reg, TCGv_i64 val)
@@ -287,36 +302,46 @@ static bool gen_alu(DisasContext *ctx, arg_xyz *a, MMIXALUKind kind,
 
     switch (kind) {
     case MMIX_ALU_ADD:
-        tcg_gen_add_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_add_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_SUB:
-        tcg_gen_sub_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_sub_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_OR:
-        tcg_gen_or_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_or_i64(val, gen_load_replay_y(ctx, a),
+                       gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_ORN:
-        tcg_gen_orc_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_orc_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_NOR:
-        tcg_gen_or_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_or_i64(val, gen_load_replay_y(ctx, a),
+                       gen_load_replay_z(ctx, a, immediate));
         tcg_gen_not_i64(val, val);
         break;
     case MMIX_ALU_XOR:
-        tcg_gen_xor_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_xor_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_AND:
-        tcg_gen_and_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_and_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_ANDN:
-        tcg_gen_andc_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_andc_i64(val, gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, immediate));
         break;
     case MMIX_ALU_NAND:
-        tcg_gen_and_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_and_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         tcg_gen_not_i64(val, val);
         break;
     case MMIX_ALU_NXOR:
-        tcg_gen_xor_i64(val, gen_load_reg(a->y), gen_load_z(a, immediate));
+        tcg_gen_xor_i64(val, gen_load_replay_y(ctx, a),
+                        gen_load_replay_z(ctx, a, immediate));
         tcg_gen_not_i64(val, val);
         break;
     default:
@@ -331,8 +356,8 @@ static bool gen_addsub_checked(DisasContext *ctx, arg_xyz *a, bool sub,
                                bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
-    TCGv_i64 y = gen_load_reg(a->y);
-    TCGv_i64 z = gen_load_z(a, immediate);
+    TCGv_i64 y = gen_load_replay_y(ctx, a);
+    TCGv_i64 z = gen_load_replay_z(ctx, a, immediate);
 
     if (sub) {
         gen_helper_mmix_sub(val, tcg_env, tcg_constant_i32(ctx->insn), y, z);
@@ -451,9 +476,9 @@ static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftKind kind,
                       bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
-    TCGv_i64 count = gen_load_z(a, immediate);
+    TCGv_i64 count = gen_load_replay_z(ctx, a, immediate);
     TCGv_i64 safe_count = tcg_temp_new_i64();
-    TCGv_i64 lhs = gen_load_reg(a->y);
+    TCGv_i64 lhs = gen_load_replay_y(ctx, a);
 
     if (kind != MMIX_SHIFT_SL) {
         tcg_gen_andi_i64(safe_count, count, 63);
@@ -666,8 +691,8 @@ static bool gen_cmp(DisasContext *ctx, arg_xyz *a, MMIXCompareKind kind,
     TCGv_i64 gt = tcg_temp_new_i64();
     TCGv_i64 lt = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
-    TCGv_i64 lhs = gen_load_reg(a->y);
-    TCGv_i64 rhs = gen_load_z(a, immediate);
+    TCGv_i64 lhs = gen_load_replay_y(ctx, a);
+    TCGv_i64 rhs = gen_load_replay_z(ctx, a, immediate);
 
     if (kind == MMIX_CMP_SIGNED) {
         tcg_gen_setcond_i64(TCG_COND_GT, gt, lhs, rhs);
@@ -1218,6 +1243,9 @@ static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
 
     ctx->env = cpu_env(cs);
     ctx->replay = dcbase->tb->cs_base & MMIX_TB_REPLAY_FLAG;
+    ctx->substitute_operands =
+        dcbase->tb->cs_base & MMIX_TB_REPLAY_SUBSTITUTE_FLAG;
+    g_assert(!ctx->substitute_operands || ctx->replay);
     if (ctx->replay) {
         dcbase->max_insns = 1;
     }
@@ -1247,6 +1275,14 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
         g_assert(pc == ctx->env->insn_replay.insn_pc);
         insn = ctx->base.tb->cs_base;
         ctx->base.pc_next = ctx->env->insn_replay.continuation;
+        if (ctx->substitute_operands) {
+            ctx->replay_y = tcg_temp_new_i64();
+            ctx->replay_z = tcg_temp_new_i64();
+            tcg_gen_ld_i64(ctx->replay_y, tcg_env,
+                           offsetof(CPUMMIXState, insn_replay.y));
+            tcg_gen_ld_i64(ctx->replay_z, tcg_env,
+                           offsetof(CPUMMIXState, insn_replay.z));
+        }
         gen_helper_mmix_consume_insn_replay(tcg_env);
     } else {
         insn = translator_ldl_end(ctx->env, &ctx->base, pc, MO_BE);

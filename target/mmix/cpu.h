@@ -159,6 +159,7 @@ enum {
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_SWYM_INSN 0xfd000000U
 #define MMIX_TB_REPLAY_FLAG (1ULL << 63)
+#define MMIX_TB_REPLAY_SUBSTITUTE_FLAG (1ULL << 62)
 #define MMIX_DATA_ACCESS_LOAD  (1u << MMU_DATA_LOAD)
 #define MMIX_DATA_ACCESS_STORE (1u << MMU_DATA_STORE)
 
@@ -194,8 +195,11 @@ typedef struct MMIXStackAccessState {
 typedef struct MMIXInsnReplayState {
     uint64_t insn_pc;
     uint64_t continuation;
+    uint64_t y;
+    uint64_t z;
     uint32_t insn;
     bool owns_trap_restart;
+    bool substitute_operands;
     bool active;
 } MMIXInsnReplayState;
 

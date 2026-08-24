@@ -4,21 +4,38 @@
 
 from .common import *
 
+ROPCODE1_UNSUPPORTED_NORMAL_INSNS = [
+    ("floating", insn(FADD, R200, R20, R21)),
+    ("multiply", insn(MUL, R200, R20, R21)),
+    ("conditional", insn(CSN, R200, R20, R21)),
+    ("zero-or-set", insn(ZSN, R200, R20, R21)),
+    ("difference", insn(BDIF, R200, R20, R21)),
+    ("wyde", insn(SETH, R200, 0, 1)),
+]
+
+
+def unsupported_ropcode1_program(instruction):
+    return b"".join(
+        [
+            wyde(SETL, R1, 0x80),
+            insn(PUT, SR_W, 0, R1),
+            *set_octa(R2, (1 << 56) | int.from_bytes(instruction, "big")),
+            insn(PUT, SR_X, 0, R2),
+            insn(RESUME, 0, 0, 0),
+        ]
+    )
+
+
 EXPECTED_FAILURE_TESTS = [
-    MMIXExpectedFailure(
-        "unsupported-resume-operands",
-        b"".join(
-            [
-                wyde(SETL, R1, 0x20),
-                insn(PUT, SR_W, 0, R1),
-                *set_octa(R2, 0x0100000021010001),
-                insn(PUT, SR_X, 0, R2),
-                insn(RESUME, 0, 0, 0),
-            ]
-        ),
-        ("MMIX unsupported RESUME ropcode 1 operand substitution",
-         "MMIX emulator failure"),
-    ),
+    *[
+        MMIXExpectedFailure(
+            f"unsupported-resume-ropcode1-{name}",
+            unsupported_ropcode1_program(instruction),
+            ("MMIX unsupported RESUME ropcode 1 instruction",
+             "MMIX emulator failure"),
+        )
+        for name, instruction in ROPCODE1_UNSUPPORTED_NORMAL_INSNS
+    ],
     MMIXExpectedFailure(
         "register-stack-underflow",
         insn(POP, 0, 0, 0),

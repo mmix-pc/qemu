@@ -584,6 +584,126 @@ def resume0_replay_setup(instruction, continuation, *, setup=()):
     ]
 
 
+def resume0_substitution_test(name, instruction, y, z, expected, *, setup=()):
+    continuation = 0x100
+    x = instruction[1]
+    saved_insn = int.from_bytes(instruction, "big")
+    program = program_with_regions(
+        (
+            0,
+            [
+                *setup,
+                *set_octa(R1, continuation),
+                insn(PUT, SR_W, 0, R1),
+                *set_octa(R2, (1 << 56) | saved_insn),
+                insn(PUT, SR_X, 0, R2),
+                *set_octa(R3, y),
+                insn(PUT, SR_Y, 0, R3),
+                *set_octa(R4, z),
+                insn(PUT, SR_Z, 0, R4),
+                insn(RESUME, 0, 0, 0),
+            ],
+        ),
+        (continuation - 4, [wyde(SETL, x, 0xdead)]),
+        (continuation, [halt()]),
+    )
+    return MMIXTest(name, program, pc=continuation, regs={x: expected})
+
+
+def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140):
+    handler = 0x180
+    saved_insn = int.from_bytes(instruction, "big")
+    resume_insn = insn(RESUME, 0, 0, 0)
+    prefix = [
+        wyde(SETL, R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R2),
+        *set_octa(R3, continuation),
+        insn(PUT, SR_W, 0, R3),
+        *set_octa(R4, (ropcode << 56) | saved_insn),
+        insn(PUT, SR_X, 0, R4),
+        insn(RESUME, 0, 0, 0),
+        wyde(SETL, R10, 0xdead),
+    ]
+    trap_handler = [
+        insn(GET, R40, 0, SR_Q),
+        insn(GET, R41, 0, SR_WW),
+        insn(GET, R42, 0, SR_XX),
+        halt(),
+    ]
+    return MMIXTest(
+        name,
+        program_with_handler(prefix, handler, trap_handler),
+        pc=handler + (len(trap_handler) - 1) * 4,
+        regs={
+            R10: 0,
+            R40: RQ_PROGRAM_B,
+            R41: (len(prefix) - 1) * 4,
+            R42: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                 int.from_bytes(resume_insn, "big"),
+        },
+    )
+
+
+ROPCODE1_SUBSTITUTION_TESTS = [
+    resume0_substitution_test(
+        "resume-ropcode1-add", insn(ADD, R200, R20, R21),
+        0x20, 7, 0x27,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-active-local-destination",
+        insn(ADD, R10, R20, R21), 0x20, 7, 0x27,
+        setup=(wyde(SETL, R10, 0),),
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-global-boundary-destination",
+        insn(ADD, R32, R20, R21), 0x20, 7, 0x27,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-sub-immediate", insn(SUBUI, R200, R20, 7),
+        0x30, 0x11, 0x1f,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-logical", insn(XOR, R200, R20, R21),
+        0xf0f0f0f00f0f0f0f, 0xff00ff00ff00ff00,
+        0x0ff00ff0f00ff00f,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-compare", insn(CMP, R200, R20, R21),
+        MASK64, 1, MASK64,
+    ),
+    resume0_substitution_test(
+        "resume-ropcode1-shift-immediate", insn(SRUI, R200, R20, 1),
+        1 << 63, 63, 1,
+    ),
+]
+
+ROPCODE1_RULE_BREAK_TESTS = [
+    resume_rule_break_test(
+        "resume-ropcode1-marginal-destination",
+        insn(ADD, R10, R20, R21),
+    ),
+    resume_rule_break_test(
+        "resume-ropcode2-marginal-destination",
+        insn(ADD, R10, R20, R21),
+        ropcode=2,
+    ),
+    resume_rule_break_test(
+        "resume-ropcode1-invalid-continuation",
+        insn(ADD, R200, R20, R21),
+        continuation=0,
+    ),
+    *[
+        resume_rule_break_test(
+            f"resume-ropcode1-nonnormal-{high:x}",
+            bytes((high << 4, R200, R20, R21)),
+        )
+        for high in (0x4, 0x5, 0x8, 0x9, 0xa, 0xb, 0xf)
+    ],
+]
+
+
 def resume0_branch_replay_program(taken):
     replay_pc = 0x7c
     continuation = replay_pc + 4
@@ -4164,7 +4284,11 @@ ISA_TESTS = [
             [
                 wyde(SETL, R1, 0x40),  # target address
                 insn(PUT, SR_W, 0, R1),
-                *set_octa(R2, 0x0200000021050007),
+                *set_octa(
+                    R2,
+                    (2 << 56) |
+                    int.from_bytes(insn(ADDI, R32, R0, 7), "big"),
+                ),
                 insn(PUT, SR_X, 0, R2),
                 wyde(SETL, R3, 0x77),
                 insn(PUT, SR_Z, 0, R3),
@@ -4176,7 +4300,7 @@ ISA_TESTS = [
             ],
         ),
         pc=0x40,
-        regs={R5: 0x77},
+        regs={R32: 0x77},
     ),
     MMIXTest(
         "resume-ropcode0-integer-replay",
@@ -4242,6 +4366,8 @@ ISA_TESTS = [
         pc=0xa0,
         regs={R12: 0x0ff00ff0f00ff00f},
     ),
+    *ROPCODE1_SUBSTITUTION_TESTS,
+    *ROPCODE1_RULE_BREAK_TESTS,
     MMIXTest(
         "resume-ropcode0-inserted-resume-rule-break",
         program_with_regions(

@@ -262,6 +262,46 @@ static void mmix_resume_unsupported(CPUMMIXState *env, const char *why,
     mmix_cpu_raise_emulator_failure(env);
 }
 
+static bool mmix_resume_ropcode1_normal(uint32_t insn)
+{
+    /* MMIXware mmix-doc section 38 defines normal opcodes by first hex digit. */
+    switch (insn >> 28) {
+    case 0x0:
+    case 0x1:
+    case 0x2:
+    case 0x3:
+    case 0x6:
+    case 0x7:
+    case 0xc:
+    case 0xd:
+    case 0xe:
+        return true;
+    default:
+        /* Optional SYNCD[I] and SYNCID[I] substitution is not enabled. */
+        return false;
+    }
+}
+
+static bool mmix_resume_ropcode1_supported(uint32_t insn)
+{
+    uint8_t op = insn >> 24;
+
+    /* Operand substitution currently covers straight-line integer groups. */
+    return (op >= 0x20 && op <= 0x27) ||
+           (op >= 0x30 && op <= 0x33) ||
+           (op >= 0x38 && op <= 0x3f) ||
+           (op >= 0xc0 && op <= 0xcf);
+}
+
+static bool mmix_resume_destination_marginal(CPUMMIXState *env,
+                                             uint32_t insn)
+{
+    uint8_t x = insn >> 16;
+
+    return x >= env->sregs[MMIX_SREG_RL] &&
+           x < env->sregs[MMIX_SREG_RG];
+}
+
 G_NORETURN void mmix_cpu_break_rules_and_continue(CPUMMIXState *env,
                                                   uint32_t insn, uint64_t y,
                                                   uint64_t z)
@@ -328,6 +368,13 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         if (ropcode == 0 && trap_state &&
             restart->stack_access.kind == MMIX_STACK_ACCESS_NONE &&
             ((int64_t)env->pc >= 0 || !tracked_restart)) {
+            mmix_cpu_break_rules_and_continue(
+                env, resume_insn, mmix_cpu_read_reg(env, 0),
+                mmix_cpu_read_reg(env, resume_z));
+        }
+        if ((ropcode == 1 && !mmix_resume_ropcode1_normal((uint32_t)exec)) ||
+            ((ropcode == 1 || ropcode == 2) &&
+             mmix_resume_destination_marginal(env, (uint32_t)exec))) {
             mmix_cpu_break_rules_and_continue(
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
@@ -462,8 +509,30 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         env->npc = env->insn_replay.continuation;
         cpu_loop_exit_noexc(cs);
     case 1:
-        mmix_resume_unsupported(env, "ropcode 1 operand substitution", exec);
-        break;
+        if (trap_state) {
+            mmix_resume_unsupported(
+                env, "privileged ropcode 1 operand substitution", exec);
+        }
+        if (!mmix_resume_ropcode1_supported(insn)) {
+            mmix_resume_unsupported(env, "ropcode 1 instruction", exec);
+        }
+        if (where < 4) {
+            mmix_cpu_break_rules_and_continue(
+                env, resume_insn, mmix_cpu_read_reg(env, 0),
+                mmix_cpu_read_reg(env, resume_z));
+        }
+        env->insn_replay = (MMIXInsnReplayState) {
+            .insn_pc = where - 4,
+            .continuation = where,
+            .y = y,
+            .z = z,
+            .insn = insn,
+            .substitute_operands = true,
+            .active = true,
+        };
+        env->pc = env->insn_replay.insn_pc;
+        env->npc = env->insn_replay.continuation;
+        cpu_loop_exit_noexc(cs);
     case 3:
         env->forced_translation_insn = 0;
         env->forced_translation_address = 0;

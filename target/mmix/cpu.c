@@ -99,6 +99,9 @@ static TCGTBCPUState mmix_get_tb_cpu_state(CPUState *cs)
 
     if (env->insn_replay.active) {
         cs_base = MMIX_TB_REPLAY_FLAG | env->insn_replay.insn;
+        if (env->insn_replay.substitute_operands) {
+            cs_base |= MMIX_TB_REPLAY_SUBSTITUTE_FLAG;
+        }
     }
 
     return (TCGTBCPUState){
