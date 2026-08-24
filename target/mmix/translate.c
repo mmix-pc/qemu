@@ -24,6 +24,7 @@ typedef struct DisasContext {
     CPUMMIXState *env;
     vaddr insn_pc;
     uint32_t insn;
+    bool replay;
 } DisasContext;
 
 typedef enum MMIXALUKind {
@@ -94,7 +95,7 @@ static TCGv_i64 cpu_npc;
 
 static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
 {
-    if (translator_use_goto_tb(&ctx->base, dest)) {
+    if (!ctx->replay && translator_use_goto_tb(&ctx->base, dest)) {
         tcg_gen_goto_tb(tb_slot_idx);
         tcg_gen_movi_i64(cpu_pc, dest);
         tcg_gen_movi_i64(cpu_npc, dest + 4);
@@ -1186,6 +1187,10 @@ static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     target_ulong page_insns;
 
     ctx->env = cpu_env(cs);
+    ctx->replay = dcbase->tb->cs_base & MMIX_TB_REPLAY_FLAG;
+    if (ctx->replay) {
+        dcbase->max_insns = 1;
+    }
 
     /* Keep instruction-fetch traps precise at translated page boundaries. */
     page_insns = -(dcbase->pc_first | TARGET_PAGE_MASK) / 4;
@@ -1207,10 +1212,19 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     vaddr pc = ctx->base.pc_next;
     uint32_t insn;
 
-    insn = translator_ldl_end(ctx->env, &ctx->base, pc, MO_BE);
+    if (ctx->replay) {
+        g_assert(ctx->env->insn_replay.active);
+        g_assert(pc == ctx->env->insn_replay.insn_pc);
+        insn = ctx->base.tb->cs_base;
+        ctx->base.pc_next = ctx->env->insn_replay.continuation;
+        tcg_gen_st8_i32(tcg_constant_i32(false), tcg_env,
+                        offsetof(CPUMMIXState, insn_replay.active));
+    } else {
+        insn = translator_ldl_end(ctx->env, &ctx->base, pc, MO_BE);
+        ctx->base.pc_next += 4;
+    }
     ctx->insn_pc = pc;
     ctx->insn = insn;
-    ctx->base.pc_next += 4;
 
     gen_data_access_insn(ctx);
     tcg_gen_movi_i64(cpu_pc, pc);

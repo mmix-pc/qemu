@@ -6,24 +6,6 @@ from .common import *
 
 EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
-        "unsupported-resume-replay",
-        b"".join(
-            [
-                wyde(SETL, R10, 0x100),
-                insn(PUT, SR_TT, 0, R10),
-                *set_octa(R11, RQ_PROGRAM_B),
-                insn(PUT, SR_K, 0, R11),
-                wyde(SETL, R1, 0x20),  # target address
-                insn(PUT, SR_W, 0, R1),
-                *set_octa(R2, 0x0000000021010001),
-                insn(PUT, SR_X, 0, R2),
-                insn(RESUME, 0, 0, 0),
-            ]
-        ),
-        ("MMIX unsupported RESUME ropcode 0 instruction replay",
-         "MMIX emulator failure"),
-    ),
-    MMIXExpectedFailure(
         "unsupported-resume-operands",
         b"".join(
             [

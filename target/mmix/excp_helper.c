@@ -421,8 +421,24 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         cpu_loop_exit_noexc(cs);
     }
     case 0:
-        mmix_resume_unsupported(env, "ropcode 0 instruction replay", exec);
-        break;
+        if (trap_state) {
+            mmix_resume_unsupported(env, "ropcode 0 trap instruction replay",
+                                    exec);
+        }
+        if (where < 4) {
+            mmix_cpu_break_rules_and_continue(
+                env, resume_insn, mmix_cpu_read_reg(env, 0),
+                mmix_cpu_read_reg(env, resume_z));
+        }
+        env->insn_replay = (MMIXInsnReplayState) {
+            .insn_pc = where - 4,
+            .continuation = where,
+            .insn = insn,
+            .active = true,
+        };
+        env->pc = env->insn_replay.insn_pc;
+        env->npc = env->insn_replay.continuation;
+        cpu_loop_exit_noexc(cs);
     case 1:
         mmix_resume_unsupported(env, "ropcode 1 operand substitution", exec);
         break;

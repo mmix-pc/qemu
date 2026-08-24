@@ -95,8 +95,17 @@ static vaddr mmix_cpu_get_pc(CPUState *cs)
 static TCGTBCPUState mmix_get_tb_cpu_state(CPUState *cs)
 {
     CPUMMIXState *env = cpu_env(cs);
+    uint64_t cs_base = 0;
 
-    return (TCGTBCPUState){ .pc = env->pc, .flags = 0 };
+    if (env->insn_replay.active) {
+        cs_base = MMIX_TB_REPLAY_FLAG | env->insn_replay.insn;
+    }
+
+    return (TCGTBCPUState){
+        .pc = env->pc,
+        .flags = 0,
+        .cs_base = cs_base,
+    };
 }
 
 static void mmix_cpu_synchronize_from_tb(CPUState *cs,

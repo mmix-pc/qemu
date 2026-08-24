@@ -158,6 +158,7 @@ enum {
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_SWYM_INSN 0xfd000000U
+#define MMIX_TB_REPLAY_FLAG (1ULL << 63)
 
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)
@@ -196,6 +197,13 @@ typedef struct MMIXTrapRestartState {
     uint8_t forced_translation_access;
     bool forced_translation;
 } MMIXTrapRestartState;
+
+typedef struct MMIXInsnReplayState {
+    uint64_t insn_pc;
+    uint64_t continuation;
+    uint32_t insn;
+    bool active;
+} MMIXInsnReplayState;
 
 typedef enum MMIXSaveRestartPhase {
     MMIX_SAVE_RESTART_NONE,
@@ -243,6 +251,7 @@ typedef struct CPUArchState {
     uint64_t rule_break_y;
     uint64_t rule_break_z;
     uint32_t data_access_insn;
+    MMIXInsnReplayState insn_replay;
     uint32_t forced_translation_insn;
     uint64_t forced_translation_address;
     uint64_t forced_translation_where;

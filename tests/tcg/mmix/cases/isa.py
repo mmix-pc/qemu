@@ -3628,6 +3628,70 @@ ISA_TESTS = [
         regs={R5: 0x77},
     ),
     MMIXTest(
+        "resume-ropcode0-integer-replay",
+        program_with_regions(
+            (
+                0,
+                [
+                    wyde(SETL, R11, 0x20),
+                    wyde(SETL, R1, 0x80),
+                    insn(PUT, SR_W, 0, R1),
+                    *set_octa(
+                        R2, int.from_bytes(insn(ADDI, R10, R11, 7), "big")
+                    ),
+                    insn(PUT, SR_X, 0, R2),
+                    wyde(SETL, R3, 0xaa),
+                    insn(PUT, SR_Y, 0, R3),
+                    wyde(SETL, R4, 0xbb),
+                    insn(PUT, SR_Z, 0, R4),
+                    insn(RESUME, 0, 0, 0),
+                ],
+            ),
+            (0x7c, [wyde(SETL, R10, 0xdead)]),
+            (
+                0x80,
+                [
+                    insn(GET, R40, 0, SR_W),
+                    insn(GET, R41, 0, SR_X),
+                    insn(GET, R42, 0, SR_Y),
+                    insn(GET, R43, 0, SR_Z),
+                    halt(),
+                ],
+            ),
+        ),
+        pc=0x90,
+        regs={
+            R10: 0x27,
+            R40: 0x80,
+            R41: int.from_bytes(insn(ADDI, R10, R11, 7), "big"),
+            R42: 0xaa,
+            R43: 0xbb,
+        },
+    ),
+    MMIXTest(
+        "resume-ropcode0-logical-replay",
+        program_with_regions(
+            (
+                0,
+                [
+                    *set_octa(R13, 0xf0f0f0f00f0f0f0f),
+                    *set_octa(R14, 0xff00ff00ff00ff00),
+                    wyde(SETL, R1, 0xa0),
+                    insn(PUT, SR_W, 0, R1),
+                    *set_octa(
+                        R2, int.from_bytes(insn(XOR, R12, R13, R14), "big")
+                    ),
+                    insn(PUT, SR_X, 0, R2),
+                    insn(RESUME, 0, 0, 0),
+                ],
+            ),
+            (0x9c, [wyde(SETL, R12, 0xbeef)]),
+            (0xa0, [halt()]),
+        ),
+        pc=0xa0,
+        regs={R12: 0x0ff00ff0f00ff00f},
+    ),
+    MMIXTest(
         "floating-point-exceptions",
         b"".join(
             [
