@@ -160,9 +160,6 @@ enum {
 #define MMIX_SWYM_INSN 0xfd000000U
 #define MMIX_TB_REPLAY_FLAG (1ULL << 63)
 #define MMIX_TB_REPLAY_SUBSTITUTE_FLAG (1ULL << 62)
-#define MMIX_DATA_ACCESS_LOAD  (1u << MMU_DATA_LOAD)
-#define MMIX_DATA_ACCESS_STORE (1u << MMU_DATA_STORE)
-
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)
 #define MMIX_RA_EVENT_W    (1u << 5)
@@ -204,12 +201,9 @@ typedef struct MMIXInsnReplayState {
 } MMIXInsnReplayState;
 
 typedef struct MMIXDataAccessState {
-    /* Captured before an explicit TCG memory operation can fault. */
+    /* Reconstructed on an explicit access fault; STSF precomputes value. */
     uint64_t address;
     uint64_t value;
-    uint32_t insn;
-    uint8_t access_mask;
-    bool valid;
 } MMIXDataAccessState;
 
 typedef struct MMIXTrapRestartState {
@@ -338,7 +332,8 @@ bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env,
                                        MMIXStackAccessState *access);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
-void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes);
+void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
+                                 uint32_t insn);
 bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                             MMUAccessType access_type, bool debug,
                             bool allow_traps,

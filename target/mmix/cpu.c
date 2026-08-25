@@ -129,6 +129,7 @@ static void mmix_restore_state_to_opc(CPUState *cs,
 
     cpu->env.pc = data[0];
     cpu->env.npc = data[0] + 4;
+    cpu->env.data_access_insn = data[1];
 }
 
 static bool mmix_cpu_has_work(CPUState *cs)
@@ -410,7 +411,7 @@ static bool mmix_finish_translation_fault(CPUMMIXState *env,
 {
     translation->causes = causes;
     if (allow_traps) {
-        mmix_cpu_raise_dynamic_trap(env, causes);
+        mmix_cpu_raise_dynamic_trap(env, causes, env->data_access_insn);
     }
     return false;
 }
@@ -750,6 +751,31 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
     }
 }
 
+static uint64_t mmix_data_access_value(CPUMMIXState *env, uint32_t insn)
+{
+    uint8_t op = insn >> 24;
+    uint8_t x = insn >> 16;
+    uint8_t z = insn;
+
+    if (op == 0x94 || op == 0x95 ||
+        (op >= 0xa0 && op <= 0xaf) || op == 0xb6 || op == 0xb7) {
+        return mmix_cpu_read_reg(env, x);
+    }
+    if (op == 0xb0 || op == 0xb1) {
+        /* STSF[I] records its rounded binary32 value before the access. */
+        return env->data_access.value;
+    }
+    if (op == 0xb2 || op == 0xb3) {
+        return mmix_cpu_read_reg(env, x) >> 32;
+    }
+    if (op == 0xb4 || op == 0xb5) {
+        return x;
+    }
+
+    g_assert(op >= 0x80 && op <= 0x97);
+    return op & 1 ? z : mmix_cpu_read_reg(env, z);
+}
+
 static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
                               MMUAccessType access_type, int mmu_idx,
                               bool probe, uintptr_t retaddr)
@@ -764,6 +790,9 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
         if (probe) {
             return false;
         }
+        if (access_type != MMU_INST_FETCH) {
+            cpu_restore_state(cs, retaddr);
+        }
         if (translation.forced_translation) {
             env->forced_translation_insn = access_type == MMU_INST_FETCH ?
                                            MMIX_SWYM_INSN :
@@ -771,17 +800,22 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
             env->forced_translation_address = addr;
             env->forced_translation_access = access_type;
             cs->exception_index = EXCP_MMIX_FORCED_TRANSLATION;
-            cpu_loop_exit_restore(cs, retaddr);
+            cpu_loop_exit(cs);
         }
         env->program_exception_data_access =
-            access_type != MMU_INST_FETCH && env->data_access.valid &&
-            (env->data_access.access_mask & (1u << access_type)) != 0;
+            access_type != MMU_INST_FETCH &&
+            env->stack_access.kind == MMIX_STACK_ACCESS_NONE;
+        if (env->program_exception_data_access) {
+            env->data_access.address = addr;
+            env->data_access.value =
+                mmix_data_access_value(env, env->data_access_insn);
+        }
         env->program_exception_insn = access_type == MMU_INST_FETCH ?
                                       MMIX_SWYM_INSN :
                                       env->data_access_insn;
         mmix_cpu_record_program_exception(env, translation.causes);
         cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
-        cpu_loop_exit_restore(cs, retaddr);
+        cpu_loop_exit(cs);
     }
 
     ppage = translation.physical & TARGET_PAGE_MASK;

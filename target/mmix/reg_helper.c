@@ -166,9 +166,8 @@ static unsigned mmix_cpu_stack_depth(CPUMMIXState *env)
     return (base - stack) & env->lring_mask;
 }
 
-static void mmix_cpu_stack_store(CPUMMIXState *env)
+static void mmix_cpu_stack_store(CPUMMIXState *env, uintptr_t ra)
 {
-    uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS];
     unsigned idx = (addr >> 3) & env->lring_mask;
     uint64_t value = env->local_regs[idx];
@@ -180,9 +179,8 @@ static void mmix_cpu_stack_store(CPUMMIXState *env)
     mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
 
-static void mmix_cpu_stack_load(CPUMMIXState *env)
+static void mmix_cpu_stack_load(CPUMMIXState *env, uintptr_t ra)
 {
-    uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS] - 8;
     unsigned idx = (addr >> 3) & env->lring_mask;
     uint64_t value;
@@ -194,9 +192,9 @@ static void mmix_cpu_stack_load(CPUMMIXState *env)
     mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
 
-static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val)
+static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val,
+                                      uintptr_t ra)
 {
-    uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS];
 
     mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SAVE, addr,
@@ -206,9 +204,8 @@ static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val)
     mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
 
-static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env)
+static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env, uintptr_t ra)
 {
-    uintptr_t ra = GETPC();
     uint64_t addr = env->sregs[MMIX_SREG_RS] - 8;
     uint64_t value;
 
@@ -220,7 +217,7 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env)
     return value;
 }
 
-static void mmix_cpu_fill_stack(CPUMMIXState *env)
+static void mmix_cpu_fill_stack(CPUMMIXState *env, uintptr_t ra)
 {
     if (env->sregs[MMIX_SREG_RS] <= MMIX_INITIAL_STACK) {
         qemu_log_mask(LOG_UNIMP,
@@ -231,17 +228,18 @@ static void mmix_cpu_fill_stack(CPUMMIXState *env)
                       mmix_cpu_stack_depth(env));
         mmix_cpu_raise_emulator_failure(env);
     }
-    mmix_cpu_stack_load(env);
+    mmix_cpu_stack_load(env, ra);
 }
 
-static void mmix_cpu_ensure_local_room(CPUMMIXState *env, unsigned new_rl)
+static void mmix_cpu_ensure_local_room(CPUMMIXState *env, unsigned new_rl,
+                                       uintptr_t ra)
 {
     while (!mmix_cpu_local_room(env, new_rl)) {
-        mmix_cpu_stack_store(env);
+        mmix_cpu_stack_store(env, ra);
     }
 }
 
-static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
+static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl, uintptr_t ra)
 {
     unsigned old_rl = mmix_cpu_get_rl(env);
     unsigned rg = mmix_cpu_get_rg(env);
@@ -251,7 +249,7 @@ static void mmix_cpu_grow_rl(CPUMMIXState *env, unsigned new_rl)
     if (new_rl <= old_rl) {
         return;
     }
-    mmix_cpu_ensure_local_room(env, new_rl);
+    mmix_cpu_ensure_local_room(env, new_rl, ra);
     for (i = old_rl; i < new_rl; i++) {
         env->local_regs[mmix_cpu_local_index(env, i)] = 0;
     }
@@ -275,7 +273,8 @@ uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg)
     return 0;
 }
 
-void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val)
+static void mmix_cpu_write_reg_ra(CPUMMIXState *env, unsigned reg,
+                                  uint64_t val, uintptr_t ra)
 {
     unsigned rg = mmix_cpu_get_rg(env);
 
@@ -287,8 +286,13 @@ void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val)
         return;
     }
 
-    mmix_cpu_grow_rl(env, reg + 1);
+    mmix_cpu_grow_rl(env, reg + 1, ra);
     env->local_regs[mmix_cpu_local_index(env, reg)] = val;
+}
+
+void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val)
+{
+    mmix_cpu_write_reg_ra(env, reg, val, 0);
 }
 
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val)
@@ -323,11 +327,12 @@ void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes)
     mmix_cpu_set_rq_bits(env, causes & MMIX_RQ_PROGRAM_MASK);
 }
 
-void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes)
+void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
+                                 uint32_t insn)
 {
     CPUState *cs = env_cpu(env);
 
-    env->program_exception_insn = env->data_access_insn;
+    env->program_exception_insn = insn;
     mmix_cpu_record_program_exception(env, causes);
     cs->exception_index = EXCP_MMIX_DYNAMIC_TRAP;
     cpu_loop_exit(cs);
@@ -359,7 +364,7 @@ uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
 
 void helper_mmix_write_reg(CPUMMIXState *env, uint32_t reg, uint64_t val)
 {
-    mmix_cpu_write_reg(env, reg, val);
+    mmix_cpu_write_reg_ra(env, reg, val, GETPC());
 }
 
 uint64_t helper_mmix_read_sreg(CPUMMIXState *env, uint32_t reg)
@@ -434,7 +439,7 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
         return;
     }
     if (mmix_sreg_privileged(reg) && !mmix_cpu_is_privileged(env)) {
-        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
+        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
     if (reg == MMIX_SREG_RG && (val < 32 || val > 255)) {
         helper_mmix_break_rules(env, insn, 0, val);
@@ -470,17 +475,17 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
     }
 }
 
-void helper_mmix_sync(CPUMMIXState *env, uint32_t mode)
+void helper_mmix_sync(CPUMMIXState *env, uint32_t insn, uint32_t mode)
 {
     if (mode >= 4 && mode <= 7 && !mmix_cpu_is_privileged(env)) {
-        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
+        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
 }
 
-uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint64_t key)
+uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint32_t insn, uint64_t key)
 {
     if (!mmix_cpu_is_privileged(env)) {
-        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K);
+        mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
 
     return mmix_cpu_ldvts(env, key);
@@ -488,6 +493,7 @@ uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint64_t key)
 
 void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 {
+    uintptr_t ra = GETPC();
     unsigned rg = mmix_cpu_get_rg(env);
     unsigned old_rl = mmix_cpu_get_rl(env);
     unsigned hole = x;
@@ -496,13 +502,13 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 
     if (x >= rg) {
         hole = old_rl;
-        mmix_cpu_ensure_local_room(env, old_rl + 1);
+        mmix_cpu_ensure_local_room(env, old_rl + 1, ra);
         env->local_regs[mmix_cpu_local_index(env, hole)] = old_rl;
         pushed = old_rl + 1;
         new_rl = 0;
     } else {
         if (x >= old_rl) {
-            mmix_cpu_grow_rl(env, x + 1);
+            mmix_cpu_grow_rl(env, x + 1, ra);
             old_rl = x + 1;
         }
         env->local_regs[mmix_cpu_local_index(env, x)] = x;
@@ -517,6 +523,7 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 
 uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
 {
+    uintptr_t ra = GETPC();
     unsigned old_rl = mmix_cpu_get_rl(env);
     unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
     unsigned saved;
@@ -525,7 +532,7 @@ uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
     uint64_t dest;
 
     if (mmix_cpu_stack_depth(env) == 0) {
-        mmix_cpu_fill_stack(env);
+        mmix_cpu_fill_stack(env, ra);
     }
 
     if (x != 0 && x <= old_rl) {
@@ -534,7 +541,7 @@ uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
 
     saved = env->local_regs[(base - 1) & env->lring_mask] & 0xff;
     while (mmix_cpu_stack_depth(env) <= saved) {
-        mmix_cpu_fill_stack(env);
+        mmix_cpu_fill_stack(env, ra);
     }
 
     if (x != 0) {
@@ -567,6 +574,7 @@ static const uint32_t mmix_save_sregs[] = {
 void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 {
     MMIXSaveRestartState *restart = &env->save_restart;
+    uintptr_t ra = GETPC();
     unsigned rg;
 
     if (restart->phase == MMIX_SAVE_RESTART_NONE) {
@@ -590,7 +598,7 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
     }
 
     if (restart->phase == MMIX_SAVE_RESTART_PREPARE) {
-        mmix_cpu_ensure_local_room(env, restart->old_rl);
+        mmix_cpu_ensure_local_room(env, restart->old_rl, ra);
         env->local_regs[mmix_cpu_local_index(env, restart->old_rl)] =
             restart->old_rl;
         env->sregs[MMIX_SREG_RO] += (uint64_t)(restart->old_rl + 1) * 8;
@@ -600,7 +608,7 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 
     if (restart->phase == MMIX_SAVE_RESTART_SPILL) {
         while (env->sregs[MMIX_SREG_RS] != env->sregs[MMIX_SREG_RO]) {
-            mmix_cpu_stack_store(env);
+            mmix_cpu_stack_store(env, ra);
         }
         restart->phase = MMIX_SAVE_RESTART_GLOBALS;
         restart->index = rg;
@@ -608,7 +616,7 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 
     if (restart->phase == MMIX_SAVE_RESTART_GLOBALS) {
         while (restart->index < MMIX_REGS) {
-            mmix_cpu_stack_write_octa(env, restart->regs[restart->index]);
+            mmix_cpu_stack_write_octa(env, restart->regs[restart->index], ra);
             restart->index++;
         }
         restart->phase = MMIX_SAVE_RESTART_SPECIALS;
@@ -618,13 +626,13 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
     if (restart->phase == MMIX_SAVE_RESTART_SPECIALS) {
         while (restart->index < ARRAY_SIZE(mmix_save_sregs)) {
             mmix_cpu_stack_write_octa(
-                env, restart->sregs[mmix_save_sregs[restart->index]]);
+                env, restart->sregs[mmix_save_sregs[restart->index]], ra);
             restart->index++;
         }
         restart->phase = MMIX_SAVE_RESTART_PACKED;
     }
 
-    mmix_cpu_stack_write_octa(env, restart->packed);
+    mmix_cpu_stack_write_octa(env, restart->packed, ra);
 
     env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
     env->regs[x] = env->sregs[MMIX_SREG_RO] - 8;
@@ -633,6 +641,7 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 
 void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
 {
+    uintptr_t ra = GETPC();
     uint64_t addr;
     uint64_t packed;
     unsigned rg;
@@ -648,7 +657,7 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
     }
     env->sregs[MMIX_SREG_RS] = addr + 8;
 
-    packed = mmix_cpu_stack_read_octa(env);
+    packed = mmix_cpu_stack_read_octa(env, ra);
     rg = packed >> 56;
     if (rg < 32) {
         rg = 32;
@@ -657,17 +666,18 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
     env->sregs[MMIX_SREG_RA] = packed & MMIX_RA_VALID_MASK;
 
     for (i = ARRAY_SIZE(mmix_save_sregs); i > 0; i--) {
-        env->sregs[mmix_save_sregs[i - 1]] = mmix_cpu_stack_read_octa(env);
+        env->sregs[mmix_save_sregs[i - 1]] =
+            mmix_cpu_stack_read_octa(env, ra);
     }
     for (i = MMIX_REGS; i > rg; i--) {
-        env->regs[i - 1] = mmix_cpu_stack_read_octa(env);
+        env->regs[i - 1] = mmix_cpu_stack_read_octa(env, ra);
     }
 
-    mmix_cpu_stack_load(env);
+    mmix_cpu_stack_load(env, ra);
     saved_rl = env->local_regs[(env->sregs[MMIX_SREG_RS] >> 3) &
                                env->lring_mask] & 0xff;
     for (i = 0; i < saved_rl; i++) {
-        mmix_cpu_stack_load(env);
+        mmix_cpu_stack_load(env, ra);
     }
 
     env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
