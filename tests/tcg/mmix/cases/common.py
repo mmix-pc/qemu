@@ -818,6 +818,7 @@ class MMIXExpectedFailure:
     program: bytes
     patterns: tuple[str, ...]
     absent: tuple[str, ...] = ("MMIX test exit", "MMIX dynamic trap causes=")
+    qemu_args: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

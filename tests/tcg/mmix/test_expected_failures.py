@@ -11,4 +11,4 @@ from lib.execution import run_expected_failure
 
 @pytest.mark.parametrize("test", EXPECTED_FAILURE_TESTS, ids=case_id)
 def test_expected_failure(qemu, workdir, test):
-    run_expected_failure(qemu, workdir, test)
+    run_expected_failure(qemu, workdir, test, qemu_args=test.qemu_args)

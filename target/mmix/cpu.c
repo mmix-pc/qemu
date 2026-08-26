@@ -14,6 +14,7 @@
 #include "exec/page-protection.h"
 #include "exec/translation-block.h"
 #include "exec/target_page.h"
+#include "hw/core/qdev-properties.h"
 #include "system/address-spaces.h"
 #include "system/memory.h"
 #include "tcg/debug-assert.h"
@@ -623,8 +624,8 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     cpu->env.sregs[MMIX_SREG_RV] = MMIX_INITIAL_RV;
     cpu->env.sregs[MMIX_SREG_RG] = MMIX_INITIAL_RG;
     cpu->env.sregs[MMIX_SREG_RL] = MMIX_INITIAL_RL;
-    cpu->env.sregs[MMIX_SREG_RO] = MMIX_INITIAL_STACK;
-    cpu->env.sregs[MMIX_SREG_RS] = MMIX_INITIAL_STACK;
+    cpu->env.sregs[MMIX_SREG_RO] = cpu->initial_stack;
+    cpu->env.sregs[MMIX_SREG_RS] = cpu->initial_stack;
     cpu->env.flat_translation = true;
     cpu->env.lring_size = MMIX_LOCAL_REGS;
     cpu->env.lring_mask = MMIX_LOCAL_REGS - 1;
@@ -642,6 +643,11 @@ static void mmix_cpu_initfn(Object *obj)
     cpu->trap_restart_stack =
         g_array_new(false, false, sizeof(MMIXTrapRestartState));
 }
+
+static const Property mmix_cpu_properties[] = {
+    DEFINE_PROP_UINT64("initial-stack", MMIXCPU, initial_stack,
+                       MMIX_INITIAL_STACK),
+};
 
 static void mmix_cpu_finalize(Object *obj)
 {
@@ -714,11 +720,12 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
                  "pc=0x%016" PRIx64 " npc=0x%016" PRIx64
                  " rG=%" PRIu64 " rL=%" PRIu64
                  " rO=0x%016" PRIx64 " rS=0x%016" PRIx64
+                 " stack-bottom=0x%016" PRIx64
                  " lring_size=%u lring_mask=0x%08x\n",
                  env->pc, env->npc, env->sregs[MMIX_SREG_RG],
                  env->sregs[MMIX_SREG_RL], env->sregs[MMIX_SREG_RO],
-                 env->sregs[MMIX_SREG_RS], env->lring_size,
-                 env->lring_mask);
+                 env->sregs[MMIX_SREG_RS], MMIX_CPU(cs)->initial_stack,
+                 env->lring_size, env->lring_mask);
     qemu_fprintf(f, "register-stack-access=%s",
                  mmix_stack_access_name(env->stack_access.kind));
     if (env->stack_access.kind != MMIX_STACK_ACCESS_NONE) {
@@ -857,6 +864,7 @@ static void mmix_cpu_class_init(ObjectClass *oc, const void *data)
     ResettableClass *rc = RESETTABLE_CLASS(oc);
 
     device_class_set_parent_realize(dc, mmix_cpu_realize, &mcc->parent_realize);
+    device_class_set_props(dc, mmix_cpu_properties);
     resettable_class_set_parent_phases(rc, NULL, mmix_cpu_reset_hold, NULL,
                                        &mcc->parent_phases);
 

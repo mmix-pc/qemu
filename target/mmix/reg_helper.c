@@ -219,7 +219,7 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env, uintptr_t ra)
 
 static void mmix_cpu_fill_stack(CPUMMIXState *env, uintptr_t ra)
 {
-    if (env->sregs[MMIX_SREG_RS] <= MMIX_INITIAL_STACK) {
+    if (env->sregs[MMIX_SREG_RS] <= env_archcpu(env)->initial_stack) {
         qemu_log_mask(LOG_UNIMP,
                       "MMIX register stack underflow during POP "
                       "rO=0x%" PRIx64 " rS=0x%" PRIx64 " depth=%u\n",
