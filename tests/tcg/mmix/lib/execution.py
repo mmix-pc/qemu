@@ -1203,15 +1203,40 @@ def _run_smp_shootdown_protocol(qtest, test):
     while time.monotonic() < deadline:
         failure = read(test.failure_offset)
         if failure:
-            raise AssertionError(
-                f"{test.name}: guest failed with reason {failure:#x}, "
-                f"rQ={read(test.handler_rq_offset):#x}"
-            )
+            detail = f"{test.name}: guest failed with reason {failure:#x}"
+            if hasattr(test, "handler_rq_offset"):
+                detail += f", rQ={read(test.handler_rq_offset):#x}"
+            elif hasattr(test, "expected_memory"):
+                fields = [read(offset) for offset in range(0, 0xe1, 8)]
+                detail += f", state={fields}"
+            raise AssertionError(detail)
         if read(test.complete_offset) == 1:
             break
         time.sleep(0.001)
     else:
         raise AssertionError(f"{test.name}: timed out waiting for completion")
+
+    if hasattr(test, "expected_memory"):
+        for address, expected in test.expected_memory:
+            actual = read_at(0, address)
+            assert actual == expected, (
+                f"{test.name}: memory {address:#x}: expected "
+                f"{expected:#x}, got {actual:#x}"
+            )
+        for address, mask, expected in test.masked_memory:
+            actual = read_at(0, address)
+            assert actual & mask == expected, (
+                f"{test.name}: memory {address:#x} masked by {mask:#x}: "
+                f"expected {expected:#x}, got {actual:#x}"
+            )
+        for address, minimum, maximum in test.ranged_memory:
+            actual = read_at(0, address)
+            assert minimum <= actual < maximum, (
+                f"{test.name}: memory {address:#x}: expected in "
+                f"[{minimum:#x}, {maximum:#x}), got {actual:#x}"
+            )
+        write(test.halt_offset, 1)
+        return
 
     assert read(test.generation_offset) == test.generation_empty
     assert read(test.target_mask_offset) == test.target_cpu1

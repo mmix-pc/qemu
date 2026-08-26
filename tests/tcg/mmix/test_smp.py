@@ -11,6 +11,7 @@ from cases.smp_ipi import SMP_IPI_TESTS
 from cases.smp_memory import SMP_CSWAP_TESTS, SMP_MEMORY_TESTS
 from cases.smp_shared_interrupts import SMP_SHARED_INTERRUPT_TESTS
 from cases.smp_shootdown import SMP_SHOOTDOWN_TESTS
+from cases.smp_shootdown_stress import SMP_SHOOTDOWN_STRESS_TESTS
 from cases.smp_state import SMP_RESET_TESTS, SMP_STATE_TESTS
 from cases.smp_timers import SMP_TIMER_TESTS
 from cases.smp_translation import SMP_TRANSLATION_TESTS
@@ -46,7 +47,9 @@ def test_smp_ipi(qemu, workdir, test):
     run_mttcg_ipi_test(qemu, workdir, test)
 
 
-@pytest.mark.parametrize("test", SMP_SHOOTDOWN_TESTS, ids=case_id)
+@pytest.mark.parametrize(
+    "test", SMP_SHOOTDOWN_TESTS + SMP_SHOOTDOWN_STRESS_TESTS, ids=case_id
+)
 def test_smp_shootdown(qemu, workdir, test):
     run_mttcg_shootdown_test(qemu, workdir, test)
 
