@@ -145,18 +145,26 @@ static uint64_t mmix_bootinfo_read(QTestState *qts,
     return qtest_readq(qts, mmix_bootinfo_base + offset);
 }
 
-static QTestState *mmix_start_elf(const char *elf, const char *cmdline)
+static QTestState *mmix_start_elf_smp(const char *elf, const char *cmdline,
+                                     unsigned int cpu_count)
 {
     g_autofree char *quoted_elf = g_shell_quote(elf);
 
     if (cmdline) {
         g_autofree char *quoted_cmdline = g_shell_quote(cmdline);
 
-        return qtest_initf("-machine virt -display none -kernel %s "
-                           "-append %s", quoted_elf, quoted_cmdline);
+        return qtest_initf("-machine virt -display none -smp %u -kernel %s "
+                           "-append %s", cpu_count, quoted_elf,
+                           quoted_cmdline);
     }
 
-    return qtest_initf("-machine virt -display none -kernel %s", quoted_elf);
+    return qtest_initf("-machine virt -display none -smp %u -kernel %s",
+                       cpu_count, quoted_elf);
+}
+
+static QTestState *mmix_start_elf(const char *elf, const char *cmdline)
+{
+    return mmix_start_elf_smp(elf, cmdline, 1);
 }
 
 static void mmix_assert_kernel_cmdline(QTestState *qts, const char *expected)
@@ -469,12 +477,11 @@ static void test_mmix_platform_smp_accepted(gconstpointer opaque)
     qtest_quit(qts);
 }
 
-static void test_mmix_platform_smp_cpus(gconstpointer opaque)
+static void mmix_assert_smp_topology(QTestState *qts,
+                                     unsigned int expected_count)
 {
-    unsigned int expected_count = GPOINTER_TO_UINT(opaque);
     bool seen[MMIX_INITIAL_STACK_SLOT_COUNT] = { false };
     g_autoptr(QDict) response = NULL;
-    QTestState *qts = qtest_initf("-machine virt -smp %u", expected_count);
     QList *cpus;
     QObject *entry;
 
@@ -512,7 +519,100 @@ static void test_mmix_platform_smp_cpus(gconstpointer opaque)
     for (unsigned int i = 0; i < expected_count; i++) {
         g_assert_true(seen[i]);
     }
+}
+
+static void mmix_assert_stack_slots_writable(QTestState *qts,
+                                             unsigned int cpu_count)
+{
+    unsigned int i;
+
+    for (i = 0; i < cpu_count; i++) {
+        uint64_t base = mmix_initial_stack_base +
+                        i * mmix_initial_stack_slot_size;
+        uint64_t end = base + mmix_initial_stack_slot_size - sizeof(uint64_t);
+
+        qtest_writeq(qts, base, 0x1000000000000000ULL + i);
+        qtest_writeq(qts, end, 0xf000000000000000ULL + i);
+    }
+    for (i = 0; i < cpu_count; i++) {
+        uint64_t base = mmix_initial_stack_base +
+                        i * mmix_initial_stack_slot_size;
+        uint64_t end = base + mmix_initial_stack_slot_size - sizeof(uint64_t);
+
+        g_assert_cmphex(qtest_readq(qts, base), ==,
+                        0x1000000000000000ULL + i);
+        g_assert_cmphex(qtest_readq(qts, end), ==,
+                        0xf000000000000000ULL + i);
+    }
+}
+
+static void test_mmix_platform_smp_cpus(gconstpointer opaque)
+{
+    unsigned int expected_count = GPOINTER_TO_UINT(opaque);
+    g_autofree char *elf = mmix_create_elf();
+    QTestState *qts = mmix_start_elf_smp(elf, NULL, expected_count);
+
+    mmix_assert_smp_topology(qts, expected_count);
+    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
+                     ==, expected_count);
+    g_assert_cmpuint(mmix_bootinfo_read(qts,
+                                       MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
+                     ==, 0);
+    mmix_assert_stack_slots_writable(qts, expected_count);
     qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
+static uint64_t mmix_register_dump_value(const char *dump, const char *label)
+{
+    const char *value = strstr(dump, label);
+    uint64_t result;
+
+    g_assert_nonnull(value);
+    g_assert_cmpint(sscanf(value + strlen(label), "%" SCNx64, &result), ==, 1);
+    return result;
+}
+
+static void mmix_assert_cpu_startup(QTestState *qts, unsigned int cpu_index)
+{
+    g_autofree char *dump = qtest_hmp(qts, "info registers %u", cpu_index);
+    uint64_t stack = mmix_initial_stack_base +
+                     cpu_index * mmix_initial_stack_slot_size;
+
+    g_assert_cmphex(mmix_register_dump_value(dump, "pc=0x"), ==, 0);
+    g_assert_cmphex(mmix_register_dump_value(dump, "rO=0x"), ==, stack);
+    g_assert_cmphex(mmix_register_dump_value(dump, "rS=0x"), ==, stack);
+    g_assert_cmphex(mmix_register_dump_value(dump, "stack-bottom=0x"), ==,
+                    stack);
+    g_assert_cmphex(mmix_register_dump_value(dump, "r0  =0x"), ==,
+                    cpu_index);
+    g_assert_cmphex(mmix_register_dump_value(dump, "r1  =0x"), ==,
+                    mmix_bootinfo_base);
+}
+
+static void test_mmix_platform_smp_reset(void)
+{
+    g_autofree char *elf = mmix_create_elf();
+    QTestState *qts = mmix_start_elf_smp(elf, NULL, 2);
+    unsigned int i;
+
+    for (i = 0; i < 2; i++) {
+        mmix_assert_cpu_startup(qts, i);
+    }
+
+    qtest_system_reset(qts);
+    mmix_assert_smp_topology(qts, 2);
+    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
+                     ==, 2);
+    g_assert_cmpuint(mmix_bootinfo_read(qts,
+                                       MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
+                     ==, 0);
+    for (i = 0; i < 2; i++) {
+        mmix_assert_cpu_startup(qts, i);
+    }
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
 static void test_mmix_platform_smp_rejected(gconstpointer opaque)
@@ -581,6 +681,8 @@ int main(int argc, char **argv)
     qtest_add_data_func("/mmix/platform/smp/cpus/16",
                         GUINT_TO_POINTER(16),
                         test_mmix_platform_smp_cpus);
+    qtest_add_func("/mmix/platform/smp/reset",
+                   test_mmix_platform_smp_reset);
     qtest_add_data_func("/mmix/platform/smp/rejected/zero", "0",
                         test_mmix_platform_smp_rejected);
     qtest_add_data_func("/mmix/platform/smp/rejected/above-maximum", "17",

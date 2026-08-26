@@ -14,6 +14,7 @@
 #include "hw/core/irq.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
+#include "system/reset.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
@@ -38,6 +39,8 @@ struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXELFStartupABI elf_startup_abi;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
+    MMIXKernelLoadInfo kernel_load_info;
+    bool kernel_loaded;
 };
 
 const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
@@ -271,7 +274,8 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
         flags |= MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE;
     }
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_FLAGS, flags);
-    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_CPU_COUNT, 1);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_CPU_COUNT,
+                        machine->smp.cpus);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_BOOT_CPU_ID,
                         boot_cpu_id);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_RAM_BASE, 0);
@@ -591,6 +595,22 @@ static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms,
     }
 }
 
+static void mmix_virt_reset(MachineState *machine, ResetType type)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
+
+    qemu_devices_reset(type);
+    if (type == RESET_TYPE_SNAPSHOT_LOAD) {
+        return;
+    }
+
+    if (vms->kernel_loaded) {
+        mmix_start_loaded_kernel(vms, &vms->kernel_load_info);
+    } else {
+        mmix_setup_semihosting_arguments(machine, vms->cpus[0]);
+    }
+}
+
 static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
@@ -662,7 +682,9 @@ static void mmix_virt_init(MachineState *machine)
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
-        mmix_start_loaded_kernel(vms, &load_info);
+        vms->kernel_load_info = load_info;
+        vms->kernel_loaded = true;
+        mmix_start_loaded_kernel(vms, &vms->kernel_load_info);
     } else {
         mmix_setup_semihosting_arguments(machine, cpu);
     }
@@ -711,6 +733,7 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
 
     mc->desc = "MMIX virtual machine";
     mc->init = mmix_virt_init;
+    mc->reset = mmix_virt_reset;
     mc->default_cpu_type = TYPE_MMIX_ANY_CPU;
     mc->default_cpus = 1;
     mc->min_cpus = 1;
