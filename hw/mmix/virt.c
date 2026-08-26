@@ -511,13 +511,11 @@ static void mmix_apply_kernel_load_state(CPUState *cpu,
     cpu_set_pc(cpu, info->entry);
 }
 
-static void mmix_apply_elf_bootinfo_startup_state(
-    CPUState *cpu, const MMIXKernelLoadInfo *info)
+static void mmix_apply_elf_bootinfo_startup_state(CPUState *cpu)
 {
     CPUMMIXState *env = cpu_env(cpu);
 
-    g_assert(info->image_type == MMIX_KERNEL_IMAGE_ELF);
-    mmix_cpu_write_reg(env, 0, info->boot_cpu_id);
+    mmix_cpu_write_reg(env, 0, cpu->cpu_index);
     mmix_cpu_write_reg(env, 1,
                        mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base);
 }
@@ -543,6 +541,11 @@ static bool mmix_prepare_elf_startup(MMIXVirtMachineState *vms,
                        "semihosting");
             return false;
         }
+        if (machine->smp.cpus != 1) {
+            error_setg(errp, "MMIX ELF startup ABI 'argc-argv' supports "
+                       "only one CPU");
+            return false;
+        }
         return true;
     default:
         g_assert_not_reached();
@@ -550,12 +553,11 @@ static bool mmix_prepare_elf_startup(MMIXVirtMachineState *vms,
 }
 
 static void mmix_apply_elf_startup_state(MMIXVirtMachineState *vms,
-                                         CPUState *cpu,
-                                         const MMIXKernelLoadInfo *info)
+                                         CPUState *cpu)
 {
     switch (vms->elf_startup_abi) {
     case MMIX_ELF_STARTUP_ABI_BOOTINFO:
-        mmix_apply_elf_bootinfo_startup_state(cpu, info);
+        mmix_apply_elf_bootinfo_startup_state(cpu);
         return;
     case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
         mmix_setup_semihosting_arguments(MACHINE(vms), cpu);
@@ -565,10 +567,11 @@ static void mmix_apply_elf_startup_state(MMIXVirtMachineState *vms,
     }
 }
 
-static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms, CPUState *cpu,
+static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms,
                                      const MMIXKernelLoadInfo *info)
 {
     MachineState *machine = MACHINE(vms);
+    unsigned int i;
 
     if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
         Error *err = NULL;
@@ -577,14 +580,14 @@ static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms, CPUState *cpu,
             error_report_err(err);
             exit(1);
         }
-    }
 
-    mmix_apply_kernel_load_state(cpu, info);
-
-    if (info->image_type == MMIX_KERNEL_IMAGE_ELF) {
-        mmix_apply_elf_startup_state(vms, cpu, info);
+        for (i = 0; i < machine->smp.cpus; i++) {
+            mmix_apply_kernel_load_state(vms->cpus[i], info);
+            mmix_apply_elf_startup_state(vms, vms->cpus[i]);
+        }
     } else {
-        mmix_setup_semihosting_arguments(machine, cpu);
+        mmix_apply_kernel_load_state(vms->cpus[0], info);
+        mmix_setup_semihosting_arguments(machine, vms->cpus[0]);
     }
 }
 
@@ -659,7 +662,7 @@ static void mmix_virt_init(MachineState *machine)
             error_reportf_err(err, "could not load MMIX kernel image: ");
             exit(1);
         }
-        mmix_start_loaded_kernel(vms, cpu, &load_info);
+        mmix_start_loaded_kernel(vms, &load_info);
     } else {
         mmix_setup_semihosting_arguments(machine, cpu);
     }
