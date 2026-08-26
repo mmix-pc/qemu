@@ -7,8 +7,10 @@
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "intc.h"
 
@@ -25,10 +27,15 @@ static uint32_t mmix_intc_valid_irq_mask(void)
     return UINT32_MAX & ~1U;
 }
 
+static bool mmix_intc_context_active(MMIXIntcState *s, uint32_t cpu)
+{
+    return cpu < s->num_cpus;
+}
+
 static uint32_t mmix_intc_claimable(MMIXIntcState *s, uint32_t cpu)
 {
-    /* CPU1+ contexts are reserved for future SMP support. */
-    if (cpu != 0) {
+    /* CPU1+ routing is enabled when per-context outputs are introduced. */
+    if (!mmix_intc_context_active(s, cpu) || cpu != 0) {
         return 0;
     }
 
@@ -66,7 +73,7 @@ static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu, uint32_t irq)
 {
     uint32_t mask;
 
-    if (cpu != 0) {
+    if (!mmix_intc_context_active(s, cpu) || cpu != 0) {
         return;
     }
 
@@ -82,8 +89,8 @@ static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu, uint32_t irq)
     mmix_intc_update(s);
 }
 
-static bool mmix_intc_context_offset(hwaddr addr, uint32_t *cpu,
-                                     hwaddr *reg)
+static bool mmix_intc_context_offset(MMIXIntcState *s, hwaddr addr,
+                                     uint32_t *cpu, hwaddr *reg)
 {
     hwaddr context;
 
@@ -98,7 +105,7 @@ static bool mmix_intc_context_offset(hwaddr addr, uint32_t *cpu,
     }
 
     *reg = context % MMIX_VIRT_INTC_CONTEXT_STRIDE;
-    return true;
+    return mmix_intc_context_active(s, *cpu);
 }
 
 static uint64_t mmix_intc_read(void *opaque, hwaddr addr, unsigned size)
@@ -112,10 +119,10 @@ static uint64_t mmix_intc_read(void *opaque, hwaddr addr, unsigned size)
     if (addr == MMIX_VIRT_INTC_PENDING) {
         return s->pending;
     }
-    if (mmix_intc_context_offset(addr, &cpu, &reg)) {
+    if (mmix_intc_context_offset(s, addr, &cpu, &reg)) {
         switch (reg) {
         case MMIX_VIRT_INTC_CONTEXT_ENABLE:
-            return cpu == 0 ? s->enable[cpu] : 0;
+            return s->enable[cpu];
         case MMIX_VIRT_INTC_CONTEXT_CLAIM:
             return mmix_intc_claim(s, cpu);
         default:
@@ -138,13 +145,11 @@ static void mmix_intc_write(void *opaque, hwaddr addr,
 
     (void)size;
 
-    if (mmix_intc_context_offset(addr, &cpu, &reg)) {
+    if (mmix_intc_context_offset(s, addr, &cpu, &reg)) {
         switch (reg) {
         case MMIX_VIRT_INTC_CONTEXT_ENABLE:
-            if (cpu == 0) {
-                s->enable[cpu] = value & mmix_intc_valid_irq_mask();
-                mmix_intc_update(s);
-            }
+            s->enable[cpu] = value & mmix_intc_valid_irq_mask();
+            mmix_intc_update(s);
             return;
         case MMIX_VIRT_INTC_CONTEXT_COMPLETE:
             mmix_intc_complete(s, cpu, value);
@@ -203,7 +208,11 @@ static void mmix_intc_realize(DeviceState *dev, Error **errp)
 {
     MMIXIntcState *s = MMIX_INTC(dev);
 
-    (void)errp;
+    if (s->num_cpus == 0 || s->num_cpus > MMIX_VIRT_INTC_CONTEXT_COUNT) {
+        error_setg(errp, "num-cpus must be between 1 and %u",
+                   MMIX_VIRT_INTC_CONTEXT_COUNT);
+        return;
+    }
 
     memory_region_init_io(&s->iomem, OBJECT(s), &mmix_intc_ops, s,
                           TYPE_MMIX_INTC, MMIX_VIRT_INTC_SIZE);
@@ -224,6 +233,11 @@ static const VMStateDescription vmstate_mmix_intc = {
     },
 };
 
+/* num_cpus is immutable machine configuration, not migrated device state. */
+static const Property mmix_intc_properties[] = {
+    DEFINE_PROP_UINT32("num-cpus", MMIXIntcState, num_cpus, 1),
+};
+
 static void mmix_intc_instance_init(Object *obj)
 {
     SysBusDevice *dev = SYS_BUS_DEVICE(obj);
@@ -241,6 +255,7 @@ static void mmix_intc_class_init(ObjectClass *oc, const void *data)
 
     (void)data;
 
+    device_class_set_props(dc, mmix_intc_properties);
     device_class_set_legacy_reset(dc, mmix_intc_reset);
     dc->realize = mmix_intc_realize;
     dc->vmsd = &vmstate_mmix_intc;

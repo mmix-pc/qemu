@@ -19,6 +19,7 @@ struct MMIXIntcState {
     MemoryRegion iomem;
     qemu_irq irq;
 
+    uint32_t num_cpus;
     uint32_t pending;
     uint32_t input_level;
     uint32_t claimed[MMIX_VIRT_INTC_CONTEXT_COUNT];
