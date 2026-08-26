@@ -9,6 +9,8 @@
 #include "elf.h"
 #include "libqtest.h"
 #include "qemu/bswap.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 #include "standard-headers/linux/virtio_mmio.h"
 
 #ifndef EM_MMIX
@@ -467,6 +469,52 @@ static void test_mmix_platform_smp_accepted(gconstpointer opaque)
     qtest_quit(qts);
 }
 
+static void test_mmix_platform_smp_cpus(gconstpointer opaque)
+{
+    unsigned int expected_count = GPOINTER_TO_UINT(opaque);
+    bool seen[MMIX_INITIAL_STACK_SLOT_COUNT] = { false };
+    g_autoptr(QDict) response = NULL;
+    QTestState *qts = qtest_initf("-machine virt -smp %u", expected_count);
+    QList *cpus;
+    QObject *entry;
+
+    response = qtest_qmp(qts, "{ 'execute': 'query-cpus-fast' }");
+    g_assert(qdict_haskey(response, "return"));
+    cpus = qdict_get_qlist(response, "return");
+    g_assert_cmpuint(qlist_size(cpus), ==, expected_count);
+
+    while ((entry = qlist_pop(cpus))) {
+        QDict *cpu = qobject_to(QDict, entry);
+        unsigned int index = qdict_get_int(cpu, "cpu-index");
+        const char *path = qdict_get_str(cpu, "qom-path");
+        g_autofree char *expected_path =
+            g_strdup_printf("/machine/cpu[%u]", index);
+        g_autoptr(QDict) stack_response = NULL;
+        uint64_t expected_stack =
+            mmix_initial_stack_base + index * mmix_initial_stack_slot_size;
+
+        g_assert_cmpuint(index, <, expected_count);
+        g_assert_false(seen[index]);
+        seen[index] = true;
+        g_assert_cmpstr(path, ==, expected_path);
+
+        stack_response = qtest_qmp(
+            qts,
+            "{ 'execute': 'qom-get', "
+            "  'arguments': { 'path': %s, "
+            "                 'property': 'initial-stack' } }",
+            path);
+        g_assert_cmphex(qdict_get_int(stack_response, "return"), ==,
+                        expected_stack);
+        qobject_unref(entry);
+    }
+
+    for (unsigned int i = 0; i < expected_count; i++) {
+        g_assert_true(seen[i]);
+    }
+    qtest_quit(qts);
+}
+
 static void test_mmix_platform_smp_rejected(gconstpointer opaque)
 {
     const char *smp = opaque;
@@ -524,6 +572,15 @@ int main(int argc, char **argv)
     qtest_add_data_func("/mmix/platform/smp/accepted/actual-below-maximum",
                         "cpus=2,maxcpus=16",
                         test_mmix_platform_smp_accepted);
+    qtest_add_data_func("/mmix/platform/smp/cpus/1",
+                        GUINT_TO_POINTER(1),
+                        test_mmix_platform_smp_cpus);
+    qtest_add_data_func("/mmix/platform/smp/cpus/2",
+                        GUINT_TO_POINTER(2),
+                        test_mmix_platform_smp_cpus);
+    qtest_add_data_func("/mmix/platform/smp/cpus/16",
+                        GUINT_TO_POINTER(16),
+                        test_mmix_platform_smp_cpus);
     qtest_add_data_func("/mmix/platform/smp/rejected/zero", "0",
                         test_mmix_platform_smp_rejected);
     qtest_add_data_func("/mmix/platform/smp/rejected/above-maximum", "17",

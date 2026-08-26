@@ -37,6 +37,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
 struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXELFStartupABI elf_startup_abi;
+    CPUState *cpus[MMIX_VIRT_MAX_CPUS];
 };
 
 const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
@@ -185,21 +186,27 @@ static bool mmix_validate_initial_stack_layout(const MachineState *machine,
     return true;
 }
 
-static CPUState *mmix_virt_create_cpu(MachineState *machine,
+static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
                                       unsigned int cpu_index)
 {
+    MachineState *machine = MACHINE(vms);
+    g_autofree char *name = g_strdup_printf("cpu[%u]", cpu_index);
     Object *cpuobj = object_new(machine->cpu_type);
+    CPUState *cpu = CPU(cpuobj);
     uint64_t initial_stack = object_property_get_uint(
         cpuobj, "initial-stack", &error_fatal);
 
+    cpu->cpu_index = cpu_index;
     if (machine->smp.cpus != 1 || cpu_index != 0 ||
         initial_stack == MMIX_INITIAL_STACK) {
         object_property_set_uint(cpuobj, "initial-stack",
                                  mmix_virt_initial_stack(cpu_index),
                                  &error_fatal);
     }
-    qdev_realize(DEVICE(cpuobj), NULL, &error_fatal);
-    return CPU(cpuobj);
+    object_property_add_child(OBJECT(machine), name, cpuobj);
+    qdev_realize_and_unref(DEVICE(cpuobj), NULL, &error_fatal);
+    vms->cpus[cpu_index] = cpu;
+    return cpu;
 }
 
 static bool mmix_validate_bootinfo_layout(const MachineState *machine,
@@ -591,6 +598,7 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *timer;
     DeviceState *virtio_mmio;
     qemu_irq cpu_irq;
+    unsigned int i;
 
     if (!mmix_validate_initial_stack_layout(machine, &error_fatal)) {
         return;
@@ -598,7 +606,10 @@ static void mmix_virt_init(MachineState *machine)
 
     memory_region_add_subregion(sysmem, 0, machine->ram);
 
-    cpu = mmix_virt_create_cpu(machine, 0);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        mmix_virt_create_cpu(vms, i);
+    }
+    cpu = vms->cpus[0];
 
     intc = qdev_new(TYPE_MMIX_INTC);
     object_property_add_child(OBJECT(machine), "intc", OBJECT(intc));
