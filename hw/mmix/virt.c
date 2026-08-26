@@ -315,7 +315,8 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                         mmix_virt_memmap[MMIX_VIRT_TIMER].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_TIMER_IRQ_BASE,
                         MMIX_VIRT_TIMER_IRQ_BASE);
-    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_TIMER_IRQ_COUNT, 1);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_TIMER_IRQ_COUNT,
+                        machine->smp.cpus);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_INTC_BASE,
                         mmix_virt_memmap[MMIX_VIRT_INTC].base);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_INTC_IRQ_COUNT,
@@ -651,11 +652,15 @@ static void mmix_virt_init(MachineState *machine)
 
     timer = qdev_new(TYPE_MMIX_TIMER);
     object_property_add_child(OBJECT(machine), "timer", OBJECT(timer));
+    qdev_prop_set_uint32(timer, "num-cpus", machine->smp.cpus);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(timer), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(timer), 0,
                     mmix_virt_memmap[MMIX_VIRT_TIMER].base);
-    sysbus_connect_irq(SYS_BUS_DEVICE(timer), 0,
-                       qdev_get_gpio_in(intc, MMIX_VIRT_TIMER_IRQ_BASE));
+    for (i = 0; i < machine->smp.cpus; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(timer), i,
+                           qdev_get_gpio_in(intc,
+                                           MMIX_VIRT_TIMER_IRQ_BASE + i));
+    }
 
     virtio_mmio = qdev_new(TYPE_VIRTIO_MMIO);
     object_property_add_child(OBJECT(machine), "virtio-mmio",

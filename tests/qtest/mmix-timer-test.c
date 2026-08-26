@@ -137,8 +137,7 @@ static QTestState *mmix_timer_start(void)
 
 static QTestState *mmix_timer_start_contexts(unsigned num_cpus)
 {
-    QTestState *qts = qtest_initf(
-        "-machine virt -global mmix-timer.num-cpus=%u", num_cpus);
+    QTestState *qts = qtest_initf("-machine virt -smp %u", num_cpus);
 
     qtest_irq_intercept_out_named(qts, MMIX_TIMER_QOM_PATH,
                                   MMIX_TIMER_OUTPUT_IRQ);
@@ -245,30 +244,6 @@ static void test_mmix_timer_unsupported_contexts(void)
     qtest_quit(qts);
 }
 
-static void test_mmix_timer_context_property_rejected(gconstpointer opaque)
-{
-    unsigned num_cpus = GPOINTER_TO_UINT(opaque);
-    g_autoptr(GError) error = NULL;
-    g_autofree char *property =
-        g_strdup_printf("mmix-timer.num-cpus=%u", num_cpus);
-    g_autofree char *stderr_text = NULL;
-    const char *argv[] = {
-        qtest_qemu_binary(NULL),
-        "-machine", "virt", "-global", property,
-        "-display", "none", "-monitor", "none", "-serial", "none", NULL,
-    };
-    int wait_status;
-
-    g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
-                               G_SPAWN_STDOUT_TO_DEV_NULL,
-                               NULL, NULL, NULL, &stderr_text,
-                               &wait_status, &error));
-    g_assert_no_error(error);
-    g_assert_cmpint(wait_status, !=, 0);
-    g_assert_nonnull(strstr(stderr_text,
-                           "num-cpus must be between 1 and 16"));
-}
-
 static void test_mmix_timer_active_contexts(void)
 {
     QTestState *qts = mmix_timer_start_contexts(2);
@@ -370,10 +345,6 @@ int main(int argc, char **argv)
     qtest_add_func("/mmix/timer/irq", test_mmix_timer_irq);
     qtest_add_func("/mmix/timer/unsupported-contexts",
                    test_mmix_timer_unsupported_contexts);
-    qtest_add_data_func("/mmix/timer/property/zero", GUINT_TO_POINTER(0),
-                        test_mmix_timer_context_property_rejected);
-    qtest_add_data_func("/mmix/timer/property/too-many", GUINT_TO_POINTER(17),
-                        test_mmix_timer_context_property_rejected);
     qtest_add_func("/mmix/timer/active-contexts",
                    test_mmix_timer_active_contexts);
     qtest_add_func("/mmix/timer/context-deadlines",
