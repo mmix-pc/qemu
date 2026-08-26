@@ -17,7 +17,7 @@ struct MMIXIntcState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
-    qemu_irq irq;
+    qemu_irq irq[MMIX_VIRT_INTC_CONTEXT_COUNT];
 
     uint32_t num_cpus;
     uint32_t pending;

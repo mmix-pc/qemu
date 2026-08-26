@@ -35,6 +35,7 @@
 #define MMIX_VIRT_VIRTIO_BLOCK0_IRQ 2
 #define MMIX_VIRT_FRAMEBUFFER_IRQ 3
 #define MMIX_VIRT_TEST_SYNTHETIC_IRQ 4
+#define MMIX_VIRT_TIMER_IRQ_BASE 16
 
 #define MMIX_INTC_QOM_PATH "/machine/intc"
 #define MMIX_INTC_OUTPUT_IRQ "sysbus-irq"
@@ -103,9 +104,12 @@ static QTestState *mmix_intc_start(void)
 
 static QTestState *mmix_intc_start_with_contexts(unsigned int num_cpus)
 {
-    return qtest_initf("-machine virt -smp %u "
-                       "-global mmix-intc.num-cpus=%u",
-                       num_cpus, num_cpus);
+    QTestState *qts = qtest_initf(
+        "-machine virt -smp %u -global mmix-intc.num-cpus=%u",
+        num_cpus, num_cpus);
+
+    mmix_intc_intercept_output(qts);
+    return qts;
 }
 
 static QTestState *mmix_intc_start_with_serial(int *serial_fd)
@@ -304,6 +308,104 @@ static void test_mmix_intc_context_limit(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_intc_fixed_affinity(void)
+{
+    QTestState *qts = mmix_intc_start_with_contexts(2);
+    uint32_t timer0_irq = MMIX_VIRT_TIMER_IRQ_BASE;
+    uint32_t timer1_irq = MMIX_VIRT_TIMER_IRQ_BASE + 1;
+    uint32_t timer0_mask = mmix_intc_irq_mask(timer0_irq);
+    uint32_t timer1_mask = mmix_intc_irq_mask(timer1_irq);
+    uint32_t enabled = timer0_mask | timer1_mask;
+
+    mmix_intc_write_enable(qts, 0, enabled);
+    mmix_intc_write_enable(qts, 1, enabled);
+
+    mmix_intc_set_irq(qts, timer0_irq, 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, 0);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, timer0_irq);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_complete(qts, 1, timer0_irq);
+    g_assert_false(qtest_get_irq(qts, 0));
+    mmix_intc_complete(qts, 0, timer0_irq);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    mmix_intc_set_irq(qts, timer0_irq, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_set_irq(qts, timer1_irq, 1);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, 0);
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, timer1_irq);
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_complete(qts, 0, timer1_irq);
+    g_assert_false(qtest_get_irq(qts, 1));
+    mmix_intc_set_irq(qts, timer1_irq, 0);
+    mmix_intc_complete(qts, 1, timer1_irq);
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_simultaneous_fixed_irqs(void)
+{
+    QTestState *qts = mmix_intc_start_with_contexts(2);
+    uint32_t timer0_irq = MMIX_VIRT_TIMER_IRQ_BASE;
+    uint32_t timer1_irq = MMIX_VIRT_TIMER_IRQ_BASE + 1;
+
+    mmix_intc_write_enable(qts, 0, mmix_intc_irq_mask(timer0_irq));
+    mmix_intc_write_enable(qts, 1, mmix_intc_irq_mask(timer1_irq));
+    mmix_intc_set_irq(qts, timer0_irq, 1);
+    mmix_intc_set_irq(qts, timer1_irq, 1);
+
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_false(qtest_get_irq(qts, 2));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, timer0_irq);
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, timer1_irq);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_complete(qts, 0, timer0_irq);
+    mmix_intc_complete(qts, 1, timer1_irq);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
+    g_assert_cmphex(mmix_intc_read_enable(qts, 0), ==, 0);
+    g_assert_cmphex(mmix_intc_read_enable(qts, 1), ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_false(qtest_get_irq(qts, MMIX_VIRT_INTC_CONTEXT_COUNT - 1));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_shared_irq_cpu0_only(void)
+{
+    QTestState *qts = mmix_intc_start_with_contexts(2);
+    uint32_t uart_mask = mmix_intc_irq_mask(MMIX_VIRT_UART0_IRQ);
+
+    mmix_intc_write_enable(qts, 0, uart_mask);
+    mmix_intc_write_enable(qts, 1, uart_mask);
+    mmix_intc_set_irq(qts, MMIX_VIRT_UART0_IRQ, 1);
+
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, 0);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_UART0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_set_irq(qts, MMIX_VIRT_UART0_IRQ, 0);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_UART0_IRQ);
+    qtest_quit(qts);
+}
+
 static void test_mmix_intc_invalid_context_count(gconstpointer opaque)
 {
     const char *num_cpus = opaque;
@@ -344,6 +446,12 @@ int main(int argc, char **argv)
                    test_mmix_intc_active_contexts);
     qtest_add_func("/mmix/intc/context-limit",
                    test_mmix_intc_context_limit);
+    qtest_add_func("/mmix/intc/fixed-affinity",
+                   test_mmix_intc_fixed_affinity);
+    qtest_add_func("/mmix/intc/simultaneous-fixed-irqs",
+                   test_mmix_intc_simultaneous_fixed_irqs);
+    qtest_add_func("/mmix/intc/shared-irq-cpu0-only",
+                   test_mmix_intc_shared_irq_cpu0_only);
     qtest_add_data_func("/mmix/intc/invalid-context-count/zero", "0",
                         test_mmix_intc_invalid_context_count);
     qtest_add_data_func("/mmix/intc/invalid-context-count/above-maximum", "17",

@@ -32,19 +32,34 @@ static bool mmix_intc_context_active(MMIXIntcState *s, uint32_t cpu)
     return cpu < s->num_cpus;
 }
 
+static uint32_t mmix_intc_context_irq_mask(uint32_t cpu)
+{
+    uint32_t mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_IRQ_BASE + cpu);
+
+    if (cpu == 0) {
+        mask |= ((1U << (MMIX_VIRT_SHARED_IRQ_LAST + 1)) - 1) &
+                ~((1U << MMIX_VIRT_SHARED_IRQ_FIRST) - 1);
+    }
+    return mask;
+}
+
 static uint32_t mmix_intc_claimable(MMIXIntcState *s, uint32_t cpu)
 {
-    /* CPU1+ routing is enabled when per-context outputs are introduced. */
-    if (!mmix_intc_context_active(s, cpu) || cpu != 0) {
+    if (!mmix_intc_context_active(s, cpu)) {
         return 0;
     }
 
-    return s->pending & s->enable[cpu] & ~s->claimed[cpu];
+    return s->pending & s->enable[cpu] & ~s->claimed[cpu] &
+           mmix_intc_context_irq_mask(cpu);
 }
 
 static void mmix_intc_update(MMIXIntcState *s)
 {
-    qemu_set_irq(s->irq, !!mmix_intc_claimable(s, 0));
+    uint32_t cpu;
+
+    for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
+        qemu_set_irq(s->irq[cpu], !!mmix_intc_claimable(s, cpu));
+    }
 }
 
 static uint32_t mmix_intc_claim(MMIXIntcState *s, uint32_t cpu)
@@ -73,7 +88,7 @@ static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu, uint32_t irq)
 {
     uint32_t mask;
 
-    if (!mmix_intc_context_active(s, cpu) || cpu != 0) {
+    if (!mmix_intc_context_active(s, cpu)) {
         return;
     }
 
@@ -196,12 +211,15 @@ static void mmix_intc_set_irq(void *opaque, int irq, int level)
 static void mmix_intc_reset(DeviceState *dev)
 {
     MMIXIntcState *s = MMIX_INTC(dev);
+    uint32_t cpu;
 
     s->pending = 0;
     s->input_level = 0;
     memset(s->claimed, 0, sizeof(s->claimed));
     memset(s->enable, 0, sizeof(s->enable));
-    qemu_set_irq(s->irq, 0);
+    for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
+        qemu_set_irq(s->irq[cpu], 0);
+    }
 }
 
 static void mmix_intc_realize(DeviceState *dev, Error **errp)
@@ -242,9 +260,12 @@ static void mmix_intc_instance_init(Object *obj)
 {
     SysBusDevice *dev = SYS_BUS_DEVICE(obj);
     MMIXIntcState *s = MMIX_INTC(obj);
+    uint32_t cpu;
 
     sysbus_init_mmio(dev, &s->iomem);
-    sysbus_init_irq(dev, &s->irq);
+    for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
+        sysbus_init_irq(dev, &s->irq[cpu]);
+    }
     qdev_init_gpio_in(DEVICE(obj), mmix_intc_set_irq,
                       MMIX_VIRT_INTC_IRQ_COUNT);
 }
