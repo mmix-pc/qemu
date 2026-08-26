@@ -104,9 +104,7 @@ static QTestState *mmix_intc_start(void)
 
 static QTestState *mmix_intc_start_with_contexts(unsigned int num_cpus)
 {
-    QTestState *qts = qtest_initf(
-        "-machine virt -smp %u -global mmix-intc.num-cpus=%u",
-        num_cpus, num_cpus);
+    QTestState *qts = qtest_initf("-machine virt -smp %u", num_cpus);
 
     mmix_intc_intercept_output(qts);
     return qts;
@@ -406,30 +404,6 @@ static void test_mmix_intc_shared_irq_cpu0_only(void)
     qtest_quit(qts);
 }
 
-static void test_mmix_intc_invalid_context_count(gconstpointer opaque)
-{
-    const char *num_cpus = opaque;
-    g_autoptr(GError) error = NULL;
-    g_autofree char *property = g_strdup_printf(
-        "mmix-intc.num-cpus=%s", num_cpus);
-    g_autofree char *stderr_text = NULL;
-    const char *argv[] = {
-        qtest_qemu_binary(NULL),
-        "-machine", "virt", "-global", property,
-        "-display", "none", "-monitor", "none", "-serial", "none", NULL,
-    };
-    int wait_status;
-
-    g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
-                               G_SPAWN_STDOUT_TO_DEV_NULL,
-                               NULL, NULL, NULL, &stderr_text,
-                               &wait_status, &error));
-    g_assert_no_error(error);
-    g_assert_cmpint(wait_status, !=, 0);
-    g_assert_nonnull(strstr(stderr_text,
-                           "num-cpus must be between 1 and 16"));
-}
-
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -452,10 +426,5 @@ int main(int argc, char **argv)
                    test_mmix_intc_simultaneous_fixed_irqs);
     qtest_add_func("/mmix/intc/shared-irq-cpu0-only",
                    test_mmix_intc_shared_irq_cpu0_only);
-    qtest_add_data_func("/mmix/intc/invalid-context-count/zero", "0",
-                        test_mmix_intc_invalid_context_count);
-    qtest_add_data_func("/mmix/intc/invalid-context-count/above-maximum", "17",
-                        test_mmix_intc_invalid_context_count);
-
     return g_test_run();
 }

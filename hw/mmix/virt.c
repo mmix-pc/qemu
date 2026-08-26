@@ -12,6 +12,7 @@
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
 #include "system/reset.h"
@@ -39,6 +40,7 @@ struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXELFStartupABI elf_startup_abi;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
+    qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
     MMIXKernelLoadInfo kernel_load_info;
     bool kernel_loaded;
 };
@@ -620,12 +622,10 @@ static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     MemoryRegion *sysmem = get_system_memory();
-    CPUState *cpu;
     DeviceState *framebuffer;
     DeviceState *intc;
     DeviceState *timer;
     DeviceState *virtio_mmio;
-    qemu_irq cpu_irq;
     unsigned int i;
 
     if (!mmix_validate_initial_stack_layout(machine, &error_fatal)) {
@@ -637,15 +637,17 @@ static void mmix_virt_init(MachineState *machine)
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
     }
-    cpu = vms->cpus[0];
-
     intc = qdev_new(TYPE_MMIX_INTC);
     object_property_add_child(OBJECT(machine), "intc", OBJECT(intc));
+    qdev_prop_set_uint32(intc, "num-cpus", machine->smp.cpus);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(intc), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(intc), 0,
                     mmix_virt_memmap[MMIX_VIRT_INTC].base);
-    cpu_irq = qemu_allocate_irq(mmix_virt_cpu_irq, cpu, 0);
-    sysbus_connect_irq(SYS_BUS_DEVICE(intc), 0, cpu_irq);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        vms->cpu_irqs[i] = qemu_allocate_irq(mmix_virt_cpu_irq,
+                                              vms->cpus[i], 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(intc), i, vms->cpu_irqs[i]);
+    }
 
     timer = qdev_new(TYPE_MMIX_TIMER);
     object_property_add_child(OBJECT(machine), "timer", OBJECT(timer));
@@ -691,7 +693,7 @@ static void mmix_virt_init(MachineState *machine)
         vms->kernel_loaded = true;
         mmix_start_loaded_kernel(vms, &vms->kernel_load_info);
     } else {
-        mmix_setup_semihosting_arguments(machine, cpu);
+        mmix_setup_semihosting_arguments(machine, vms->cpus[0]);
     }
 }
 

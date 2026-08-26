@@ -86,11 +86,17 @@ enum {
     MMIX_TIMER_CONTEXT_BASE = 0x0100,
     MMIX_TIMER_CONTEXT_CONTROL = 0x08,
     MMIX_INTC_PENDING = 0x0000,
+    MMIX_INTC_CONTEXT_BASE = 0x1000,
+    MMIX_INTC_CONTEXT_STRIDE = 0x100,
+    MMIX_INTC_CONTEXT_ENABLE = 0x00,
+    MMIX_TIMER_IRQ_BASE = 16,
     MMIX_INITIAL_STACK_SLOT_COUNT = 16,
 };
 
 static const uint64_t mmix_initial_stack_base = 0x00010000;
 static const uint64_t mmix_initial_stack_slot_size = 0x00008000;
+static const uint64_t mmix_interrupt_controller_request = 1ULL << 8;
+static const char *mmix_intc_qom_path = "/machine/intc";
 
 typedef enum MMIXBootInfoOffset {
     MMIX_BOOTINFO_MAGIC_OFFSET = 0x000,
@@ -573,6 +579,35 @@ static uint64_t mmix_register_dump_value(const char *dump, const char *label)
     return result;
 }
 
+static uint64_t mmix_cpu_rq(QTestState *qts, unsigned int cpu_index)
+{
+    g_autofree char *dump = qtest_hmp(qts, "info registers %u", cpu_index);
+
+    return mmix_register_dump_value(dump, "rQ =0x");
+}
+
+static void mmix_wait_cpu_rq(QTestState *qts, unsigned int cpu_index,
+                             uint64_t expected)
+{
+    gint64 deadline = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+
+    while (mmix_cpu_rq(qts, cpu_index) != expected) {
+        g_assert_cmpint(g_get_monotonic_time(), <, deadline);
+        g_usleep(1000);
+    }
+}
+
+static uint64_t mmix_intc_enable_address(unsigned int cpu_index)
+{
+    return mmix_devices[MMIX_DEVICE_INTC].base + MMIX_INTC_CONTEXT_BASE +
+           cpu_index * MMIX_INTC_CONTEXT_STRIDE + MMIX_INTC_CONTEXT_ENABLE;
+}
+
+static void mmix_set_intc_irq(QTestState *qts, unsigned int irq, int level)
+{
+    qtest_set_irq_in(qts, mmix_intc_qom_path, "unnamed-gpio-in", irq, level);
+}
+
 static void mmix_assert_cpu_startup(QTestState *qts, unsigned int cpu_index)
 {
     g_autofree char *dump = qtest_hmp(qts, "info registers %u", cpu_index);
@@ -590,16 +625,69 @@ static void mmix_assert_cpu_startup(QTestState *qts, unsigned int cpu_index)
                     mmix_bootinfo_base);
 }
 
+static void test_mmix_platform_smp_interrupt_wiring(gconstpointer opaque)
+{
+    unsigned int cpu_count = GPOINTER_TO_UINT(opaque);
+    unsigned int target_cpu = cpu_count - 1;
+    unsigned int irq = MMIX_TIMER_IRQ_BASE + target_cpu;
+    uint32_t mask = 1U << irq;
+    uint64_t baseline[MMIX_INITIAL_STACK_SLOT_COUNT];
+    g_autoptr(QDict) response = NULL;
+    QTestState *qts = qtest_initf("-machine virt -smp %u", cpu_count);
+    unsigned int i;
+
+    response = qtest_qmp(
+        qts,
+        "{ 'execute': 'qom-get', "
+        "  'arguments': { 'path': %s, 'property': 'num-cpus' } }",
+        mmix_intc_qom_path);
+    g_assert_cmpuint(qdict_get_int(response, "return"), ==, cpu_count);
+
+    for (i = 0; i < cpu_count; i++) {
+        baseline[i] = mmix_cpu_rq(qts, i);
+    }
+    qtest_writel(qts, mmix_intc_enable_address(target_cpu), mask);
+    mmix_set_intc_irq(qts, irq, 1);
+    mmix_wait_cpu_rq(qts, target_cpu,
+                     baseline[target_cpu] |
+                     mmix_interrupt_controller_request);
+
+    for (i = 0; i < cpu_count; i++) {
+        g_assert_cmphex(mmix_cpu_rq(qts, i), ==,
+                        i == target_cpu ?
+                        baseline[i] | mmix_interrupt_controller_request :
+                        baseline[i]);
+    }
+
+    mmix_set_intc_irq(qts, irq, 0);
+    qtest_system_reset(qts);
+    for (i = 0; i < cpu_count; i++) {
+        mmix_wait_cpu_rq(qts, i, baseline[i]);
+    }
+
+    qtest_quit(qts);
+}
+
 static void test_mmix_platform_smp_reset(void)
 {
     g_autofree char *elf = mmix_create_elf();
     QTestState *qts = mmix_start_elf_smp(elf, NULL, 2);
+    uint64_t baseline_rq[2];
     unsigned int i;
 
     for (i = 0; i < 2; i++) {
         mmix_assert_cpu_startup(qts, i);
+        baseline_rq[i] = mmix_cpu_rq(qts, i);
     }
 
+    qtest_writel(qts, mmix_intc_enable_address(1),
+                 1U << (MMIX_TIMER_IRQ_BASE + 1));
+    mmix_set_intc_irq(qts, MMIX_TIMER_IRQ_BASE + 1, 1);
+    mmix_wait_cpu_rq(qts, 1,
+                     baseline_rq[1] | mmix_interrupt_controller_request);
+    g_assert_cmphex(mmix_cpu_rq(qts, 0), ==, baseline_rq[0]);
+
+    mmix_set_intc_irq(qts, MMIX_TIMER_IRQ_BASE + 1, 0);
     qtest_system_reset(qts);
     mmix_assert_smp_topology(qts, 2);
     g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
@@ -609,6 +697,7 @@ static void test_mmix_platform_smp_reset(void)
                      ==, 0);
     for (i = 0; i < 2; i++) {
         mmix_assert_cpu_startup(qts, i);
+        mmix_wait_cpu_rq(qts, i, baseline_rq[i]);
     }
 
     qtest_quit(qts);
@@ -681,6 +770,15 @@ int main(int argc, char **argv)
     qtest_add_data_func("/mmix/platform/smp/cpus/16",
                         GUINT_TO_POINTER(16),
                         test_mmix_platform_smp_cpus);
+    qtest_add_data_func("/mmix/platform/smp/interrupt-wiring/1",
+                        GUINT_TO_POINTER(1),
+                        test_mmix_platform_smp_interrupt_wiring);
+    qtest_add_data_func("/mmix/platform/smp/interrupt-wiring/2",
+                        GUINT_TO_POINTER(2),
+                        test_mmix_platform_smp_interrupt_wiring);
+    qtest_add_data_func("/mmix/platform/smp/interrupt-wiring/16",
+                        GUINT_TO_POINTER(16),
+                        test_mmix_platform_smp_interrupt_wiring);
     qtest_add_func("/mmix/platform/smp/reset",
                    test_mmix_platform_smp_reset);
     qtest_add_data_func("/mmix/platform/smp/rejected/zero", "0",
