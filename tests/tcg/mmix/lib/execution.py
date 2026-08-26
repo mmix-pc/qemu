@@ -955,6 +955,232 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
     write(0, test.halt_offset, 1)
 
 
+def _run_smp_ipi_protocol(qtest, test):
+    def address(cpu, offset):
+        return test.mailbox_base + cpu * test.mailbox_slot_size + offset
+
+    def read(cpu, offset):
+        response = _qtest_command(qtest, f"readq {address(cpu, offset):#x}")
+        return int(response[1], 0)
+
+    def write(cpu, offset, value):
+        _qtest_command(
+            qtest,
+            f"writeq {address(cpu, offset):#x} {value:#x}",
+        )
+
+    def read_mmio(mmio_address):
+        response = _qtest_command(qtest, f"readq {mmio_address:#x}")
+        return int(response[1], 0)
+
+    def set_shared_irq(level):
+        _qtest_command(
+            qtest,
+            f"set_irq_in /machine/intc unnamed-gpio-in "
+            f"{test.shared_irq} {level}",
+        )
+
+    def wait(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed with reason "
+                    f"{read(cpu, test.failure_offset)} while {description}"
+                )
+            if actual == expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    def command(cpu, value, expected_stage, description):
+        write(cpu, test.command_offset, value)
+        wait(cpu, test.command_offset, 0,
+             f"consuming command for {description}")
+        wait(cpu, test.stage_offset, expected_stage, description)
+
+    def prepare_send(cpu, targets, generation, twice=False):
+        write(cpu, test.send_mask_offset, targets)
+        write(cpu, test.generation_offset, generation)
+        write(cpu, test.command_offset,
+              test.command_send_twice if twice else test.command_send)
+
+    def wait_send(cpu, description):
+        wait(cpu, test.command_offset, 0,
+             f"consuming send command for {description}")
+        wait(cpu, test.stage_offset, test.stage_sent, description)
+
+    def send(sender, targets, generation, counts, extra_handlers,
+             twice=False):
+        prepare_send(sender, targets, generation, twice=twice)
+        wait_send(sender, f"CPU{sender} sending {targets:#x}")
+        for target in range(test.cpu_count):
+            if targets & (1 << target):
+                counts[target] += 1
+                wait(target, test.ack_offset, generation,
+                     f"CPU{target} acknowledging generation {generation}")
+                wait(target, test.ipi_count_offset, counts[target],
+                     f"CPU{target} recording IPI {counts[target]}")
+                wait(target, test.handler_done_offset,
+                     counts[target] + extra_handlers[target],
+                     f"CPU{target} resuming from IPI {counts[target]}")
+        command(sender, test.command_observe_ack, test.stage_acked,
+                f"CPU{sender} observing generation {generation}")
+        assert read(sender, test.sender_ack_offset) == generation
+
+    def ipi_status_address(cpu):
+        return (
+            test.ipi_base + test.ipi_context_base +
+            cpu * test.ipi_context_stride + test.ipi_context_status
+        )
+
+    def timer_status_address(cpu):
+        return (
+            test.timer_base + test.timer_context_base +
+            cpu * test.timer_context_stride + test.timer_status
+        )
+
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.stage_offset, test.stage_ready, "waiting for startup")
+
+    ipi_counts = [0, 0]
+    extra_handlers = [0, 0]
+    send(0, 0x1, 0x101, ipi_counts, extra_handlers)
+    assert read(1, test.handler_count_offset) == 0
+    send(0, 0x2, 0x102, ipi_counts, extra_handlers)
+    send(1, 0x1, 0x103, ipi_counts, extra_handlers)
+
+    prepare_send(0, 0x2, 0x104)
+    prepare_send(1, 0x1, 0x105)
+    wait_send(0, "CPU0 reciprocal send")
+    wait_send(1, "CPU1 reciprocal send")
+    ipi_counts[0] += 1
+    ipi_counts[1] += 1
+    wait(0, test.ack_offset, 0x105, "CPU0 reciprocal acknowledgement")
+    wait(1, test.ack_offset, 0x104, "CPU1 reciprocal acknowledgement")
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.ipi_count_offset, ipi_counts[cpu],
+             f"CPU{cpu} reciprocal delivery")
+        wait(cpu, test.handler_done_offset, ipi_counts[cpu],
+             f"CPU{cpu} resuming from reciprocal delivery")
+    for cpu, generation in ((0, 0x104), (1, 0x105)):
+        command(cpu, test.command_observe_ack, test.stage_acked,
+                f"CPU{cpu} observing its reciprocal acknowledgement")
+        assert read(cpu, test.sender_ack_offset) == generation
+
+    send(0, 0x3, 0x106, ipi_counts, extra_handlers)
+
+    command(1, test.command_mask, test.stage_masked,
+            "masking CPU1 IPI delivery")
+    prepare_send(0, 0x2, 0x107, twice=True)
+    wait_send(0, "sending duplicate masked IPIs")
+    assert read(1, test.ipi_count_offset) == ipi_counts[1]
+    assert read_mmio(ipi_status_address(1)) == test.ipi_status_pending
+    command(1, test.command_enable, test.stage_enabled,
+            "enabling CPU1 IPI delivery")
+    ipi_counts[1] += 1
+    wait(1, test.ack_offset, 0x107,
+         "CPU1 acknowledging the coalesced IPI")
+    wait(1, test.ipi_count_offset, ipi_counts[1],
+         "CPU1 recording one coalesced IPI")
+    wait(1, test.handler_done_offset, ipi_counts[1],
+         "CPU1 resuming from the coalesced IPI")
+    command(0, test.command_observe_ack, test.stage_acked,
+            "CPU0 observing the coalesced acknowledgement")
+    assert read(0, test.sender_ack_offset) == 0x107
+
+    send(0, 0x2, 0x108, ipi_counts, extra_handlers)
+
+    set_shared_irq(1)
+    wait(0, test.shared_count_offset, 1,
+         "CPU0 claiming the shared source")
+    prepare_send(1, 0x1, 0x109)
+    wait_send(1, "CPU1 sending while CPU0 handles the shared source")
+    assert read_mmio(ipi_status_address(0)) == test.ipi_status_pending
+
+    command(1, test.command_timer, test.stage_timer,
+            "programming CPU1's timer")
+    wait(1, test.timer_count_offset, 1,
+         "CPU1 handling its timer")
+    extra_handlers[1] += 1
+    wait(1, test.handler_done_offset,
+         ipi_counts[1] + extra_handlers[1],
+         "CPU1 resuming from its timer")
+
+    set_shared_irq(0)
+    write(0, test.shared_release_offset, 1)
+    extra_handlers[0] += 1
+    ipi_counts[0] += 1
+    wait(0, test.ack_offset, 0x109,
+         "CPU0 handling the IPI queued behind the shared source")
+    wait(0, test.ipi_count_offset, ipi_counts[0],
+         "CPU0 recording the queued IPI")
+    wait(0, test.handler_done_offset,
+         ipi_counts[0] + extra_handlers[0],
+         "CPU0 resuming from its shared source and queued IPI")
+    command(1, test.command_observe_ack, test.stage_acked,
+            "CPU1 observing the queued IPI acknowledgement")
+    assert read(1, test.sender_ack_offset) == 0x109
+
+    command(0, test.command_timer, test.stage_timer,
+            "programming CPU0's timer")
+    wait(0, test.timer_count_offset, 1,
+         "CPU0 handling its timer")
+    extra_handlers[0] += 1
+    wait(0, test.handler_done_offset,
+         ipi_counts[0] + extra_handlers[0],
+         "CPU0 resuming from its timer")
+    send(1, 0x2, 0x10a, ipi_counts, extra_handlers)
+
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.handler_count_offset,
+             ipi_counts[cpu] + extra_handlers[cpu],
+             f"CPU{cpu} completing every interrupt source")
+        wait(cpu, test.handler_done_offset,
+             read(cpu, test.handler_count_offset),
+             f"CPU{cpu} resuming from every dynamic trap")
+        command(cpu, test.command_finalize, test.stage_final,
+                f"recording CPU{cpu} final state")
+
+    for cpu in range(test.cpu_count):
+        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
+        expected_handlers = ipi_counts[cpu] + extra_handlers[cpu]
+
+        assert read(cpu, test.handler_count_offset) == expected_handlers
+        assert read(cpu, test.handler_done_offset) == expected_handlers
+        assert read(cpu, test.ipi_count_offset) == ipi_counts[cpu]
+        assert read(cpu, test.shared_count_offset) == (1 if cpu == 0 else 0)
+        assert read(cpu, test.timer_count_offset) == 1
+        assert read(cpu, test.target_id_offset) == cpu
+        assert read(cpu, test.ipi_status_offset) == test.ipi_status_pending
+        assert read(cpu, test.handler_rq_offset) & test.request_mask
+        assert read(cpu, test.handler_rk_offset) == 0
+        assert read(cpu, test.rww_offset) % 4 == 0
+        assert test.main_start <= read(cpu, test.rww_offset) < test.main_end
+        assert read(cpu, test.rxx_offset) & test.dynamic_trap_resume_next
+        assert read(cpu, test.ryy_offset) == 0
+        assert read(cpu, test.rzz_offset) == 0
+        assert read(cpu, test.rbb_offset) == test.sentinels[cpu]
+        assert read(cpu, test.ro_entry_offset) == expected_stack
+        assert read(cpu, test.rs_entry_offset) == expected_stack
+        assert read(cpu, test.ro_final_offset) == expected_stack
+        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert read(cpu, test.rq_final_offset) & test.request_mask == 0
+        assert read(cpu, test.rk_final_offset) == test.request_mask
+        assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
+        assert read(cpu, test.progress_offset) > 0
+        assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
+        assert read_mmio(ipi_status_address(cpu)) == 0
+        assert read_mmio(timer_status_address(cpu)) == 0
+
+    write(0, test.command_offset, test.command_halt)
+
+
 def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
     image = workdir / f"{test.name}.elf"
     qtest_path = workdir / socket_name
@@ -1048,4 +1274,11 @@ def run_mttcg_shared_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shared_interrupt_protocol,
         "m47-qtest.sock",
+    )
+
+
+def run_mttcg_ipi_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_smp_ipi_protocol,
+        "m48-qtest.sock",
     )
