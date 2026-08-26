@@ -7,8 +7,10 @@
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "timer.h"
@@ -34,29 +36,44 @@ static bool mmix_timer_pending(MMIXTimerState *s, uint32_t cpu)
     return s->status[cpu] & MMIX_VIRT_TIMER_STATUS_PENDING;
 }
 
+static bool mmix_timer_context_active(MMIXTimerState *s, uint32_t cpu)
+{
+    return cpu < s->num_cpus;
+}
+
 static void mmix_timer_update(MMIXTimerState *s)
 {
-    bool assert_irq = mmix_timer_enabled(s, 0) &&
-                      mmix_timer_irq_enabled(s, 0) &&
-                      mmix_timer_pending(s, 0);
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t next = INT64_MAX;
+    bool schedule = false;
+    uint32_t cpu;
 
-    qemu_set_irq(s->irq, assert_irq);
+    for (cpu = 0; cpu < MMIX_VIRT_TIMER_CONTEXT_COUNT; cpu++) {
+        bool active = mmix_timer_context_active(s, cpu);
+        bool enabled = active && mmix_timer_enabled(s, cpu);
+
+        if (enabled && !mmix_timer_pending(s, cpu) &&
+            s->compare[cpu] <= (uint64_t)now) {
+            s->status[cpu] |= MMIX_VIRT_TIMER_STATUS_PENDING;
+        }
+
+        qemu_set_irq(s->irq[cpu],
+                     enabled && mmix_timer_irq_enabled(s, cpu) &&
+                     mmix_timer_pending(s, cpu));
+
+        if (enabled && !mmix_timer_pending(s, cpu) &&
+            s->compare[cpu] <= INT64_MAX &&
+            (!schedule || s->compare[cpu] < next)) {
+            next = s->compare[cpu];
+            schedule = true;
+        }
+    }
 
     if (!s->timer) {
         return;
     }
-    if (!mmix_timer_enabled(s, 0) || mmix_timer_pending(s, 0)) {
-        timer_del(s->timer);
-        return;
-    }
-
-    if (s->compare[0] <= (uint64_t)now) {
-        s->status[0] |= MMIX_VIRT_TIMER_STATUS_PENDING;
-        qemu_set_irq(s->irq, mmix_timer_irq_enabled(s, 0));
-        timer_del(s->timer);
-    } else if (s->compare[0] <= INT64_MAX) {
-        timer_mod(s->timer, s->compare[0]);
+    if (schedule) {
+        timer_mod(s->timer, next);
     } else {
         timer_del(s->timer);
     }
@@ -66,7 +83,6 @@ static void mmix_timer_expire(void *opaque)
 {
     MMIXTimerState *s = opaque;
 
-    s->status[0] |= MMIX_VIRT_TIMER_STATUS_PENDING;
     mmix_timer_update(s);
 }
 
@@ -100,7 +116,7 @@ static uint64_t mmix_timer_read(void *opaque, hwaddr addr, unsigned size)
         return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     }
     if (mmix_timer_context_offset(addr, &cpu, &reg)) {
-        if (cpu != 0) {
+        if (!mmix_timer_context_active(s, cpu)) {
             return 0;
         }
         switch (reg) {
@@ -131,7 +147,7 @@ static void mmix_timer_write(void *opaque, hwaddr addr,
     (void)size;
 
     if (mmix_timer_context_offset(addr, &cpu, &reg)) {
-        if (cpu != 0) {
+        if (!mmix_timer_context_active(s, cpu)) {
             return;
         }
         switch (reg) {
@@ -184,7 +200,11 @@ static void mmix_timer_realize(DeviceState *dev, Error **errp)
 {
     MMIXTimerState *s = MMIX_TIMER(dev);
 
-    (void)errp;
+    if (s->num_cpus == 0 || s->num_cpus > MMIX_VIRT_TIMER_CONTEXT_COUNT) {
+        error_setg(errp, "num-cpus must be between 1 and %u",
+                   MMIX_VIRT_TIMER_CONTEXT_COUNT);
+        return;
+    }
 
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mmix_timer_expire, s);
     memory_region_init_io(&s->iomem, OBJECT(s), &mmix_timer_ops, s,
@@ -215,13 +235,21 @@ static const VMStateDescription vmstate_mmix_timer = {
     },
 };
 
+/* num_cpus is immutable machine configuration, not migrated device state. */
+static const Property mmix_timer_properties[] = {
+    DEFINE_PROP_UINT32("num-cpus", MMIXTimerState, num_cpus, 1),
+};
+
 static void mmix_timer_instance_init(Object *obj)
 {
     SysBusDevice *dev = SYS_BUS_DEVICE(obj);
     MMIXTimerState *s = MMIX_TIMER(obj);
+    uint32_t cpu;
 
     sysbus_init_mmio(dev, &s->iomem);
-    sysbus_init_irq(dev, &s->irq);
+    for (cpu = 0; cpu < MMIX_VIRT_TIMER_CONTEXT_COUNT; cpu++) {
+        sysbus_init_irq(dev, &s->irq[cpu]);
+    }
 }
 
 static void mmix_timer_class_init(ObjectClass *oc, const void *data)
@@ -230,6 +258,7 @@ static void mmix_timer_class_init(ObjectClass *oc, const void *data)
 
     (void)data;
 
+    device_class_set_props(dc, mmix_timer_properties);
     device_class_set_legacy_reset(dc, mmix_timer_reset);
     dc->realize = mmix_timer_realize;
     dc->unrealize = mmix_timer_unrealize;

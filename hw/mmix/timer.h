@@ -18,9 +18,10 @@ struct MMIXTimerState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
-    qemu_irq irq;
+    qemu_irq irq[MMIX_VIRT_TIMER_CONTEXT_COUNT];
     QEMUTimer *timer;
 
+    uint32_t num_cpus;
     uint64_t compare[MMIX_VIRT_TIMER_CONTEXT_COUNT];
     uint64_t control[MMIX_VIRT_TIMER_CONTEXT_COUNT];
     uint64_t status[MMIX_VIRT_TIMER_CONTEXT_COUNT];
