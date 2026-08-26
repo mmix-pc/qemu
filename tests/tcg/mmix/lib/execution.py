@@ -1181,6 +1181,60 @@ def _run_smp_ipi_protocol(qtest, test):
     write(0, test.command_offset, test.command_halt)
 
 
+def _run_smp_shootdown_protocol(qtest, test):
+    def read(offset):
+        response = _qtest_command(
+            qtest, f"readq {test.state_base + offset:#x}"
+        )
+        return int(response[1], 0)
+
+    def write(offset, value):
+        _qtest_command(
+            qtest, f"writeq {test.state_base + offset:#x} {value:#x}"
+        )
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        failure = read(test.failure_offset)
+        if failure:
+            raise AssertionError(
+                f"{test.name}: guest failed with reason {failure:#x}, "
+                f"rQ={read(test.handler_rq_offset):#x}"
+            )
+        if read(test.complete_offset) == 1:
+            break
+        time.sleep(0.001)
+    else:
+        raise AssertionError(f"{test.name}: timed out waiting for completion")
+
+    assert read(test.generation_offset) == test.generation
+    assert read(test.target_mask_offset) == test.target_mask
+    assert read(test.key_offset) == test.key
+    assert read(test.operation_offset) == test.operation
+    assert read(test.ack0_offset) == 0
+    assert read(test.ack1_offset) == test.generation
+    assert read(test.result0_offset) == 0
+    assert read(test.result1_offset) == test.ldvts_result
+    assert read(test.cpu1_primed_offset) == 1
+    assert read(test.pte_published_offset) == 1
+    assert read(test.cpu1_stale_offset) == 1
+    assert read(test.stale_value_offset) == test.value_a
+    assert read(test.post_value_offset) == test.value_b
+    assert read(test.handler_count_offset) == 1
+    assert read(test.handler_done_offset) == test.generation
+    assert read(test.handler_rq_offset) & test.ipi_request
+    assert read(test.cpu1_resumed_offset) == 1
+    assert read(test.final_rq_offset) & test.ipi_request == 0
+    assert read(test.final_rk_offset) == test.request_mask
+    assert read(test.final_sentinel_offset) == test.sentinel
+    assert read(test.sender_ack_offset) == test.generation
+    assert read(test.lock_offset) == 0
+    assert read(test.lock_result_offset) != 0
+    assert read(test.failure_offset) == 0
+
+    write(test.halt_offset, 1)
+
+
 def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
     image = workdir / f"{test.name}.elf"
     qtest_path = workdir / socket_name
@@ -1281,4 +1335,11 @@ def run_mttcg_ipi_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_ipi_protocol,
         "m48-qtest.sock",
+    )
+
+
+def run_mttcg_shootdown_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_smp_shootdown_protocol,
+        "m49-qtest.sock",
     )
