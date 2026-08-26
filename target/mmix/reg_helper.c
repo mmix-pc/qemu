@@ -384,11 +384,14 @@ uint64_t helper_mmix_read_sreg(CPUMMIXState *env, uint32_t reg)
 
 static void mmix_cpu_put_rq(CPUMMIXState *env, uint64_t val)
 {
-    /* Software cannot manufacture the virtual interrupt-controller input. */
-    val &= ~MMIX_RQ_INTERRUPT_CONTROLLER;
+    /* Software cannot manufacture a virtual hardware request. */
+    val &= ~MMIX_RQ_HARDWARE_MASK;
     val |= env->rq_new_bits;
     if (env->interrupt_controller_level) {
         val |= MMIX_RQ_INTERRUPT_CONTROLLER;
+    }
+    if (env->ipi_level) {
+        val |= MMIX_RQ_IPI;
     }
     env->sregs[MMIX_SREG_RQ] = val;
     mmix_cpu_update_interrupt(env);

@@ -152,9 +152,13 @@ enum {
 #define MMIX_RQ_PROGRAM_P     (1ULL << 32)
 #define MMIX_RQ_PROGRAM_MASK  (0xffULL << MMIX_RQ_PROGRAM_SHIFT)
 
-/* MMIXware section 37 leaves high-priority I/O bits implementation-defined. */
+/* mmix-doc section 37 leaves high-priority I/O bits implementation-defined. */
 #define MMIX_RQ_INTERRUPT_CONTROLLER (1ULL << 8)
 #define MMIX_RK_INTERRUPT_CONTROLLER MMIX_RQ_INTERRUPT_CONTROLLER
+#define MMIX_RQ_IPI                  (1ULL << 9)
+#define MMIX_RK_IPI                  MMIX_RQ_IPI
+#define MMIX_RQ_HARDWARE_MASK \
+    (MMIX_RQ_INTERRUPT_CONTROLLER | MMIX_RQ_IPI)
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_SWYM_INSN 0xfd000000U
@@ -272,6 +276,7 @@ typedef struct CPUArchState {
     uint8_t forced_translation_access;
     uint64_t rq_new_bits;
     bool interrupt_controller_level;
+    bool ipi_level;
     bool flat_translation;
     uint32_t semihosting_file_guestfds[MMIX_SEMIHOSTING_HANDLES];
     uint8_t semihosting_file_modes[MMIX_SEMIHOSTING_HANDLES];
@@ -326,6 +331,7 @@ bool mmix_cpu_is_privileged(CPUMMIXState *env);
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);
 void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
+void mmix_cpu_set_ipi(CPUState *cs, int level);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
 bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,

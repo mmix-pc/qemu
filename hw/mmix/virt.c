@@ -659,6 +659,11 @@ static void mmix_virt_init(MachineState *machine)
     sysbus_realize_and_unref(SYS_BUS_DEVICE(ipi), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(ipi), 0,
                     mmix_virt_memmap[MMIX_VIRT_IPI].base);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        sysbus_connect_irq(
+            SYS_BUS_DEVICE(ipi), i,
+            qdev_get_gpio_in_named(DEVICE(vms->cpus[i]), "ipi", 0));
+    }
 
     timer = qdev_new(TYPE_MMIX_TIMER);
     object_property_add_child(OBJECT(machine), "timer", OBJECT(timer));

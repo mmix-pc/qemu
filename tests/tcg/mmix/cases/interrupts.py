@@ -219,6 +219,105 @@ def external_dynamic_trap_resume_program():
 EXTERNAL_DYNAMIC_TRAP_RESUME = external_dynamic_trap_resume_program()
 
 
+def ipi_dynamic_trap_resume_program():
+    handler = 0x300
+    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
+    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    ipi_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0]
+    timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                     MMIX_VIRT_TIMER_CONTEXT_COMPARE)
+    timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                     MMIX_VIRT_TIMER_CONTEXT_CONTROL)
+    timer_status = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
+                    MMIX_VIRT_TIMER_CONTEXT_STATUS)
+    intc_enable = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                   MMIX_VIRT_INTC_CONTEXT_ENABLE)
+    intc_claim = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                  MMIX_VIRT_INTC_CONTEXT_CLAIM)
+    intc_complete = (intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+                     MMIX_VIRT_INTC_CONTEXT_COMPLETE)
+    ipi_send = ipi_base + MMIX_VIRT_IPI_SEND
+    ipi_status = (ipi_base + MMIX_VIRT_IPI_CONTEXT_BASE +
+                  MMIX_VIRT_IPI_CONTEXT_STATUS)
+    ipi_clear = (ipi_base + MMIX_VIRT_IPI_CONTEXT_BASE +
+                 MMIX_VIRT_IPI_CONTEXT_CLEAR)
+    hardware_requests = RQ_INTERRUPT_CONTROLLER | RQ_IPI
+
+    program = [
+        insn(PUTI, SR_K, 0, 0),
+        *set_octa(R1, timer_compare),
+        *set_octa(R2, timer_control),
+        *set_octa(R3, timer_status),
+        *set_octa(R4, intc_enable),
+        *set_octa(R5, intc_claim),
+        *set_octa(R6, intc_complete),
+        *set_octa(R7, ipi_send),
+        *set_octa(R8, ipi_status),
+        *set_octa(R9, ipi_clear),
+        *set_octa(R10, 1 << MMIX_VIRT_TIMER_IRQ_BASE),
+        wyde(SETL, R11, MMIX_VIRT_TIMER_IRQ_BASE),
+        wyde(SETL, R12, MMIX_VIRT_TIMER_CONTROL_ENABLE |
+             MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
+        wyde(SETL, R13, MMIX_VIRT_TIMER_STATUS_PENDING),
+        wyde(SETL, R14, 1),
+        *set_octa(R15, hardware_requests),
+        *set_octa(R16, RK_IPI),
+        *set_octa(R17, handler),
+        insn(STTU, R10, R4, R0),
+        insn(STOU, R0, R1, R0),
+        insn(STOU, R12, R2, R0),
+        insn(STOU, R14, R7, R0),
+        insn(GET, R20, 0, SR_Q),
+        insn(AND, R21, R20, R15),
+        insn(CMPU, R22, R21, R15),
+        branch(BNZ, R22, 0xfffd),
+
+        # With both requests latched, withdrawing INTC leaves IPI active.
+        insn(LDTU, R27, R5, R0),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(GET, R21, 0, SR_Q),
+        insn(STOU, R0, R2, R0),
+        insn(STOU, R13, R3, R0),
+        insn(STTU, R11, R6, R0),
+        insn(PUT, SR_TT, 0, R17),
+        insn(PUT, SR_K, 0, R16),
+        insn(ADDUI, R30, R30, 1),
+        insn(GET, R23, 0, SR_Q),
+
+        # Reassert both sources. The handler withdraws IPI while INTC stays.
+        insn(STOU, R0, R1, R0),
+        insn(STOU, R12, R2, R0),
+        insn(STOU, R14, R7, R0),
+        insn(ADDUI, R30, R30, 1),
+        insn(GET, R24, 0, SR_Q),
+        insn(LDTU, R28, R5, R0),
+        insn(STOU, R0, R2, R0),
+        insn(STOU, R13, R3, R0),
+        insn(STTU, R11, R6, R0),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(GET, R25, 0, SR_Q),
+        insn(GET, R26, 0, SR_K),
+        insn(LDOU, R29, R8, R0),
+        halt(),
+    ]
+    halt_pc = (len(program) - 1) * 4
+    handler_code = [
+        insn(GET, R50, 0, SR_Q),
+        insn(LDOU, R51, R8, R0),
+        insn(ADDUI, R40, R40, 1),
+        insn(STOU, R14, R9, R0),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(GET, R52, 0, SR_Q),
+        insn(ADDU, R255, R16, R0),
+        insn(RESUME, 0, 0, 1),
+    ]
+
+    return program_with_handler(program, handler, handler_code), halt_pc
+
+
+IPI_DYNAMIC_TRAP_RESUME = ipi_dynamic_trap_resume_program()
+
+
 def dynamic_trap_register_stack_program(depth=10):
     interrupted_base = 0x200
     handler_entry = 0x1000
@@ -1021,6 +1120,28 @@ NESTED_INTERRUPT_SUBSTITUTION = nested_interrupt_replay_program(True)
 
 
 INTERRUPT_TESTS = [
+    MMIXTest(
+        "ipi-dynamic-trap-resume",
+        IPI_DYNAMIC_TRAP_RESUME[0],
+        pc=IPI_DYNAMIC_TRAP_RESUME[1],
+        regs={
+            R20: RQ_INTERRUPT_CONTROLLER | RQ_IPI,
+            R21: RQ_IPI,
+            R22: 0,
+            R23: 0,
+            R24: RQ_INTERRUPT_CONTROLLER,
+            R25: 0,
+            R26: RK_IPI,
+            R27: MMIX_VIRT_TIMER_IRQ_BASE,
+            R28: MMIX_VIRT_TIMER_IRQ_BASE,
+            R29: 0,
+            R30: 2,
+            R40: 2,
+            R50: RQ_INTERRUPT_CONTROLLER | RQ_IPI,
+            R51: MMIX_VIRT_IPI_STATUS_PENDING,
+            R52: RQ_INTERRUPT_CONTROLLER,
+        },
+    ),
     MMIXTest(
         "masked-interrupt-request",
         MASKED_INTERRUPT_REQUEST[0],

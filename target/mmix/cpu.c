@@ -145,14 +145,15 @@ bool mmix_cpu_interrupt_enabled(CPUMMIXState *env)
 {
     return env->sregs[MMIX_SREG_RQ] &
            env->sregs[MMIX_SREG_RK] &
-           MMIX_RK_INTERRUPT_CONTROLLER;
+           MMIX_RQ_HARDWARE_MASK;
 }
 
 void mmix_cpu_update_interrupt(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);
 
-    if (env->interrupt_controller_level || mmix_cpu_interrupt_enabled(env)) {
+    if (env->interrupt_controller_level || env->ipi_level ||
+        mmix_cpu_interrupt_enabled(env)) {
         cpu_set_interrupt(cs, CPU_INTERRUPT_HARD);
         if (!qemu_cpu_is_self(cs)) {
             qemu_cpu_kick(cs);
@@ -184,6 +185,35 @@ void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
     } else {
         async_run_on_cpu(cs, mmix_cpu_set_interrupt_controller_work, data);
     }
+}
+
+static void mmix_cpu_set_ipi_work(CPUState *cs, run_on_cpu_data data)
+{
+    CPUMMIXState *env = cpu_env(cs);
+    int level = data.host_int;
+
+    env->ipi_level = level;
+    if (level) {
+        mmix_cpu_set_rq_bits(env, MMIX_RQ_IPI);
+    }
+    mmix_cpu_update_interrupt(env);
+}
+
+void mmix_cpu_set_ipi(CPUState *cs, int level)
+{
+    run_on_cpu_data data = RUN_ON_CPU_HOST_INT(level);
+
+    if (qemu_cpu_is_self(cs)) {
+        mmix_cpu_set_ipi_work(cs, data);
+    } else {
+        async_run_on_cpu(cs, mmix_cpu_set_ipi_work, data);
+    }
+}
+
+static void mmix_cpu_set_ipi_gpio(void *opaque, int irq, int level)
+{
+    g_assert(irq == 0);
+    mmix_cpu_set_ipi(CPU(opaque), level);
 }
 
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)
@@ -648,6 +678,8 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
 static void mmix_cpu_initfn(Object *obj)
 {
     MMIXCPU *cpu = MMIX_CPU(obj);
+
+    qdev_init_gpio_in_named(DEVICE(obj), mmix_cpu_set_ipi_gpio, "ipi", 1);
 
     cpu->instruction_translation_cache =
         g_array_new(false, false, sizeof(MMIXTranslationCacheEntry));
