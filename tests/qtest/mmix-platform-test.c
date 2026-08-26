@@ -84,7 +84,11 @@ enum {
     MMIX_TIMER_CONTEXT_BASE = 0x0100,
     MMIX_TIMER_CONTEXT_CONTROL = 0x08,
     MMIX_INTC_PENDING = 0x0000,
+    MMIX_INITIAL_STACK_SLOT_COUNT = 16,
 };
+
+static const uint64_t mmix_initial_stack_base = 0x00010000;
+static const uint64_t mmix_initial_stack_slot_size = 0x00008000;
 
 typedef enum MMIXBootInfoOffset {
     MMIX_BOOTINFO_MAGIC_OFFSET = 0x000,
@@ -259,6 +263,43 @@ static void test_mmix_platform_memory_layout(void)
     }
 
     qtest_quit(qts);
+}
+
+static void test_mmix_platform_initial_stack_layout(void)
+{
+    const MMIXPlatformRegion *low_ram = &mmix_regions[MMIX_REGION_LOW_RAM];
+    const MMIXPlatformRegion *platform_ram =
+        &mmix_regions[MMIX_REGION_PLATFORM_RAM];
+    const MMIXPlatformRegion *framebuffer =
+        &mmix_regions[MMIX_REGION_FRAMEBUFFER];
+    uint64_t previous_end = mmix_initial_stack_base;
+    uint64_t area_end;
+    unsigned int i;
+
+    for (i = 0; i < MMIX_INITIAL_STACK_SLOT_COUNT; i++) {
+        uint64_t slot_base =
+            mmix_initial_stack_base + i * mmix_initial_stack_slot_size;
+        uint64_t slot_end = slot_base + mmix_initial_stack_slot_size;
+
+        g_assert_cmphex(slot_base & (sizeof(uint64_t) - 1), ==, 0);
+        g_assert_cmphex(slot_base, ==, previous_end);
+        g_assert_cmphex(slot_base, >=, low_ram->base);
+        g_assert_cmphex(slot_end, <=, low_ram->base + low_ram->size);
+        previous_end = slot_end;
+    }
+
+    area_end = mmix_initial_stack_base +
+               MMIX_INITIAL_STACK_SLOT_COUNT *
+               mmix_initial_stack_slot_size;
+    g_assert_cmphex(mmix_initial_stack_base, ==, 0x00010000);
+    g_assert_cmphex(mmix_initial_stack_base + mmix_initial_stack_slot_size,
+                    ==, 0x00018000);
+    g_assert_cmphex(mmix_initial_stack_base +
+                    15 * mmix_initial_stack_slot_size, ==, 0x00088000);
+    g_assert_cmphex(previous_end, ==, area_end);
+    g_assert_cmphex(area_end, ==, 0x00090000);
+    g_assert_cmphex(area_end, <=, platform_ram->base);
+    g_assert_cmphex(area_end, <=, framebuffer->base);
 }
 
 static void test_mmix_platform_bootinfo_headless(void)
@@ -461,6 +502,8 @@ int main(int argc, char **argv)
 
     qtest_add_func("/mmix/platform/memory-layout",
                    test_mmix_platform_memory_layout);
+    qtest_add_func("/mmix/platform/initial-stack-layout",
+                   test_mmix_platform_initial_stack_layout);
     qtest_add_func("/mmix/platform/bootinfo-headless",
                    test_mmix_platform_bootinfo_headless);
     qtest_add_func("/mmix/platform/kernel-cmdline",

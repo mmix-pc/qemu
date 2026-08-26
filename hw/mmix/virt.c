@@ -41,6 +41,9 @@ struct MMIXVirtMachineState {
 
 const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
     [MMIX_VIRT_LOW_RAM] =      { 0, MMIX_POOL_SEGMENT_PHYS_BASE },
+    [MMIX_VIRT_INITIAL_STACKS] = {
+        MMIX_VIRT_INITIAL_STACK_BASE, MMIX_VIRT_INITIAL_STACK_AREA_SIZE
+    },
     [MMIX_VIRT_POOL] =         { MMIX_POOL_SEGMENT_PHYS_BASE,
                                  MMIX_POOL_SEGMENT_SIZE },
     [MMIX_VIRT_DATA] =         { MMIX_DATA_SEGMENT_PHYS_BASE,
@@ -97,6 +100,106 @@ static bool mmix_range_fits_ram(const MachineState *machine,
 {
     return range->base <= machine->ram_size &&
            range->size <= machine->ram_size - range->base;
+}
+
+static bool mmix_ranges_overlap(const MemMapEntry *a, const MemMapEntry *b)
+{
+    if (a->base <= b->base) {
+        return a->size > b->base - a->base;
+    }
+    return b->size > a->base - b->base;
+}
+
+static uint64_t mmix_virt_initial_stack(unsigned int cpu_index)
+{
+    return MMIX_VIRT_INITIAL_STACK_BASE +
+           cpu_index * MMIX_VIRT_INITIAL_STACK_SLOT_SIZE;
+}
+
+static bool mmix_validate_initial_stack_layout(const MachineState *machine,
+                                               Error **errp)
+{
+    const MemMapEntry *area =
+        &mmix_virt_memmap[MMIX_VIRT_INITIAL_STACKS];
+    const MMIXVirtMemMap excluded[] = {
+        MMIX_VIRT_POOL,
+        MMIX_VIRT_DATA,
+        MMIX_VIRT_STACK,
+        MMIX_VIRT_PLATFORM_RAM,
+        MMIX_VIRT_BOOTINFO,
+        MMIX_VIRT_KERNEL_CMDLINE,
+        MMIX_VIRT_FRAMEBUFFER,
+    };
+    uint64_t previous_end = area->base;
+    unsigned int i;
+
+    if (MMIX_VIRT_INITIAL_STACK_BASE != MMIX_INITIAL_STACK) {
+        error_setg(errp, "MMIX CPU0 initial stack address changed");
+        return false;
+    }
+    if (MMIX_VIRT_INITIAL_STACK_SLOT_SIZE == 0 ||
+        MMIX_VIRT_INITIAL_STACK_SLOT_SIZE % MMIX_OCTA_SIZE != 0 ||
+        MMIX_VIRT_INITIAL_STACK_BASE % MMIX_OCTA_SIZE != 0) {
+        error_setg(errp, "MMIX initial stack slots are not octa-aligned");
+        return false;
+    }
+    if (MMIX_VIRT_MAX_CPUS >
+        (UINT64_MAX - MMIX_VIRT_INITIAL_STACK_BASE) /
+        MMIX_VIRT_INITIAL_STACK_SLOT_SIZE) {
+        error_setg(errp, "MMIX initial stack slot address overflows");
+        return false;
+    }
+    if (area->size != MMIX_VIRT_INITIAL_STACK_AREA_SIZE ||
+        !mmix_range_contains(&mmix_virt_memmap[MMIX_VIRT_LOW_RAM], area) ||
+        !mmix_range_fits_ram(machine, area)) {
+        error_setg(errp, "MMIX initial stack slots do not fit in Low RAM");
+        return false;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(excluded); i++) {
+        if (mmix_ranges_overlap(area, &mmix_virt_memmap[excluded[i]])) {
+            error_setg(errp,
+                       "MMIX initial stack slots overlap reserved memory");
+            return false;
+        }
+    }
+
+    for (i = 0; i < MMIX_VIRT_MAX_CPUS; i++) {
+        MemMapEntry slot = {
+            .base = mmix_virt_initial_stack(i),
+            .size = MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
+        };
+
+        if (slot.base != previous_end || !mmix_range_contains(area, &slot)) {
+            error_setg(errp,
+                       "MMIX initial stack slots overlap or leave gaps");
+            return false;
+        }
+        previous_end = slot.base + slot.size;
+    }
+    if (previous_end != area->base + area->size) {
+        error_setg(errp, "MMIX initial stack slot range is incomplete");
+        return false;
+    }
+
+    return true;
+}
+
+static CPUState *mmix_virt_create_cpu(MachineState *machine,
+                                      unsigned int cpu_index)
+{
+    Object *cpuobj = object_new(machine->cpu_type);
+    uint64_t initial_stack = object_property_get_uint(
+        cpuobj, "initial-stack", &error_fatal);
+
+    if (machine->smp.cpus != 1 || cpu_index != 0 ||
+        initial_stack == MMIX_INITIAL_STACK) {
+        object_property_set_uint(cpuobj, "initial-stack",
+                                 mmix_virt_initial_stack(cpu_index),
+                                 &error_fatal);
+    }
+    qdev_realize(DEVICE(cpuobj), NULL, &error_fatal);
+    return CPU(cpuobj);
 }
 
 static bool mmix_validate_bootinfo_layout(const MachineState *machine,
@@ -489,9 +592,13 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *virtio_mmio;
     qemu_irq cpu_irq;
 
+    if (!mmix_validate_initial_stack_layout(machine, &error_fatal)) {
+        return;
+    }
+
     memory_region_add_subregion(sysmem, 0, machine->ram);
 
-    cpu = cpu_create(machine->cpu_type);
+    cpu = mmix_virt_create_cpu(machine, 0);
 
     intc = qdev_new(TYPE_MMIX_INTC);
     object_property_add_child(OBJECT(machine), "intc", OBJECT(intc));
