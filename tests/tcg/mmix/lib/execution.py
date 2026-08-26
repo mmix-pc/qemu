@@ -776,6 +776,185 @@ def _run_smp_timer_protocol(qtest, test):
     write(0, test.command_offset, test.command_halt)
 
 
+def _run_smp_shared_interrupt_protocol(qtest, test):
+    def address(cpu, offset):
+        return test.mailbox_base + cpu * test.mailbox_slot_size + offset
+
+    def read(cpu, offset):
+        response = _qtest_command(qtest, f"readq {address(cpu, offset):#x}")
+        return int(response[1], 0)
+
+    def write(cpu, offset, value):
+        _qtest_command(
+            qtest,
+            f"writeq {address(cpu, offset):#x} {value:#x}",
+        )
+
+    def read_mmio(address):
+        response = _qtest_command(qtest, f"readq {address:#x}")
+        return int(response[1], 0)
+
+    def write_mmio(address, value, width="q"):
+        _qtest_command(qtest, f"write{width} {address:#x} {value:#x}")
+
+    def set_irq(level):
+        _qtest_command(
+            qtest,
+            f"set_irq_in /machine/intc unnamed-gpio-in "
+            f"{test.shared_irq} {level}",
+        )
+
+    def wait(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed while {description}"
+                )
+            if actual == expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    def wait_for_progress(cpu, previous, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, test.progress_offset)
+            if actual != previous:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} made no progress while {description}"
+        )
+
+    def intc_enable_address(cpu):
+        return (
+            test.intc_base + test.intc_context_base +
+            cpu * test.intc_context_stride + test.intc_enable
+        )
+
+    def timer_context_address(cpu, register):
+        return (
+            test.timer_base + test.timer_context_base +
+            cpu * test.timer_context_stride + register
+        )
+
+    def program_expired_timer(cpu):
+        write_mmio(timer_context_address(cpu, test.timer_compare), 0)
+        write_mmio(
+            timer_context_address(cpu, test.timer_control),
+            test.timer_control_enabled,
+        )
+
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.stage_offset, test.stage_ready, "waiting for startup")
+
+    cpu1_progress = read(1, test.progress_offset)
+    set_irq(1)
+    wait(0, test.handler_count_offset, 1,
+         "entering CPU0's first shared handler")
+    assert read(0, test.claim_offset) == test.shared_irq
+    assert read(1, test.handler_count_offset) == 0
+    wait_for_progress(1, cpu1_progress,
+                      "CPU0 owns the shared interrupt")
+
+    write(0, test.handler_ack_offset, 1)
+    wait(0, test.handler_done_offset, 1,
+         "completing CPU0's still-high shared source")
+    wait(0, test.handler_count_offset, 2,
+         "reentering CPU0 for the shared-source retrigger")
+    assert read(0, test.claim_offset) == test.shared_irq
+    assert read(1, test.handler_count_offset) == 0
+    set_irq(0)
+    write(0, test.handler_ack_offset, 2)
+    wait(0, test.handler_done_offset, 2,
+         "completing CPU0's withdrawn shared source")
+    wait(0, test.resume_count_offset, 2,
+         "resuming CPU0 after shared-source retrigger")
+
+    cpu0_timer_mask = 1 << test.timer_irq_base
+    write_mmio(intc_enable_address(0), cpu0_timer_mask, width="l")
+    set_irq(1)
+    wait(1, test.handler_count_offset, 1,
+         "retargeting the shared source to CPU1")
+    assert read(1, test.claim_offset) == test.shared_irq
+    assert read(0, test.handler_count_offset) == 2
+    set_irq(0)
+    write(1, test.handler_ack_offset, 1)
+    wait(1, test.handler_done_offset, 1,
+         "completing CPU1's first shared source")
+    wait(1, test.resume_count_offset, 1,
+         "resuming CPU1 after retargeting")
+
+    set_irq(1)
+    wait(1, test.handler_count_offset, 2,
+         "entering CPU1's combined shared handler")
+    assert read(1, test.claim_offset) == test.shared_irq
+    for cpu in range(test.cpu_count):
+        program_expired_timer(cpu)
+
+    wait(0, test.handler_count_offset, 3,
+         "entering CPU0's fixed timer handler")
+    wait(0, test.handler_done_offset, 3,
+         "completing CPU0's fixed timer handler")
+    wait(0, test.resume_count_offset, 3,
+         "resuming CPU0 after its fixed timer")
+    assert read(0, test.claim_offset) == test.timer_irq_base
+
+    set_irq(0)
+    write(1, test.handler_ack_offset, 2)
+    wait(1, test.handler_done_offset, 2,
+         "completing CPU1's combined shared source")
+    wait(1, test.handler_count_offset, 3,
+         "entering CPU1's fixed timer handler")
+    wait(1, test.handler_done_offset, 3,
+         "completing CPU1's fixed timer handler")
+    wait(1, test.resume_count_offset, 3,
+         "resuming CPU1 after its fixed timer")
+    assert read(1, test.claim_offset) == test.timer_irq_base + 1
+
+    snapshots = []
+    for cpu in range(test.cpu_count):
+        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
+        snapshot = {
+            "rWW": read(cpu, test.rww_offset),
+            "rXX": read(cpu, test.rxx_offset),
+            "rYY": read(cpu, test.ryy_offset),
+            "rZZ": read(cpu, test.rzz_offset),
+            "rBB": read(cpu, test.rbb_offset),
+            "rO": read(cpu, test.ro_entry_offset),
+            "rS": read(cpu, test.rs_entry_offset),
+        }
+        snapshots.append(snapshot)
+
+        assert read(cpu, test.handler_count_offset) == 3
+        assert read(cpu, test.handler_done_offset) == 3
+        assert read(cpu, test.resume_count_offset) == 3
+        assert read(cpu, test.shared_count_offset) == 2
+        assert read(cpu, test.timer_count_offset) == 1
+        assert snapshot["rWW"] % 4 == 0
+        assert test.main_start <= snapshot["rWW"] < test.main_end
+        assert snapshot["rXX"] & test.dynamic_trap_resume_next
+        assert read(cpu, test.handler_rq_offset) & test.interrupt_request
+        assert snapshot["rBB"] == test.sentinels[cpu]
+        assert snapshot["rO"] == expected_stack
+        assert snapshot["rS"] == expected_stack
+        assert read(cpu, test.ro_final_offset) == expected_stack
+        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
+        assert read(cpu, test.rk_final_offset) == test.interrupt_request
+        assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
+        assert read_mmio(timer_context_address(cpu, test.timer_status)) == 0
+
+    assert snapshots[0] != snapshots[1]
+    write(0, test.halt_offset, 1)
+
+
 def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
     image = workdir / f"{test.name}.elf"
     qtest_path = workdir / socket_name
@@ -862,4 +1041,11 @@ def run_mttcg_timer_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_timer_protocol,
         "m46-qtest.sock",
+    )
+
+
+def run_mttcg_shared_interrupt_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_smp_shared_interrupt_protocol,
+        "m47-qtest.sock",
     )

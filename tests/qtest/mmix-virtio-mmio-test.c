@@ -66,6 +66,13 @@ static void mmix_intc_write_enable(QTestState *qts, unsigned cpu,
                  value);
 }
 
+static void mmix_intc_complete(QTestState *qts, unsigned cpu, uint32_t irq)
+{
+    qtest_writel(qts, mmix_intc_context_reg(cpu,
+                                            MMIX_VIRT_INTC_CONTEXT_COMPLETE),
+                 irq);
+}
+
 static QTestState *mmix_virtio_mmio_start(void)
 {
     return qtest_init("-machine virt");
@@ -74,6 +81,13 @@ static QTestState *mmix_virtio_mmio_start(void)
 static QTestState *mmix_virtio_blk_start(void)
 {
     return qtest_init("-machine virt "
+                      "-drive file=null-co://,if=none,format=raw,id=blk0 "
+                      "-device virtio-blk-device,drive=blk0");
+}
+
+static QTestState *mmix_virtio_blk_start_smp(void)
+{
+    return qtest_init("-machine virt -smp 2 "
                       "-drive file=null-co://,if=none,format=raw,id=blk0 "
                       "-device virtio-blk-device,drive=blk0");
 }
@@ -207,6 +221,67 @@ static void test_mmix_virtio_mmio_irq(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_virtio_mmio_shared_irq(void)
+{
+    QTestState *qts = mmix_virtio_blk_start_smp();
+    QVirtioMMIODevice dev;
+    QGuestAllocator alloc;
+    QVirtQueue *vq;
+    uint32_t virtio_mask = mmix_intc_irq_mask(MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    uint32_t free_head;
+    uint32_t used_head;
+
+    qtest_irq_intercept_out_named(qts, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+    mmix_intc_write_enable(qts, 0, virtio_mask);
+    mmix_intc_write_enable(qts, 1, virtio_mask);
+    mmix_virtio_blk_init(qts, &dev, &alloc, &vq);
+
+    free_head = mmix_virtio_blk_submit_read(qts, &alloc, &dev, vq);
+    mmix_virtio_mmio_wait_interrupt(qts);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, 0);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==,
+                     MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+
+    mmix_intc_complete(qts, 0, MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==,
+                     MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_true(qvirtqueue_get_buf(qts, vq, &used_head, NULL));
+    g_assert_cmpuint(used_head, ==, free_head);
+    qtest_writel(qts, MMIX_VIRT_VIRTIO_MMIO_BASE +
+                 QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_intc_complete(qts, 1, MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_write_enable(qts, 0, 0);
+    free_head = mmix_virtio_blk_submit_read(qts, &alloc, &dev, vq);
+    mmix_virtio_mmio_wait_interrupt(qts);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, 0);
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==,
+                     MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_true(qvirtqueue_get_buf(qts, vq, &used_head, NULL));
+    g_assert_cmpuint(used_head, ==, free_head);
+    qtest_writel(qts, MMIX_VIRT_VIRTIO_MMIO_BASE +
+                 QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 1));
+    mmix_intc_complete(qts, 1, MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_cmphex(mmix_intc_read_pending(qts), ==, 0);
+
+    qvirtqueue_cleanup(dev.vdev.bus, vq, &alloc);
+    alloc_destroy(&alloc);
+    qtest_quit(qts);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -217,6 +292,8 @@ int main(int argc, char **argv)
                    test_mmix_virtio_blk_attach);
     qtest_add_func("/mmix/virtio-mmio/irq",
                    test_mmix_virtio_mmio_irq);
+    qtest_add_func("/mmix/virtio-mmio/shared-irq",
+                   test_mmix_virtio_mmio_shared_irq);
 
     return g_test_run();
 }
