@@ -7,6 +7,7 @@
 import json
 import re
 import select
+import socket
 import subprocess
 import time
 
@@ -473,3 +474,246 @@ def run_mttcg_reset_test(qemu, workdir, test):
         process.kill()
         process.wait()
         raise
+
+
+def _qtest_command(stream, command):
+    stream.write(command.encode("ascii") + b"\n")
+    response = stream.readline()
+    if not response:
+        raise AssertionError("QEMU closed the QTest connection")
+    if not response.startswith(b"OK"):
+        raise AssertionError(
+            f"QTest command {command!r} failed: "
+            f"{response.decode('utf-8', errors='replace').rstrip()}"
+        )
+    return response.decode("ascii").split()
+
+
+def _run_smp_interrupt_protocol(qtest, test):
+    def address(cpu, offset):
+        return test.mailbox_base + cpu * test.mailbox_slot_size + offset
+
+    def read(cpu, offset):
+        response = _qtest_command(qtest, f"readq {address(cpu, offset):#x}")
+        return int(response[1], 0)
+
+    def write(cpu, offset, value):
+        _qtest_command(
+            qtest,
+            f"writeq {address(cpu, offset):#x} {value:#x}",
+        )
+
+    def set_irq(irq, level):
+        _qtest_command(
+            qtest,
+            f"set_irq_in /machine/intc unnamed-gpio-in {irq} {level}",
+        )
+
+    def wait(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed while {description}"
+                )
+            if actual == expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    def command(cpu, value, expected_stage, description):
+        write(cpu, test.command_offset, value)
+        wait(cpu, test.command_offset, 0,
+             f"consuming command for {description}")
+        wait(cpu, test.stage_offset, expected_stage, description)
+
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.stage_offset, test.stage_ready, "waiting for startup")
+
+    for cpu in range(test.cpu_count):
+        assert read(cpu, test.rk_initial_offset) == test.initial_rk[cpu]
+
+    set_irq(test.timer_irq_base, 1)
+    set_irq(test.timer_irq_base + 1, 1)
+    for cpu in range(test.cpu_count):
+        command(cpu, test.command_wait_rq, test.stage_rq_latched,
+                "waiting for a masked request")
+        assert read(cpu, test.rq_initial_offset) & test.interrupt_request
+        assert read(cpu, test.handler_count_offset) == 0
+
+    command(0, test.command_claim_ack, test.stage_claimed,
+            "claiming CPU0's request")
+    assert read(0, test.claim_offset) == test.timer_irq_base
+
+    command(1, test.command_snapshot, test.stage_snapshot,
+            "checking CPU1's independent request")
+    assert read(1, test.rq_after_offset) & test.interrupt_request
+
+    set_irq(test.timer_irq_base, 0)
+    command(0, test.command_complete, test.stage_completed,
+            "completing CPU0's claimed request")
+    assert read(0, test.rq_after_offset) & test.interrupt_request == 0
+    assert read(1, test.rq_after_offset) & test.interrupt_request
+
+    write(1, test.command_offset, test.command_enable)
+    wait(1, test.handler_count_offset, 1, "entering CPU1's first handler")
+    assert read(0, test.handler_count_offset) == 0
+    assert read(1, test.claim_offset) == test.timer_irq_base + 1
+    set_irq(test.timer_irq_base + 1, 0)
+    write(1, test.handler_ack_offset, 1)
+    wait(1, test.handler_done_offset, 1, "resuming CPU1's first request")
+    wait(1, test.stage_offset, test.stage_enabled,
+         "returning to CPU1's interrupted command")
+
+    command(0, test.command_enable, test.stage_enabled,
+            "enabling CPU0 delivery")
+    assert read(0, test.handler_count_offset) == 0
+
+    for cpu, count in ((0, 1), (1, 2)):
+        irq = test.timer_irq_base + cpu
+        set_irq(irq, 1)
+        wait(cpu, test.handler_count_offset, count,
+             f"entering CPU{cpu}'s independent handler")
+        claim = read(cpu, test.claim_offset)
+        assert claim == irq, claim
+        set_irq(irq, 0)
+        write(cpu, test.handler_ack_offset, count)
+        wait(cpu, test.handler_done_offset, count,
+             f"resuming CPU{cpu}'s independent request")
+        command(cpu, test.command_snapshot, test.stage_snapshot,
+                f"confirming CPU{cpu} resumed its instruction stream")
+
+    set_irq(test.timer_irq_base, 1)
+    set_irq(test.timer_irq_base + 1, 1)
+    wait(0, test.handler_count_offset, 2,
+         "entering CPU0's simultaneous handler")
+    wait(1, test.handler_count_offset, 3,
+         "entering CPU1's simultaneous handler")
+    cpu0_claim = read(0, test.claim_offset)
+    cpu1_claim = read(1, test.claim_offset)
+    assert cpu0_claim == test.timer_irq_base, cpu0_claim
+    assert cpu1_claim == test.timer_irq_base + 1, cpu1_claim
+    set_irq(test.timer_irq_base, 0)
+    set_irq(test.timer_irq_base + 1, 0)
+    write(0, test.handler_ack_offset, 2)
+    write(1, test.handler_ack_offset, 3)
+    for cpu, count in ((0, 2), (1, 3)):
+        wait(cpu, test.handler_done_offset, count,
+             f"resuming CPU{cpu}'s simultaneous request")
+
+    for cpu in range(test.cpu_count):
+        command(cpu, test.command_finalize, test.stage_final,
+                "recording final CPU-local state")
+
+    snapshots = []
+    for cpu, expected_count in enumerate((2, 3)):
+        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
+        snapshot = {
+            "rWW": read(cpu, test.rww_offset),
+            "rXX": read(cpu, test.rxx_offset),
+            "rYY": read(cpu, test.ryy_offset),
+            "rZZ": read(cpu, test.rzz_offset),
+            "rBB": read(cpu, test.rbb_offset),
+            "rO": read(cpu, test.ro_entry_offset),
+            "rS": read(cpu, test.rs_entry_offset),
+        }
+        snapshots.append(snapshot)
+
+        assert read(cpu, test.handler_count_offset) == expected_count
+        assert read(cpu, test.handler_done_offset) == expected_count
+        assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
+        assert snapshot["rWW"] % 4 == 0
+        assert test.main_start <= snapshot["rWW"] < test.main_end
+        assert snapshot["rXX"] & test.dynamic_trap_resume_next
+        assert read(cpu, test.handler_rq_offset) & test.interrupt_request
+        assert snapshot["rBB"] == test.sentinels[cpu]
+        assert snapshot["rO"] == expected_stack
+        assert snapshot["rS"] == expected_stack
+        assert read(cpu, test.ro_final_offset) == expected_stack
+        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
+        assert read(cpu, test.rk_final_offset) == test.interrupt_request
+        assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
+
+    assert snapshots[0] != snapshots[1]
+    write(0, test.command_offset, test.command_halt)
+
+
+def run_mttcg_interrupt_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    qtest_path = workdir / "m45-qtest.sock"
+
+    image.write_bytes(test.image)
+    if qtest_path.exists():
+        qtest_path.unlink()
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(
+            *test.qemu_args,
+            "-S",
+            "-qmp",
+            "stdio",
+            "-qtest",
+            f"unix:{qtest_path}",
+            "-qtest-log",
+            "/dev/null",
+        ),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        thread_ids = [cpu["thread-id"] for cpu in cpus]
+        if len(thread_ids) != test.cpu_count:
+            raise AssertionError(
+                f"{test.name}: expected {test.cpu_count} QMP CPUs, "
+                f"got {len(thread_ids)}"
+            )
+        if len(set(thread_ids)) != test.cpu_count:
+            raise AssertionError(
+                f"{test.name}: vCPUs share host thread ids {thread_ids}"
+            )
+        _qmp_command(process, "cont")
+        _run_smp_interrupt_protocol(qtest, test)
+        stdout, stderr = process.communicate(timeout=5)
+        if process.returncode != 0:
+            raise AssertionError(
+                f"{test.name}: QEMU exited with {process.returncode}: "
+                f"{stderr.decode('utf-8', errors='replace')}"
+            )
+    except BaseException:
+        process.kill()
+        stdout, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        if qtest_path.exists():
+            qtest_path.unlink()
