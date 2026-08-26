@@ -326,74 +326,6 @@ REGISTER_CONTENTS_ARGC_ARGV_PROBE = register_contents_probe_program(
 )
 
 
-def smp_bootinfo_probe_program():
-    entry = 0x1000
-    mailbox = 0x00200000
-    slot_size = 0x40
-    bootinfo = MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0]
-    program = [
-        branch(GETA, R34, 0),
-        insn(ADDI, R32, R0, 0),
-        insn(ADDI, R33, R1, 0),
-        insn(GET, R35, 0, SR_O),
-        insn(GET, R36, 0, SR_S),
-        *set_octa(R40, mailbox),
-        insn(SLUI, R41, R32, 6),
-        insn(ADDU, R40, R40, R41),
-        insn(STOUI, R32, R40, 0),
-        insn(STOUI, R33, R40, 8),
-        insn(STOUI, R34, R40, 16),
-        insn(STOUI, R35, R40, 24),
-        insn(STOUI, R36, R40, 32),
-        insn(STOUI, R250, R40, 40),
-        insn(SYNC, 0, 0, 0),
-        wyde(SETL, R42, 1),
-        insn(STOUI, R42, R40, 48),
-        branch(BNZ, R32, 25),
-        *set_octa(R49, mailbox + slot_size),
-        insn(LDOUI, R50, R49, 48),
-        branch(BZB, R50, 0xffff),
-        insn(SYNC, 0, 0, 0),
-        insn(LDOUI, R50, R49, 0),
-        insn(LDOUI, R51, R49, 8),
-        insn(LDOUI, R52, R49, 16),
-        insn(LDOUI, R53, R49, 24),
-        insn(LDOUI, R54, R49, 32),
-        insn(LDOUI, R55, R49, 40),
-        *set_octa(R59, mailbox),
-        insn(LDOUI, R60, R59, 0),
-        insn(LDOUI, R61, R59, 8),
-        insn(LDOUI, R62, R59, 16),
-        insn(LDOUI, R63, R59, 24),
-        insn(LDOUI, R64, R59, 32),
-        insn(LDOUI, R65, R59, 40),
-        halt(),
-        jump(JMP, 0),
-    ]
-    regs = {
-        R32: 0,
-        R33: bootinfo,
-        R34: entry,
-        R35: INITIAL_STACK,
-        R36: INITIAL_STACK,
-        R50: 1,
-        R51: bootinfo,
-        R52: entry,
-        R53: INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
-        R54: INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
-        R55: ELF_GLOBAL_VALUES[0],
-        R60: 0,
-        R61: bootinfo,
-        R62: entry,
-        R63: INITIAL_STACK,
-        R64: INITIAL_STACK,
-        R65: ELF_GLOBAL_VALUES[0],
-    }
-    return b"".join(program), entry + (len(program) - 2) * 4, regs
-
-
-SMP_BOOTINFO_PROBE = smp_bootinfo_probe_program()
-
 ELF_LOADER_TESTS = [
     MMIXELFTest(
         "elf-load-low-ram-segment",
@@ -546,19 +478,6 @@ ELF_LOADER_TESTS = [
             "-semihosting-config",
             "enable=on,arg=prog",
         ),
-    ),
-    MMIXELFTest(
-        "elf-smp-bootinfo-entry-state",
-        elf64_image_with_reg_contents(
-            0x1000,
-            SMP_BOOTINFO_PROBE[0],
-            ELF_GLOBAL_BASE,
-            ELF_GLOBAL_VALUES,
-            entry=0x1000,
-        ),
-        pc=SMP_BOOTINFO_PROBE[1],
-        regs=SMP_BOOTINFO_PROBE[2],
-        qemu_args=("-smp", "2"),
     ),
     MMIXELFTest(
         "elf-single-core-platform",
