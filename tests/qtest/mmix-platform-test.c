@@ -418,6 +418,43 @@ static void test_mmix_platform_max_kernel_cmdline(void)
     g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
+static void test_mmix_platform_smp_accepted(gconstpointer opaque)
+{
+    const char *smp = opaque;
+    QTestState *qts = qtest_initf("-machine virt -smp %s", smp);
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_platform_smp_rejected(gconstpointer opaque)
+{
+    const char *smp = opaque;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+    const char *argv[] = {
+        qtest_qemu_binary(NULL),
+        "-machine", "virt", "-smp", smp,
+        "-display", "none", "-monitor", "none", "-serial", "none", NULL,
+    };
+    int wait_status;
+
+    g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
+                               G_SPAWN_STDOUT_TO_DEV_NULL,
+                               NULL, NULL, NULL, &stderr_text,
+                               &wait_status, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(wait_status, !=, 0);
+
+    if (!strcmp(smp, "17")) {
+        g_assert_nonnull(strstr(stderr_text,
+                               "max CPUs supported by machine 'virt' is 16"));
+    } else {
+        g_assert_nonnull(strstr(stderr_text,
+                               "CPU topology parameters must be greater "
+                               "than zero"));
+    }
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -432,6 +469,22 @@ int main(int argc, char **argv)
                    test_mmix_platform_empty_kernel_cmdline);
     qtest_add_func("/mmix/platform/max-kernel-cmdline",
                    test_mmix_platform_max_kernel_cmdline);
+    qtest_add_data_func("/mmix/platform/smp/accepted/1",
+                        "1",
+                        test_mmix_platform_smp_accepted);
+    qtest_add_data_func("/mmix/platform/smp/accepted/2",
+                        "2",
+                        test_mmix_platform_smp_accepted);
+    qtest_add_data_func("/mmix/platform/smp/accepted/16",
+                        "16",
+                        test_mmix_platform_smp_accepted);
+    qtest_add_data_func("/mmix/platform/smp/accepted/actual-below-maximum",
+                        "cpus=2,maxcpus=16",
+                        test_mmix_platform_smp_accepted);
+    qtest_add_data_func("/mmix/platform/smp/rejected/zero", "0",
+                        test_mmix_platform_smp_rejected);
+    qtest_add_data_func("/mmix/platform/smp/rejected/above-maximum", "17",
+                        test_mmix_platform_smp_rejected);
 
     return g_test_run();
 }

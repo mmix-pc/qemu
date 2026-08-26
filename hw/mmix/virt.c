@@ -591,6 +591,9 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     mc->desc = "MMIX virtual machine";
     mc->init = mmix_virt_init;
     mc->default_cpu_type = TYPE_MMIX_ANY_CPU;
+    mc->default_cpus = 1;
+    mc->min_cpus = 1;
+    mc->max_cpus = MMIX_VIRT_MAX_CPUS;
     mc->default_ram_size = 256 * MiB;
     mc->default_ram_id = "mmix.ram";
 
