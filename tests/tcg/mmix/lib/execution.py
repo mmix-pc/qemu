@@ -644,9 +644,141 @@ def _run_smp_interrupt_protocol(qtest, test):
     write(0, test.command_offset, test.command_halt)
 
 
-def run_mttcg_interrupt_test(qemu, workdir, test):
+def _run_smp_timer_protocol(qtest, test):
+    def address(cpu, offset):
+        return test.mailbox_base + cpu * test.mailbox_slot_size + offset
+
+    def read(cpu, offset):
+        response = _qtest_command(qtest, f"readq {address(cpu, offset):#x}")
+        return int(response[1], 0)
+
+    def write(cpu, offset, value):
+        _qtest_command(
+            qtest,
+            f"writeq {address(cpu, offset):#x} {value:#x}",
+        )
+
+    def read_mmio(address):
+        response = _qtest_command(qtest, f"readq {address:#x}")
+        return int(response[1], 0)
+
+    def wait(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed while {description}"
+                )
+            if actual == expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    def command(cpu, value, expected_stage, description):
+        write(cpu, test.command_offset, value)
+        wait(cpu, test.command_offset, 0,
+             f"consuming command for {description}")
+        wait(cpu, test.stage_offset, expected_stage, description)
+
+    def program(cpu, deadline):
+        write(cpu, test.deadline_offset, deadline)
+        command(cpu, test.command_program, test.stage_programmed,
+                f"programming CPU{cpu}'s timer")
+
+    def enable(cpu):
+        command(cpu, test.command_enable, test.stage_enabled,
+                f"enabling CPU{cpu}'s timer")
+
+    def wait_for_delivery(cpu, count):
+        wait(cpu, test.handler_count_offset, count,
+             f"entering CPU{cpu}'s timer handler {count}")
+        wait(cpu, test.handler_done_offset, count,
+             f"resuming CPU{cpu}'s timer handler {count}")
+        command(cpu, test.command_snapshot, test.stage_resumed,
+                f"confirming CPU{cpu} resumed after timer {count}")
+        assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
+        assert read(cpu, test.timer_status_offset) == test.timer_status_pending
+        status_address = test.timer_context_address(
+            cpu, test.timer_context_status
+        )
+        assert read_mmio(status_address) == 0
+
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.stage_offset, test.stage_ready, "waiting for startup")
+
+    deadline = read_mmio(test.timer_base + test.timer_time) + 100_000_000
+    program(0, deadline)
+    enable(0)
+    wait_for_delivery(0, 1)
+    assert read(1, test.handler_count_offset) == 0
+    assert read_mmio(test.timer_context_address(
+        1, test.timer_context_status)) == 0
+
+    deadline = read_mmio(test.timer_base + test.timer_time) + 100_000_000
+    program(1, deadline)
+    enable(1)
+    wait_for_delivery(1, 1)
+    assert read(0, test.handler_count_offset) == 1
+
+    deadline = read_mmio(test.timer_base + test.timer_time) + 250_000_000
+    for cpu in range(test.cpu_count):
+        program(cpu, deadline)
+    for cpu in range(test.cpu_count):
+        write(cpu, test.command_offset, test.command_enable)
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.command_offset, 0,
+             f"consuming simultaneous enable for CPU{cpu}")
+        wait(cpu, test.stage_offset, test.stage_enabled,
+             f"enabling CPU{cpu}'s simultaneous timer")
+    for cpu in range(test.cpu_count):
+        wait_for_delivery(cpu, 2)
+
+    for cpu in range(test.cpu_count):
+        command(cpu, test.command_finalize, test.stage_final,
+                "recording final CPU-local timer state")
+
+    snapshots = []
+    for cpu in range(test.cpu_count):
+        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
+        snapshot = {
+            "rWW": read(cpu, test.rww_offset),
+            "rXX": read(cpu, test.rxx_offset),
+            "rYY": read(cpu, test.ryy_offset),
+            "rZZ": read(cpu, test.rzz_offset),
+            "rBB": read(cpu, test.rbb_offset),
+            "rO": read(cpu, test.ro_entry_offset),
+            "rS": read(cpu, test.rs_entry_offset),
+        }
+        snapshots.append(snapshot)
+
+        assert read(cpu, test.handler_count_offset) == 2
+        assert read(cpu, test.handler_done_offset) == 2
+        assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
+        assert snapshot["rWW"] % 4 == 0
+        assert test.main_start <= snapshot["rWW"] < test.main_end
+        assert snapshot["rXX"] & test.dynamic_trap_resume_next
+        assert read(cpu, test.handler_rq_offset) & test.interrupt_request
+        assert snapshot["rBB"] == test.sentinels[cpu]
+        assert snapshot["rO"] == expected_stack
+        assert snapshot["rS"] == expected_stack
+        assert read(cpu, test.ro_final_offset) == expected_stack
+        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
+        assert read(cpu, test.rk_final_offset) == test.interrupt_request
+        assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
+
+    assert snapshots[0] != snapshots[1]
+    write(0, test.command_offset, test.command_halt)
+
+
+def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
     image = workdir / f"{test.name}.elf"
-    qtest_path = workdir / "m45-qtest.sock"
+    qtest_path = workdir / socket_name
 
     image.write_bytes(test.image)
     if qtest_path.exists():
@@ -698,7 +830,7 @@ def run_mttcg_interrupt_test(qemu, workdir, test):
                 f"{test.name}: vCPUs share host thread ids {thread_ids}"
             )
         _qmp_command(process, "cont")
-        _run_smp_interrupt_protocol(qtest, test)
+        protocol(qtest, test)
         stdout, stderr = process.communicate(timeout=5)
         if process.returncode != 0:
             raise AssertionError(
@@ -717,3 +849,17 @@ def run_mttcg_interrupt_test(qemu, workdir, test):
         listener.close()
         if qtest_path.exists():
             qtest_path.unlink()
+
+
+def run_mttcg_interrupt_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_smp_interrupt_protocol,
+        "m45-qtest.sock",
+    )
+
+
+def run_mttcg_timer_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_smp_timer_protocol,
+        "m46-qtest.sock",
+    )

@@ -199,8 +199,10 @@ static void mmix_intc_set_irq(void *opaque, int irq, int level)
     }
 
     if (level) {
+        if (!(s->input_level & mask)) {
+            s->pending |= mask;
+        }
         s->input_level |= mask;
-        s->pending |= mask;
     } else {
         s->input_level &= ~mask;
         s->pending &= ~mask;
