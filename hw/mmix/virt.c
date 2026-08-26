@@ -355,6 +355,12 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                             MMIX_BOOTINFO_FIELD_KERNEL_CMDLINE_SIZE,
                             cmdline_size);
     }
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_IPI_BASE,
+                        mmix_virt_memmap[MMIX_VIRT_IPI].base);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_IPI_TARGET_COUNT,
+                        machine->smp.cpus);
+    mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_IPI_REQUEST_MASK,
+                        MMIX_RQ_IPI);
 
     result = address_space_write(&address_space_memory,
                                  mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base,

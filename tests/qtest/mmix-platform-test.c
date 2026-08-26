@@ -58,6 +58,7 @@ typedef enum MMIXPlatformDeviceIndex {
     MMIX_DEVICE_FRAMEBUFFER,
     MMIX_DEVICE_TIMER0,
     MMIX_DEVICE_INTC,
+    MMIX_DEVICE_IPI,
     MMIX_DEVICE_COUNT,
 } MMIXPlatformDeviceIndex;
 
@@ -67,6 +68,7 @@ static const MMIXPlatformDevice mmix_devices[MMIX_DEVICE_COUNT] = {
     [MMIX_DEVICE_FRAMEBUFFER] = { "framebuffer", 0x10002000, 3 },
     [MMIX_DEVICE_TIMER0] = { "CPU0 timer", 0x10003000, 16 },
     [MMIX_DEVICE_INTC] = { "interrupt controller", 0x10004000, 0 },
+    [MMIX_DEVICE_IPI] = { "inter-processor interrupt", 0x10006000, 0 },
 };
 
 static const uint64_t mmix_virt_mmio_base = 0x10000000ULL;
@@ -96,6 +98,13 @@ enum {
     MMIX_INTC_CONTEXT_BASE = 0x1000,
     MMIX_INTC_CONTEXT_STRIDE = 0x100,
     MMIX_INTC_CONTEXT_ENABLE = 0x00,
+    MMIX_IPI_ACTIVE_TARGETS = 0x0000,
+    MMIX_IPI_SEND = 0x0008,
+    MMIX_IPI_CONTEXT_BASE = 0x0100,
+    MMIX_IPI_CONTEXT_STRIDE = 0x20,
+    MMIX_IPI_CONTEXT_STATUS = 0x00,
+    MMIX_IPI_CONTEXT_CLEAR = 0x08,
+    MMIX_IPI_STATUS_PENDING = 0x01,
     MMIX_TIMER_IRQ_BASE = 16,
     MMIX_INITIAL_STACK_SLOT_COUNT = 16,
 };
@@ -103,7 +112,9 @@ enum {
 static const uint64_t mmix_initial_stack_base = 0x00010000;
 static const uint64_t mmix_initial_stack_slot_size = 0x00008000;
 static const uint64_t mmix_interrupt_controller_request = 1ULL << 8;
+static const uint64_t mmix_ipi_request = 1ULL << 9;
 static const char *mmix_intc_qom_path = "/machine/intc";
+static const char *mmix_ipi_qom_path = "/machine/ipi";
 static const char *mmix_timer_qom_path = "/machine/timer";
 
 typedef enum MMIXBootInfoOffset {
@@ -147,7 +158,11 @@ typedef enum MMIXBootInfoOffset {
     MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_OFFSET = 0x128,
     MMIX_BOOTINFO_KERNEL_CMDLINE_ADDR_OFFSET = 0x130,
     MMIX_BOOTINFO_KERNEL_CMDLINE_SIZE_OFFSET = 0x138,
-    MMIX_BOOTINFO_SIZE = 0x140,
+    MMIX_BOOTINFO_COMPAT_PREFIX_SIZE = 0x140,
+    MMIX_BOOTINFO_IPI_BASE_OFFSET = 0x140,
+    MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET = 0x148,
+    MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET = 0x150,
+    MMIX_BOOTINFO_SIZE = 0x158,
 } MMIXBootInfoOffset;
 
 static const uint64_t mmix_kernel_cmdline_base =
@@ -349,10 +364,14 @@ static void test_mmix_platform_bootinfo_headless(void)
         MMIX_BOOTINFO_FRAMEBUFFER_HEIGHT_OFFSET,
         MMIX_BOOTINFO_FRAMEBUFFER_STRIDE_OFFSET,
         MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_OFFSET,
+        MMIX_BOOTINFO_IPI_BASE_OFFSET,
+        MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET,
+        MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET,
     };
     uint64_t uart_base;
     uint64_t timer_base;
     uint64_t intc_base;
+    uint64_t ipi_base;
     uint64_t virtio_base;
     uint64_t framebuffer_control_base;
     uint64_t uart_irq;
@@ -383,6 +402,7 @@ static void test_mmix_platform_bootinfo_headless(void)
     uart_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_UART_BASE_OFFSET);
     timer_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_TIMER_BASE_OFFSET);
     intc_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_INTC_BASE_OFFSET);
+    ipi_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_IPI_BASE_OFFSET);
     virtio_base = mmix_bootinfo_read(
         qts, MMIX_BOOTINFO_VIRTIO_MMIO_BASE_OFFSET);
     framebuffer_control_base = mmix_bootinfo_read(
@@ -390,6 +410,7 @@ static void test_mmix_platform_bootinfo_headless(void)
     g_assert_cmphex(uart_base, ==, mmix_devices[MMIX_DEVICE_UART0].base);
     g_assert_cmphex(timer_base, ==, mmix_devices[MMIX_DEVICE_TIMER0].base);
     g_assert_cmphex(intc_base, ==, mmix_devices[MMIX_DEVICE_INTC].base);
+    g_assert_cmphex(ipi_base, ==, mmix_devices[MMIX_DEVICE_IPI].base);
     g_assert_cmphex(virtio_base, ==,
                     mmix_devices[MMIX_DEVICE_VIRTIO_BLOCK0].base);
     g_assert_cmphex(framebuffer_control_base, ==,
@@ -416,6 +437,13 @@ static void test_mmix_platform_bootinfo_headless(void)
                                  MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
     g_assert_cmpuint(qtest_readl(qts, intc_base + MMIX_INTC_PENDING),
                      ==, 0);
+    g_assert_cmphex(qtest_readq(qts, ipi_base + MMIX_IPI_ACTIVE_TARGETS),
+                    ==, 1);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET),
+                    ==, mmix_ipi_request);
+    g_assert_cmpuint(MMIX_BOOTINFO_IPI_BASE_OFFSET, ==,
+                     MMIX_BOOTINFO_COMPAT_PREFIX_SIZE);
 
     uart_irq = mmix_bootinfo_read(qts, MMIX_BOOTINFO_UART_IRQ_OFFSET);
     virtio_irq = mmix_bootinfo_read(qts,
@@ -618,6 +646,13 @@ static uint64_t mmix_timer_context_address(unsigned int cpu_index,
            cpu_index * MMIX_TIMER_CONTEXT_STRIDE + reg;
 }
 
+static uint64_t mmix_ipi_context_address(unsigned int cpu_index,
+                                         uint64_t reg)
+{
+    return mmix_devices[MMIX_DEVICE_IPI].base + MMIX_IPI_CONTEXT_BASE +
+           cpu_index * MMIX_IPI_CONTEXT_STRIDE + reg;
+}
+
 static void mmix_set_intc_irq(QTestState *qts, unsigned int irq, int level)
 {
     qtest_set_irq_in(qts, mmix_intc_qom_path, "unnamed-gpio-in", irq, level);
@@ -752,6 +787,81 @@ static void test_mmix_platform_smp_timer_wiring(gconstpointer opaque)
     g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
+static void test_mmix_platform_smp_ipi_wiring(gconstpointer opaque)
+{
+    unsigned int cpu_count = GPOINTER_TO_UINT(opaque);
+    unsigned int target_cpu = cpu_count - 1;
+    uint64_t active_targets = (1ULL << cpu_count) - 1;
+    uint64_t invalid_target = 1ULL << cpu_count;
+    uint64_t baseline[MMIX_INITIAL_STACK_SLOT_COUNT];
+    uint64_t ipi_base = mmix_devices[MMIX_DEVICE_IPI].base;
+    g_autofree char *elf = mmix_create_elf();
+    g_autoptr(QDict) response = NULL;
+    QTestState *qts = mmix_start_elf_smp(elf, NULL, cpu_count);
+    unsigned int i;
+
+    response = qtest_qmp(
+        qts,
+        "{ 'execute': 'qom-get', "
+        "  'arguments': { 'path': %s, 'property': 'num-cpus' } }",
+        mmix_ipi_qom_path);
+    g_assert_cmpuint(qdict_get_int(response, "return"), ==, cpu_count);
+    g_assert_cmphex(qtest_readq(qts, ipi_base + MMIX_IPI_ACTIVE_TARGETS),
+                    ==, active_targets);
+    g_assert_cmphex(mmix_bootinfo_read(qts,
+                                      MMIX_BOOTINFO_IPI_BASE_OFFSET),
+                    ==, ipi_base);
+    g_assert_cmpuint(mmix_bootinfo_read(
+                         qts, MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET),
+                     ==, cpu_count);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET),
+                    ==, mmix_ipi_request);
+
+    for (i = 0; i < cpu_count; i++) {
+        baseline[i] = mmix_cpu_rq(qts, i);
+    }
+
+    qtest_writeq(qts, ipi_base + MMIX_IPI_SEND,
+                 (1ULL << target_cpu) | invalid_target);
+    mmix_wait_cpu_rq(qts, target_cpu,
+                     baseline[target_cpu] | mmix_ipi_request);
+    for (i = 0; i < cpu_count; i++) {
+        g_assert_cmphex(mmix_cpu_rq(qts, i), ==,
+                        i == target_cpu ?
+                        baseline[i] | mmix_ipi_request : baseline[i]);
+    }
+    g_assert_cmphex(qtest_readq(
+                        qts,
+                        mmix_ipi_context_address(
+                            target_cpu, MMIX_IPI_CONTEXT_STATUS)),
+                    ==, MMIX_IPI_STATUS_PENDING);
+    if (cpu_count < MMIX_INITIAL_STACK_SLOT_COUNT) {
+        g_assert_cmphex(qtest_readq(
+                            qts,
+                            mmix_ipi_context_address(
+                                cpu_count, MMIX_IPI_CONTEXT_STATUS)),
+                        ==, 0);
+    }
+
+    qtest_writeq(qts,
+                 mmix_ipi_context_address(target_cpu,
+                                          MMIX_IPI_CONTEXT_CLEAR),
+                 MMIX_IPI_STATUS_PENDING);
+    g_assert_cmphex(qtest_readq(
+                        qts,
+                        mmix_ipi_context_address(
+                            target_cpu, MMIX_IPI_CONTEXT_STATUS)),
+                    ==, 0);
+    qtest_system_reset(qts);
+    for (i = 0; i < cpu_count; i++) {
+        mmix_wait_cpu_rq(qts, i, baseline[i]);
+    }
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
 static void test_mmix_platform_smp_reset(void)
 {
     g_autofree char *elf = mmix_create_elf();
@@ -872,6 +982,15 @@ int main(int argc, char **argv)
     qtest_add_data_func("/mmix/platform/smp/timer-wiring/16",
                         GUINT_TO_POINTER(16),
                         test_mmix_platform_smp_timer_wiring);
+    qtest_add_data_func("/mmix/platform/smp/ipi-wiring/1",
+                        GUINT_TO_POINTER(1),
+                        test_mmix_platform_smp_ipi_wiring);
+    qtest_add_data_func("/mmix/platform/smp/ipi-wiring/2",
+                        GUINT_TO_POINTER(2),
+                        test_mmix_platform_smp_ipi_wiring);
+    qtest_add_data_func("/mmix/platform/smp/ipi-wiring/16",
+                        GUINT_TO_POINTER(16),
+                        test_mmix_platform_smp_ipi_wiring);
     qtest_add_func("/mmix/platform/smp/reset",
                    test_mmix_platform_smp_reset);
     qtest_add_data_func("/mmix/platform/smp/rejected/zero", "0",

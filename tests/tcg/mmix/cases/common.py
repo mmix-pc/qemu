@@ -247,6 +247,9 @@ MMIX_BOOTINFO_FIELDS = (
     "framebuffer_format",
     "kernel_cmdline_addr",
     "kernel_cmdline_size",
+    "ipi_base",
+    "ipi_target_count",
+    "ipi_request_mask",
 )
 MMIX_BOOTINFO_FORMAT = ">" + ("Q" * len(MMIX_BOOTINFO_FIELDS))
 MMIX_BOOTINFO_SIZE = struct.calcsize(MMIX_BOOTINFO_FORMAT)
@@ -309,6 +312,9 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "framebuffer_format": MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888,
         "kernel_cmdline_addr": 0,
         "kernel_cmdline_size": 0,
+        "ipi_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0],
+        "ipi_target_count": 1,
+        "ipi_request_mask": RQ_IPI,
     }
 
 

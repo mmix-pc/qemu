@@ -18,7 +18,9 @@
 
 /*
  * The boot-info block is a versioned table of unsigned 64-bit fields encoded
- * in big-endian byte order, matching MMIX's natural octa layout.
+ * in big-endian byte order, matching MMIX's natural octa layout. Before the
+ * machine ABI is released, version 1 may gain fields only at the end of the
+ * table. Consumers must honor the size field and may use any known prefix.
  * Base, size, count, and geometry fields for not-yet-implemented devices
  * remain zero until the corresponding device exists. IRQ fields may expose
  * reserved machine ABI numbers before their device sources are implemented.
@@ -64,6 +66,9 @@ typedef enum MMIXBootInfoField {
     MMIX_BOOTINFO_FIELD_FRAMEBUFFER_FORMAT,
     MMIX_BOOTINFO_FIELD_KERNEL_CMDLINE_ADDR,
     MMIX_BOOTINFO_FIELD_KERNEL_CMDLINE_SIZE,
+    MMIX_BOOTINFO_FIELD_IPI_BASE,
+    MMIX_BOOTINFO_FIELD_IPI_TARGET_COUNT,
+    MMIX_BOOTINFO_FIELD_IPI_REQUEST_MASK,
     MMIX_BOOTINFO_FIELD_COUNT,
 } MMIXBootInfoField;
 
