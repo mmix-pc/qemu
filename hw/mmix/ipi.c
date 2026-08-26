@@ -28,6 +28,19 @@ static void mmix_ipi_update(MMIXIPIState *s)
     }
 }
 
+static void mmix_ipi_set_pending(MMIXIPIState *s, uint16_t pending)
+{
+    uint16_t changed = s->pending ^ pending;
+    uint32_t cpu;
+
+    s->pending = pending;
+    for (cpu = 0; cpu < MMIX_VIRT_MAX_CPUS; cpu++) {
+        if (extract16(changed, cpu, 1)) {
+            qemu_set_irq(s->irq[cpu], extract16(pending, cpu, 1));
+        }
+    }
+}
+
 static bool mmix_ipi_context_offset(hwaddr addr, uint32_t *cpu, hwaddr *reg)
 {
     hwaddr context;
@@ -83,8 +96,7 @@ static void mmix_ipi_send(MMIXIPIState *s, uint64_t targets)
                       "\n", __func__, invalid);
     }
 
-    s->pending |= valid;
-    mmix_ipi_update(s);
+    mmix_ipi_set_pending(s, s->pending | valid);
 }
 
 static void mmix_ipi_write(void *opaque, hwaddr addr,
@@ -103,8 +115,7 @@ static void mmix_ipi_write(void *opaque, hwaddr addr,
     if (mmix_ipi_context_offset(addr, &cpu, &reg) &&
         reg == MMIX_VIRT_IPI_CONTEXT_CLEAR) {
         if (cpu < s->num_cpus && (value & MMIX_VIRT_IPI_STATUS_PENDING)) {
-            s->pending &= ~(1U << cpu);
-            mmix_ipi_update(s);
+            mmix_ipi_set_pending(s, s->pending & ~(1U << cpu));
         }
         return;
     }
@@ -128,8 +139,7 @@ static void mmix_ipi_reset(DeviceState *dev)
 {
     MMIXIPIState *s = MMIX_IPI(dev);
 
-    s->pending = 0;
-    mmix_ipi_update(s);
+    mmix_ipi_set_pending(s, 0);
 }
 
 static void mmix_ipi_realize(DeviceState *dev, Error **errp)

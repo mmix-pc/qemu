@@ -90,6 +90,45 @@ static void test_mmix_ipi_output_isolation(void)
     mmix_ipi_clear(qts, 1, MMIX_VIRT_IPI_STATUS_PENDING);
     g_assert_false(qtest_get_irq(qts, 1));
 
+    mmix_ipi_send(qts, 1U << 0);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_ipi_multitarget_lifecycle(void)
+{
+    QTestState *qts = mmix_ipi_start(2);
+
+    mmix_ipi_send(qts, 0x3);
+    mmix_ipi_send(qts, 0x3);
+    g_assert_cmphex(mmix_ipi_read_status(qts, 0), ==,
+                    MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_cmphex(mmix_ipi_read_status(qts, 1), ==,
+                    MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+
+    mmix_ipi_clear(qts, 0, MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_cmphex(mmix_ipi_read_status(qts, 0), ==, 0);
+    g_assert_cmphex(mmix_ipi_read_status(qts, 1), ==,
+                    MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+
+    mmix_ipi_send(qts, (1U << 0) | (1U << 2));
+    g_assert_cmphex(mmix_ipi_read_status(qts, 0), ==,
+                    MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_cmphex(mmix_ipi_read_status(qts, 1), ==,
+                    MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_cmphex(mmix_ipi_read_status(qts, 2), ==, 0);
+
+    mmix_ipi_clear(qts, 0, MMIX_VIRT_IPI_STATUS_PENDING);
+    mmix_ipi_clear(qts, 1, MMIX_VIRT_IPI_STATUS_PENDING);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
     qtest_quit(qts);
 }
 
@@ -179,6 +218,8 @@ int main(int argc, char **argv)
     qtest_add_func("/mmix/ipi/registers", test_mmix_ipi_registers);
     qtest_add_func("/mmix/ipi/output-isolation",
                    test_mmix_ipi_output_isolation);
+    qtest_add_func("/mmix/ipi/multitarget-lifecycle",
+                   test_mmix_ipi_multitarget_lifecycle);
     qtest_add_func("/mmix/ipi/coalescing-retrigger",
                    test_mmix_ipi_coalescing_retrigger);
     qtest_add_func("/mmix/ipi/invalid-targets",
