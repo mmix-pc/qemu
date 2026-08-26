@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import json
+import re
 import select
 import subprocess
 import time
@@ -309,8 +310,12 @@ def _read_qmp_message(process, timeout=5):
     return json.loads(line)
 
 
-def _qmp_command(process, command, timeout=5):
-    request = json.dumps({"execute": command}).encode("utf-8") + b"\n"
+def _qmp_command(process, command, arguments=None, timeout=5):
+    request_object = {"execute": command}
+
+    if arguments is not None:
+        request_object["arguments"] = arguments
+    request = json.dumps(request_object).encode("utf-8") + b"\n"
 
     process.stdin.write(request)
     process.stdin.flush()
@@ -377,3 +382,94 @@ def run_mttcg_elf_test(qemu, workdir, test):
     assert_exit_pc(test.name, result, test.pc)
     assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)
+
+
+def _qmp_start_paused(qemu, image, test):
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(*test.qemu_args, "-S", "-qmp", "stdio"),
+    )
+    process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, bufsize=0)
+    greeting = _read_qmp_message(process)
+    if "QMP" not in greeting:
+        process.kill()
+        process.wait()
+        raise AssertionError(f"invalid QMP greeting: {greeting}")
+    _qmp_command(process, "qmp_capabilities")
+    return process
+
+
+def _hmp_register_dump(process, cpu_index):
+    return _qmp_command(
+        process,
+        "human-monitor-command",
+        {"command-line": f"info registers {cpu_index}"},
+    )
+
+
+def _hmp_register_value(dump, label):
+    match = re.search(rf"{re.escape(label)}([0-9a-fA-F]+)", dump)
+
+    if match is None:
+        raise AssertionError(f"missing {label!r} in register dump")
+    return int(match.group(1), 16)
+
+
+def run_mttcg_reset_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+
+    image.write_bytes(test.image)
+    process = _qmp_start_paused(qemu, image, test)
+    try:
+        _qmp_command(process, "cont")
+        for _ in range(500):
+            time.sleep(0.01)
+            _qmp_command(process, "stop")
+            dumps = [
+                _hmp_register_dump(process, cpu)
+                for cpu in range(test.cpu_count)
+            ]
+            if all(_hmp_register_value(dump, "pc=0x") == test.idle_pc
+                   for dump in dumps):
+                break
+            _qmp_command(process, "cont")
+        else:
+            raise AssertionError(
+                f"{test.name}: CPUs did not reach the reset rendezvous"
+            )
+
+        _qmp_command(process, "system_reset")
+        for _ in range(500):
+            time.sleep(0.01)
+            _qmp_command(process, "stop")
+            reset_dumps = [
+                _hmp_register_dump(process, cpu)
+                for cpu in range(test.cpu_count)
+            ]
+            if all(_hmp_register_value(dump, "pc=0x") == test.reset_idle_pc
+                   for dump in reset_dumps):
+                break
+            _qmp_command(process, "cont")
+        else:
+            raise AssertionError(
+                f"{test.name}: CPUs did not reach the post-reset rendezvous"
+            )
+
+        for cpu, dump in enumerate(reset_dumps):
+            for label, value in test.reset_regs[cpu].items():
+                actual = _hmp_register_value(dump, label)
+                if actual != value:
+                    raise AssertionError(
+                        f"{test.name}: CPU {cpu} {label} expected "
+                        f"0x{value:x}, got 0x{actual:x}"
+                    )
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise

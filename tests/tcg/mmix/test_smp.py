@@ -6,7 +6,14 @@ import pytest
 
 from cases.common import case_id
 from cases.smp import SMP_MTTCG_TESTS, SMP_TESTS
-from lib.execution import run_elf_test, run_mttcg_elf_test
+from cases.smp_memory import SMP_CSWAP_TESTS, SMP_MEMORY_TESTS
+from cases.smp_state import SMP_RESET_TESTS, SMP_STATE_TESTS
+from cases.smp_translation import SMP_TRANSLATION_TESTS
+from lib.execution import (
+    run_elf_test,
+    run_mttcg_elf_test,
+    run_mttcg_reset_test,
+)
 
 
 @pytest.mark.parametrize("test", SMP_TESTS, ids=case_id)
@@ -17,3 +24,28 @@ def test_smp(qemu, workdir, test):
 @pytest.mark.parametrize("test", SMP_MTTCG_TESTS, ids=case_id)
 def test_smp_mttcg(qemu, workdir, test):
     run_mttcg_elf_test(qemu, workdir, test)
+
+
+@pytest.mark.parametrize("test", SMP_MEMORY_TESTS, ids=case_id)
+def test_smp_memory(qemu, workdir, test):
+    run_elf_test(qemu, workdir, test)
+
+
+@pytest.mark.parametrize("test", SMP_CSWAP_TESTS, ids=case_id)
+def test_smp_cswap(qemu, workdir, test):
+    run_elf_test(qemu, workdir, test)
+
+
+@pytest.mark.parametrize("test", SMP_STATE_TESTS, ids=case_id)
+def test_smp_state(qemu, workdir, test):
+    run_elf_test(qemu, workdir, test)
+
+
+@pytest.mark.parametrize("test", SMP_RESET_TESTS, ids=case_id)
+def test_smp_reset(qemu, workdir, test):
+    run_mttcg_reset_test(qemu, workdir, test)
+
+
+@pytest.mark.parametrize("test", SMP_TRANSLATION_TESTS, ids=case_id)
+def test_smp_translation(qemu, workdir, test):
+    run_elf_test(qemu, workdir, test)

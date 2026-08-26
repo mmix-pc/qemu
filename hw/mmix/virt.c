@@ -598,10 +598,15 @@ static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms,
 static void mmix_virt_reset(MachineState *machine, ResetType type)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
+    unsigned int i;
 
     qemu_devices_reset(type);
     if (type == RESET_TYPE_SNAPSHOT_LOAD) {
         return;
+    }
+
+    for (i = 0; i < machine->smp.cpus; i++) {
+        cpu_reset(vms->cpus[i]);
     }
 
     if (vms->kernel_loaded) {

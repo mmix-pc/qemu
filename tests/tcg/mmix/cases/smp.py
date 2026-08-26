@@ -54,6 +54,24 @@ class MMIXSMPTest:
 
 
 @dataclasses.dataclass(frozen=True)
+class MMIXSMPResetTest:
+    name: str
+    image: bytes
+    idle_pc: int
+    reset_idle_pc: int
+    reset_regs: tuple[dict[str, int], ...]
+    thread_mode: str = TCG_THREAD_MULTI
+    cpu_count: int = SMP_CPU_COUNT
+
+    @property
+    def qemu_args(self):
+        return MMIXSMPTest(
+            self.name, self.image, self.idle_pc, {}, self.thread_mode,
+            cpu_count=self.cpu_count,
+        ).qemu_args
+
+
+@dataclasses.dataclass(frozen=True)
 class SMPProgramImage:
     code: bytes
     success_pc: int
@@ -94,6 +112,38 @@ class SMPProgram:
 
     def address(self, label, base=SMP_ENTRY):
         return base + self.labels[label] * 4
+
+
+def smp_elf_image(code, *regions):
+    all_regions = ((SMP_ENTRY, code), *regions)
+    end = max(address + len(data) for address, data in all_regions)
+    image = bytearray(end - SMP_ENTRY)
+
+    for address, data in all_regions:
+        if address < SMP_ENTRY:
+            raise ValueError("SMP ELF region precedes the entry point")
+        offset = address - SMP_ENTRY
+        image[offset:offset + len(data)] = data
+    return elf64_image(SMP_ENTRY, bytes(image), entry=SMP_ENTRY)
+
+
+def smp_emit_unconditional_branch(program, label, zero=R254):
+    program.emit_branch(BZ, zero, label)
+
+
+def smp_emit_wait_equal(program, *, address, field, expected, value, compare,
+                        counter, label, timeout_label):
+    program.emit(*set_octa(counter, SMP_WAIT_LIMIT))
+    program.mark(f"{label}_wait")
+    program.emit(
+        smp_load(value, address, field),
+        insn(CMPU, compare, value, expected),
+    )
+    program.emit_branch(BZ, compare, f"{label}_done")
+    program.emit(insn(SUBUI, counter, counter, 1))
+    program.emit_branch(BNZ, counter, f"{label}_wait")
+    smp_emit_unconditional_branch(program, timeout_label)
+    program.mark(f"{label}_done")
 
 
 def smp_mailbox_address(dst, cpu_id, scratch):
