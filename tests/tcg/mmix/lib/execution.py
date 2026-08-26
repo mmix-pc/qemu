@@ -4,7 +4,10 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import json
+import select
 import subprocess
+import time
 
 from lib.asserts import (
     assert_console_output,
@@ -20,6 +23,7 @@ from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE
 from lib.qemu import (
     QEMU_SEMIHOSTING_ARGS,
     QEMU_SEMIHOSTING_STDIN_ARGS,
+    build_kernel_command,
     read_log,
     run_kernel,
 )
@@ -292,3 +296,84 @@ def run_elf_test(qemu, workdir, test):
     assert_regs(test.name, result, test.regs)
     if test.output is not None:
         assert_serial_output(test.name, serial.read_bytes(), test.output)
+
+
+def _read_qmp_message(process, timeout=5):
+    ready, _, _ = select.select((process.stdout,), (), (), timeout)
+    if not ready:
+        raise AssertionError("timed out waiting for a QMP response")
+
+    line = process.stdout.readline()
+    if not line:
+        raise AssertionError("QEMU closed QMP before sending a response")
+    return json.loads(line)
+
+
+def _qmp_command(process, command, timeout=5):
+    request = json.dumps({"execute": command}).encode("utf-8") + b"\n"
+
+    process.stdin.write(request)
+    process.stdin.flush()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = _read_qmp_message(process, deadline - time.monotonic())
+        if "error" in response:
+            raise AssertionError(f"QMP {command} failed: {response['error']}")
+        if "return" in response:
+            return response["return"]
+
+    raise AssertionError(f"timed out waiting for QMP {command}")
+
+
+def run_mttcg_elf_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    log = workdir / f"{test.name}.log"
+
+    image.write_bytes(test.image)
+    if log.exists():
+        log.unlink()
+
+    command = build_kernel_command(
+        qemu,
+        image,
+        trace="int",
+        log=log,
+        qemu_args=(
+            *test.qemu_args,
+            "-S",
+            "-qmp",
+            "stdio",
+        ),
+    )
+    process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, bufsize=0)
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        thread_ids = [cpu["thread-id"] for cpu in cpus]
+        if len(thread_ids) != test.cpu_count:
+            raise AssertionError(
+                f"{test.name}: expected {test.cpu_count} QMP CPUs, "
+                f"got {len(thread_ids)}"
+            )
+        if len(set(thread_ids)) != test.cpu_count:
+            raise AssertionError(
+                f"{test.name}: vCPUs share host thread ids {thread_ids}"
+            )
+        _qmp_command(process, "cont")
+        stdout, stderr = process.communicate(timeout=10)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+
+    completed = subprocess.CompletedProcess(command, process.returncode,
+                                            stdout, stderr)
+    result = read_log(log)
+    assert_exit_pc(test.name, result, test.pc)
+    assert_exit_status(test.name, completed, test.exit_status)
+    assert_regs(test.name, result, test.regs)

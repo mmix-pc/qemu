@@ -254,3 +254,17 @@ SMP_TESTS = [
         cpu_count=1,
     ),
 ]
+
+SMP_MTTCG_TESTS = [
+    MMIXSMPTest(
+        "smp-multi-thread-mailbox-smoke",
+        elf64_image(
+            SMP_ENTRY,
+            SMP_MAILBOX_BASELINE.code,
+            entry=SMP_ENTRY,
+        ),
+        pc=SMP_MAILBOX_BASELINE.success_pc,
+        regs=SMP_MAILBOX_BASELINE.success_regs,
+        thread_mode=TCG_THREAD_MULTI,
+    ),
+]

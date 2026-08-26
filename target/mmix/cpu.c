@@ -162,15 +162,28 @@ void mmix_cpu_update_interrupt(CPUMMIXState *env)
     }
 }
 
-void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
+static void mmix_cpu_set_interrupt_controller_work(CPUState *cs,
+                                                    run_on_cpu_data data)
 {
     CPUMMIXState *env = cpu_env(cs);
+    int level = data.host_int;
 
     env->interrupt_controller_level = level;
     if (level) {
         mmix_cpu_set_rq_bits(env, MMIX_RQ_INTERRUPT_CONTROLLER);
     }
     mmix_cpu_update_interrupt(env);
+}
+
+void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
+{
+    run_on_cpu_data data = RUN_ON_CPU_HOST_INT(level);
+
+    if (qemu_cpu_is_self(cs)) {
+        mmix_cpu_set_interrupt_controller_work(cs, data);
+    } else {
+        async_run_on_cpu(cs, mmix_cpu_set_interrupt_controller_work, data);
+    }
 }
 
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)
@@ -840,7 +853,13 @@ static const struct SysemuCPUOps mmix_sysemu_ops = {
 
 static const TCGCPUOps mmix_tcg_ops = {
     .guest_default_memory_order = TCG_MO_ALL,
-    .mttcg_supported = false,
+    /*
+     * Architectural, register-stack, replay, trap, and translation-cache
+     * state is owned by one MMIXCPU. Device IRQ callbacks queue changes to
+     * that CPU, while shared RAM and MMIO use the common TCG and BQL paths.
+     * MMIX semihosting retains QEMU's common semihosting concurrency limits.
+     */
+    .mttcg_supported = true,
 
     .initialize = mmix_translate_init,
     .translate_code = mmix_translate_code,
