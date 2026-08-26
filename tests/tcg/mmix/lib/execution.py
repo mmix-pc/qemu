@@ -1182,11 +1182,17 @@ def _run_smp_ipi_protocol(qtest, test):
 
 
 def _run_smp_shootdown_protocol(qtest, test):
-    def read(offset):
+    def read_at(base, offset):
         response = _qtest_command(
-            qtest, f"readq {test.state_base + offset:#x}"
+            qtest, f"readq {base + offset:#x}"
         )
         return int(response[1], 0)
+
+    def read(offset):
+        return read_at(test.state_base, offset)
+
+    def history(offset):
+        return read_at(test.history_base, offset)
 
     def write(offset, value):
         _qtest_command(
@@ -1207,30 +1213,58 @@ def _run_smp_shootdown_protocol(qtest, test):
     else:
         raise AssertionError(f"{test.name}: timed out waiting for completion")
 
-    assert read(test.generation_offset) == test.generation
-    assert read(test.target_mask_offset) == test.target_mask
-    assert read(test.key_offset) == test.key
-    assert read(test.operation_offset) == test.operation
-    assert read(test.ack0_offset) == 0
-    assert read(test.ack1_offset) == test.generation
+    assert read(test.generation_offset) == test.generation_empty
+    assert read(test.target_mask_offset) == test.target_cpu1
+    assert read(test.key_offset) == test.uncached_key
+    assert read(test.operation_offset) == test.operation_invalidate_only
+    assert read(test.ack0_offset) == test.generation_all
+    assert read(test.ack1_offset) == test.generation_empty
     assert read(test.result0_offset) == 0
-    assert read(test.result1_offset) == test.ldvts_result
-    assert read(test.cpu1_primed_offset) == 1
-    assert read(test.pte_published_offset) == 1
-    assert read(test.cpu1_stale_offset) == 1
-    assert read(test.stale_value_offset) == test.value_a
-    assert read(test.post_value_offset) == test.value_b
-    assert read(test.handler_count_offset) == 1
-    assert read(test.handler_done_offset) == test.generation
+    assert read(test.result1_offset) == 0
+    assert read(test.post0_offset) == 0
+    assert read(test.post1_offset) == 0
+    assert read(test.cpu1_ready_offset) == 1
+    assert read(test.pte_published_offset) == 3
+    assert read(test.cpu1_observed_offset) == 2
+    assert read(test.observed_value_offset) == test.value_b
+    assert read(test.handler_count_offset) == 4
+    assert read(test.handler_done_offset) == 4
     assert read(test.handler_rq_offset) & test.ipi_request
-    assert read(test.cpu1_resumed_offset) == 1
-    assert read(test.final_rq_offset) & test.ipi_request == 0
-    assert read(test.final_rk_offset) == test.request_mask
-    assert read(test.final_sentinel_offset) == test.sentinel
-    assert read(test.sender_ack_offset) == test.generation
+    assert read(test.cpu1_resumed_offset) == 5
+    assert read(test.sender_ack_offset) == test.generation_empty
     assert read(test.lock_offset) == 0
     assert read(test.lock_result_offset) != 0
+    assert read(test.lock_blocked_offset) == 1
+    assert read(test.lock_observed_offset) == 1
+    assert read(test.invalidation_count_offset) == 3
+    assert read(test.duplicate_count_offset) == 1
     assert read(test.failure_offset) == 0
+
+    assert history(test.g1_ack0_offset) == 0
+    assert history(test.g1_ack1_offset) == test.generation_remote
+    assert history(test.g1_result1_offset) == test.ldvts_data
+    assert history(test.g1_post1_offset) == test.value_b
+    assert history(test.g1_stale_offset) == test.value_a
+    assert history(test.g2_ack0_offset) == test.generation_local
+    assert history(test.g2_ack1_offset) == test.generation_remote
+    assert history(test.g2_result0_offset) == test.ldvts_data
+    assert history(test.g2_post0_offset) == test.value_a
+    assert history(test.g2_remote_before_offset) == test.value_b
+    assert history(test.g2_remote_after_offset) == test.value_b
+    assert history(test.g2_handler_count_offset) == 1
+    assert history(test.g3_ack0_offset) == test.generation_all
+    assert history(test.g3_ack1_offset) == test.generation_all
+    assert history(test.g3_result0_offset) == test.ldvts_data
+    assert history(test.g3_result1_offset) == test.ldvts_data
+    assert history(test.g3_post0_offset) == test.value_b
+    assert history(test.g3_post1_offset) == test.value_b
+    assert history(test.g4_ack0_offset) == test.generation_all
+    assert history(test.g4_ack1_offset) == test.generation_empty
+    assert history(test.g4_result1_offset) == 0
+    assert history(test.duplicate_ack1_offset) == test.generation_empty
+    assert history(test.final_handler_count_offset) == 4
+    assert history(test.final_invalidation_count_offset) == 3
+    assert history(test.final_duplicate_count_offset) == 1
 
     write(test.halt_offset, 1)
 
