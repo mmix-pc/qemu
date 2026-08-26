@@ -27,20 +27,55 @@ static uint32_t mmix_intc_valid_irq_mask(void)
     return UINT32_MAX & ~1U;
 }
 
+static uint32_t mmix_intc_shared_irq_mask(void)
+{
+    return ((1U << (MMIX_VIRT_SHARED_IRQ_LAST + 1)) - 1) &
+           ~((1U << MMIX_VIRT_SHARED_IRQ_FIRST) - 1);
+}
+
 static bool mmix_intc_context_active(MMIXIntcState *s, uint32_t cpu)
 {
     return cpu < s->num_cpus;
 }
 
-static uint32_t mmix_intc_context_irq_mask(uint32_t cpu)
+static uint32_t mmix_intc_fixed_irq_mask(uint32_t cpu)
 {
-    uint32_t mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_IRQ_BASE + cpu);
+    return mmix_intc_irq_mask(MMIX_VIRT_TIMER_IRQ_BASE + cpu);
+}
 
-    if (cpu == 0) {
-        mask |= ((1U << (MMIX_VIRT_SHARED_IRQ_LAST + 1)) - 1) &
-                ~((1U << MMIX_VIRT_SHARED_IRQ_FIRST) - 1);
+static uint32_t mmix_intc_claimed_mask(MMIXIntcState *s)
+{
+    uint32_t claimed = 0;
+    uint32_t cpu;
+
+    for (cpu = 0; cpu < s->num_cpus; cpu++) {
+        claimed |= s->claimed[cpu];
     }
-    return mask;
+    return claimed;
+}
+
+static uint32_t mmix_intc_shared_claimable(MMIXIntcState *s, uint32_t cpu)
+{
+    uint32_t candidates = s->pending & mmix_intc_shared_irq_mask() &
+                          ~mmix_intc_claimed_mask(s);
+    uint32_t claimable = 0;
+
+    while (candidates) {
+        uint32_t irq = ctz32(candidates);
+        uint32_t mask = mmix_intc_irq_mask(irq);
+        uint32_t owner;
+
+        for (owner = 0; owner < s->num_cpus; owner++) {
+            if (s->enable[owner] & mask) {
+                if (owner == cpu) {
+                    claimable |= mask;
+                }
+                break;
+            }
+        }
+        candidates &= ~mask;
+    }
+    return claimable;
 }
 
 static uint32_t mmix_intc_claimable(MMIXIntcState *s, uint32_t cpu)
@@ -49,8 +84,9 @@ static uint32_t mmix_intc_claimable(MMIXIntcState *s, uint32_t cpu)
         return 0;
     }
 
-    return s->pending & s->enable[cpu] & ~s->claimed[cpu] &
-           mmix_intc_context_irq_mask(cpu);
+    return (s->pending & s->enable[cpu] & ~s->claimed[cpu] &
+            mmix_intc_fixed_irq_mask(cpu)) |
+           mmix_intc_shared_claimable(s, cpu);
 }
 
 static void mmix_intc_update(MMIXIntcState *s)

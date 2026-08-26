@@ -384,7 +384,7 @@ static void test_mmix_intc_simultaneous_fixed_irqs(void)
     qtest_quit(qts);
 }
 
-static void test_mmix_intc_shared_irq_cpu0_only(void)
+static void test_mmix_intc_shared_irq_arbitration(void)
 {
     QTestState *qts = mmix_intc_start_with_contexts(2);
     uint32_t uart_mask = mmix_intc_irq_mask(MMIX_VIRT_UART0_IRQ);
@@ -395,12 +395,74 @@ static void test_mmix_intc_shared_irq_cpu0_only(void)
 
     g_assert_true(qtest_get_irq(qts, 0));
     g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_write_enable(qts, 0, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+
+    mmix_intc_write_enable(qts, 0, uart_mask);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
     g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, 0);
     g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_UART0_IRQ);
     g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
 
     mmix_intc_set_irq(qts, MMIX_VIRT_UART0_IRQ, 0);
     mmix_intc_complete(qts, 0, MMIX_VIRT_UART0_IRQ);
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_shared_irq_per_source(void)
+{
+    QTestState *qts = mmix_intc_start_with_contexts(2);
+    uint32_t uart_mask = mmix_intc_irq_mask(MMIX_VIRT_UART0_IRQ);
+    uint32_t virtio_mask = mmix_intc_irq_mask(MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+
+    mmix_intc_write_enable(qts, 0, virtio_mask);
+    mmix_intc_write_enable(qts, 1, uart_mask | virtio_mask);
+    mmix_intc_set_irq(qts, MMIX_VIRT_UART0_IRQ, 1);
+    mmix_intc_set_irq(qts, MMIX_VIRT_VIRTIO_BLOCK0_IRQ, 1);
+
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==,
+                     MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, MMIX_VIRT_UART0_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_set_irq(qts, MMIX_VIRT_UART0_IRQ, 0);
+    mmix_intc_set_irq(qts, MMIX_VIRT_VIRTIO_BLOCK0_IRQ, 0);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_VIRTIO_BLOCK0_IRQ);
+    mmix_intc_complete(qts, 1, MMIX_VIRT_UART0_IRQ);
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_shared_irq_context_limit(void)
+{
+    QTestState *qts = mmix_intc_start_with_contexts(
+        MMIX_VIRT_INTC_CONTEXT_COUNT);
+    uint32_t synthetic_mask =
+        mmix_intc_irq_mask(MMIX_VIRT_TEST_SYNTHETIC_IRQ);
+    unsigned last = MMIX_VIRT_INTC_CONTEXT_COUNT - 1;
+
+    mmix_intc_write_enable(qts, last, synthetic_mask);
+    mmix_intc_set_irq(qts, MMIX_VIRT_TEST_SYNTHETIC_IRQ, 1);
+
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, last));
+
+    mmix_intc_write_enable(qts, 0, synthetic_mask);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, last));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==,
+                     MMIX_VIRT_TEST_SYNTHETIC_IRQ);
+    g_assert_cmpuint(mmix_intc_claim(qts, last), ==, 0);
+
+    mmix_intc_set_irq(qts, MMIX_VIRT_TEST_SYNTHETIC_IRQ, 0);
+    mmix_intc_complete(qts, 0, MMIX_VIRT_TEST_SYNTHETIC_IRQ);
     qtest_quit(qts);
 }
 
@@ -424,7 +486,11 @@ int main(int argc, char **argv)
                    test_mmix_intc_fixed_affinity);
     qtest_add_func("/mmix/intc/simultaneous-fixed-irqs",
                    test_mmix_intc_simultaneous_fixed_irqs);
-    qtest_add_func("/mmix/intc/shared-irq-cpu0-only",
-                   test_mmix_intc_shared_irq_cpu0_only);
+    qtest_add_func("/mmix/intc/shared-irq-arbitration",
+                   test_mmix_intc_shared_irq_arbitration);
+    qtest_add_func("/mmix/intc/shared-irq-per-source",
+                   test_mmix_intc_shared_irq_per_source);
+    qtest_add_func("/mmix/intc/shared-irq-context-limit",
+                   test_mmix_intc_shared_irq_context_limit);
     return g_test_run();
 }
