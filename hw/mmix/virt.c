@@ -64,7 +64,8 @@ const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
         MMIX_BOOTINFO_KERNEL_CMDLINE_STORAGE_SIZE
     },
     [MMIX_VIRT_FRAMEBUFFER] =  { 0x000000000f000000ULL, 0x0000000001000000ULL },
-    [MMIX_VIRT_MMIO] =         { 0x0000000010000000ULL, 0 },
+    [MMIX_VIRT_MMIO] =         { 0x0000000010000000ULL,
+                                 0x0000000010000000ULL },
     [MMIX_VIRT_UART0] =        { 0x0000000010000000ULL, 0x100 },
     [MMIX_VIRT_VIRTIO_MMIO] =  { 0x0000000010001000ULL,
                                  MMIX_VIRT_VIRTIO_MMIO_SIZE },
@@ -116,6 +117,63 @@ static bool mmix_ranges_overlap(const MemMapEntry *a, const MemMapEntry *b)
         return a->size > b->base - a->base;
     }
     return b->size > a->base - b->base;
+}
+
+typedef struct MMIXVirtMMIOWindow {
+    MMIXVirtMemMap index;
+    const char *name;
+} MMIXVirtMMIOWindow;
+
+static bool mmix_validate_mmio_layout(Error **errp)
+{
+    static const MMIXVirtMMIOWindow windows[] = {
+        { MMIX_VIRT_UART0, "UART0" },
+        { MMIX_VIRT_VIRTIO_MMIO, "virtio-mmio" },
+        { MMIX_VIRT_FRAMEBUFFER_CONTROL, "framebuffer control" },
+        { MMIX_VIRT_TIMER, "timer" },
+        { MMIX_VIRT_INTC, "interrupt controller" },
+        { MMIX_VIRT_IPI, "IPI controller" },
+    };
+    const MemMapEntry *aperture = &mmix_virt_memmap[MMIX_VIRT_MMIO];
+    uint64_t aperture_end;
+    unsigned int i;
+    unsigned int j;
+
+    if (aperture->size == 0 ||
+        uadd64_overflow(aperture->base, aperture->size, &aperture_end)) {
+        error_setg(errp, "MMIX MMIO aperture is empty or overflows");
+        return false;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(windows); i++) {
+        const MemMapEntry *window =
+            &mmix_virt_memmap[windows[i].index];
+        uint64_t window_end;
+
+        if (window->size == 0 ||
+            uadd64_overflow(window->base, window->size, &window_end)) {
+            error_setg(errp, "MMIX %s MMIO window is empty or overflows",
+                       windows[i].name);
+            return false;
+        }
+        if (window->base < aperture->base || window_end > aperture_end) {
+            error_setg(errp, "MMIX %s MMIO window is outside the aperture",
+                       windows[i].name);
+            return false;
+        }
+        for (j = 0; j < i; j++) {
+            const MemMapEntry *other =
+                &mmix_virt_memmap[windows[j].index];
+
+            if (mmix_ranges_overlap(window, other)) {
+                error_setg(errp, "MMIX %s and %s MMIO windows overlap",
+                           windows[i].name, windows[j].name);
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 static uint64_t mmix_virt_initial_stack(unsigned int cpu_index)
@@ -638,7 +696,8 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *virtio_mmio;
     unsigned int i;
 
-    if (!mmix_validate_initial_stack_layout(machine, &error_fatal)) {
+    if (!mmix_validate_mmio_layout(&error_fatal) ||
+        !mmix_validate_initial_stack_layout(machine, &error_fatal)) {
         return;
     }
 

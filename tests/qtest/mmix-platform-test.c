@@ -49,6 +49,7 @@ static const MMIXPlatformRegion mmix_regions[MMIX_REGION_COUNT] = {
 typedef struct MMIXPlatformDevice {
     const char *name;
     uint64_t base;
+    uint64_t size;
     unsigned irq;
 } MMIXPlatformDevice;
 
@@ -63,15 +64,24 @@ typedef enum MMIXPlatformDeviceIndex {
 } MMIXPlatformDeviceIndex;
 
 static const MMIXPlatformDevice mmix_devices[MMIX_DEVICE_COUNT] = {
-    [MMIX_DEVICE_UART0] = { "UART0", 0x10000000, 1 },
-    [MMIX_DEVICE_VIRTIO_BLOCK0] = { "virtio block 0", 0x10001000, 2 },
-    [MMIX_DEVICE_FRAMEBUFFER] = { "framebuffer", 0x10002000, 3 },
-    [MMIX_DEVICE_TIMER0] = { "CPU0 timer", 0x10003000, 16 },
-    [MMIX_DEVICE_INTC] = { "interrupt controller", 0x10004000, 0 },
-    [MMIX_DEVICE_IPI] = { "inter-processor interrupt", 0x10006000, 0 },
+    [MMIX_DEVICE_UART0] = { "UART0", 0x10000000, 0x100, 1 },
+    [MMIX_DEVICE_VIRTIO_BLOCK0] = {
+        "virtio block 0", 0x10001000, 0x1000, 2
+    },
+    [MMIX_DEVICE_FRAMEBUFFER] = {
+        "framebuffer", 0x10002000, 0x1000, 3
+    },
+    [MMIX_DEVICE_TIMER0] = { "CPU0 timer", 0x10003000, 0x1000, 16 },
+    [MMIX_DEVICE_INTC] = {
+        "interrupt controller", 0x10004000, 0x2000, 0
+    },
+    [MMIX_DEVICE_IPI] = {
+        "inter-processor interrupt", 0x10006000, 0x1000, 0
+    },
 };
 
 static const uint64_t mmix_virt_mmio_base = 0x10000000ULL;
+static const uint64_t mmix_virt_mmio_size = 0x10000000ULL;
 static const uint64_t mmix_bootinfo_base = 0x0e800000ULL;
 static const uint64_t mmix_bootinfo_magic = 0x4d4d4958424f4f54ULL;
 
@@ -304,6 +314,34 @@ static void test_mmix_platform_memory_layout(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_platform_mmio_layout(void)
+{
+    uint64_t aperture_end = mmix_virt_mmio_base + mmix_virt_mmio_size;
+    size_t i;
+    size_t j;
+
+    g_assert_cmphex(mmix_virt_mmio_base, ==, 0x10000000);
+    g_assert_cmphex(aperture_end, ==, 0x20000000);
+
+    for (i = 0; i < ARRAY_SIZE(mmix_devices); i++) {
+        const MMIXPlatformDevice *device = &mmix_devices[i];
+        uint64_t device_end = device->base + device->size;
+
+        g_test_message("checking %s MMIO window", device->name);
+        g_assert_cmphex(device->size, >, 0);
+        g_assert_cmphex(device->base, >=, mmix_virt_mmio_base);
+        g_assert_cmphex(device_end, <=, aperture_end);
+
+        for (j = 0; j < i; j++) {
+            const MMIXPlatformDevice *other = &mmix_devices[j];
+            uint64_t other_end = other->base + other->size;
+
+            g_assert_true(device_end <= other->base ||
+                          other_end <= device->base);
+        }
+    }
+}
+
 static void test_mmix_platform_initial_stack_layout(void)
 {
     const MMIXPlatformRegion *low_ram = &mmix_regions[MMIX_REGION_LOW_RAM];
@@ -393,6 +431,8 @@ static void test_mmix_platform_bootinfo_headless(void)
                      ==, 1);
     g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
                      ==, 0);
+    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_MMIO_BASE_OFFSET),
+                    ==, mmix_virt_mmio_base);
     for (i = 0; i < ARRAY_SIZE(implemented_device_offsets); i++) {
         g_assert_cmpuint(mmix_bootinfo_read(qts,
                                            implemented_device_offsets[i]),
@@ -933,6 +973,8 @@ int main(int argc, char **argv)
 
     qtest_add_func("/mmix/platform/memory-layout",
                    test_mmix_platform_memory_layout);
+    qtest_add_func("/mmix/platform/mmio-layout",
+                   test_mmix_platform_mmio_layout);
     qtest_add_func("/mmix/platform/initial-stack-layout",
                    test_mmix_platform_initial_stack_layout);
     qtest_add_func("/mmix/platform/bootinfo-headless",
