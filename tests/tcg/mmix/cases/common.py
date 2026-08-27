@@ -250,6 +250,8 @@ MMIX_BOOTINFO_FIELDS = (
     "ipi_base",
     "ipi_target_count",
     "ipi_request_mask",
+    "high_ram_base",
+    "high_ram_size",
 )
 MMIX_BOOTINFO_FORMAT = ">" + ("Q" * len(MMIX_BOOTINFO_FIELDS))
 MMIX_BOOTINFO_SIZE = struct.calcsize(MMIX_BOOTINFO_FORMAT)
@@ -315,6 +317,8 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "ipi_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0],
         "ipi_target_count": 1,
         "ipi_request_mask": RQ_IPI,
+        "high_ram_base": 0,
+        "high_ram_size": 0,
     }
 
 

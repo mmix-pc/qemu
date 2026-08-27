@@ -24,6 +24,9 @@
  * Base, size, count, and geometry fields for not-yet-implemented devices
  * remain zero until the corresponding device exists. IRQ fields may expose
  * reserved machine ABI numbers before their device sources are implemented.
+ * RAM_SIZE is the total configured RAM. HIGH_RAM_BASE and HIGH_RAM_SIZE
+ * describe the part mapped above the MMIO aperture and are both zero when no
+ * high RAM exists.
  */
 typedef enum MMIXBootInfoField {
     MMIX_BOOTINFO_FIELD_MAGIC,
@@ -69,6 +72,8 @@ typedef enum MMIXBootInfoField {
     MMIX_BOOTINFO_FIELD_IPI_BASE,
     MMIX_BOOTINFO_FIELD_IPI_TARGET_COUNT,
     MMIX_BOOTINFO_FIELD_IPI_REQUEST_MASK,
+    MMIX_BOOTINFO_FIELD_HIGH_RAM_BASE,
+    MMIX_BOOTINFO_FIELD_HIGH_RAM_SIZE,
     MMIX_BOOTINFO_FIELD_COUNT,
 } MMIXBootInfoField;
 

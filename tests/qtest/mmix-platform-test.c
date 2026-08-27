@@ -9,6 +9,7 @@
 #include "elf.h"
 #include "libqtest.h"
 #include "qemu/bswap.h"
+#include "qemu/units.h"
 #include "qobject/qdict.h"
 #include "qobject/qlist.h"
 #include "standard-headers/linux/virtio_mmio.h"
@@ -172,7 +173,9 @@ typedef enum MMIXBootInfoOffset {
     MMIX_BOOTINFO_IPI_BASE_OFFSET = 0x140,
     MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET = 0x148,
     MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET = 0x150,
-    MMIX_BOOTINFO_SIZE = 0x158,
+    MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET = 0x158,
+    MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET = 0x160,
+    MMIX_BOOTINFO_SIZE = 0x168,
 } MMIXBootInfoOffset;
 
 static const uint64_t mmix_kernel_cmdline_base =
@@ -314,6 +317,53 @@ static void test_mmix_platform_memory_layout(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_platform_configurable_ram(void)
+{
+    const uint64_t low_last = 0x0ffffff8;
+    const uint64_t high_base = 0x20000000;
+    const uint64_t high_last = 0x2ffffff8;
+    const uint64_t high_alias_probe = 0x28000000;
+    const uint64_t aperture_alias_probe = 0x18000000;
+    const uint64_t low_value = 0x0123456789abcdefULL;
+    const uint64_t high_value = 0xfedcba9876543210ULL;
+    const uint64_t alias_value = 0xa5a55a5af0f00f0fULL;
+    g_autofree char *elf = mmix_create_elf();
+    g_autofree char *quoted_elf = g_shell_quote(elf);
+    QTestState *qts;
+
+    qts = qtest_init("-machine virt -m 128M");
+    qtest_writeq(qts, 0x07fffff8, low_value);
+    g_assert_cmphex(qtest_readq(qts, 0x07fffff8), ==, low_value);
+    qtest_writeq(qts, 0x08000000, ~low_value);
+    g_assert_cmphex(qtest_readq(qts, 0x08000000), !=, ~low_value);
+    qtest_quit(qts);
+
+    qts = qtest_initf("-machine virt -m 512M -kernel %s", quoted_elf);
+    qtest_writeq(qts, low_last, low_value);
+    qtest_writeq(qts, high_base, high_value);
+    qtest_writeq(qts, high_last, ~high_value);
+    qtest_writeq(qts, high_alias_probe, alias_value);
+    qtest_writeq(qts, aperture_alias_probe, ~alias_value);
+
+    g_assert_cmphex(qtest_readq(qts, low_last), ==, low_value);
+    g_assert_cmphex(qtest_readq(qts, high_base), ==, high_value);
+    g_assert_cmphex(qtest_readq(qts, high_last), ==, ~high_value);
+    g_assert_cmphex(qtest_readq(qts, high_alias_probe), ==, alias_value);
+    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_RAM_BASE_OFFSET),
+                    ==, 0);
+    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_RAM_SIZE_OFFSET),
+                    ==, 512 * MiB);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
+                    ==, high_base);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
+                    ==, 256 * MiB);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
 static void test_mmix_platform_mmio_layout(void)
 {
     uint64_t aperture_end = mmix_virt_mmio_base + mmix_virt_mmio_size;
@@ -433,6 +483,12 @@ static void test_mmix_platform_bootinfo_headless(void)
                      ==, 0);
     g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_MMIO_BASE_OFFSET),
                     ==, mmix_virt_mmio_base);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
+                    ==, 0);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
+                    ==, 0);
     for (i = 0; i < ARRAY_SIZE(implemented_device_offsets); i++) {
         g_assert_cmpuint(mmix_bootinfo_read(qts,
                                            implemented_device_offsets[i]),
@@ -973,6 +1029,8 @@ int main(int argc, char **argv)
 
     qtest_add_func("/mmix/platform/memory-layout",
                    test_mmix_platform_memory_layout);
+    qtest_add_func("/mmix/platform/configurable-ram",
+                   test_mmix_platform_configurable_ram);
     qtest_add_func("/mmix/platform/mmio-layout",
                    test_mmix_platform_mmio_layout);
     qtest_add_func("/mmix/platform/initial-stack-layout",

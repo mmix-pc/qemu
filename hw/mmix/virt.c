@@ -35,10 +35,18 @@ typedef enum MMIXELFStartupABI {
     MMIX_ELF_STARTUP_ABI_ARGC_ARGV,
 } MMIXELFStartupABI;
 
+typedef struct MMIXVirtRAMLayout {
+    MemMapEntry low_phys;
+    MemMapEntry high_phys;
+} MMIXVirtRAMLayout;
+
 OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
 
 struct MMIXVirtMachineState {
     MachineState parent_obj;
+    MemoryRegion low_ram;
+    MemoryRegion high_ram;
+    MMIXVirtRAMLayout ram_layout;
     MMIXELFStartupABI elf_startup_abi;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
@@ -104,11 +112,11 @@ static bool mmix_range_contains(const MemMapEntry *container,
            range->size <= container->size - offset;
 }
 
-static bool mmix_range_fits_ram(const MachineState *machine,
+static bool mmix_range_fits_ram(const MMIXVirtRAMLayout *layout,
                                 const MemMapEntry *range)
 {
-    return range->base <= machine->ram_size &&
-           range->size <= machine->ram_size - range->base;
+    return mmix_range_contains(&layout->low_phys, range) ||
+           mmix_range_contains(&layout->high_phys, range);
 }
 
 static bool mmix_ranges_overlap(const MemMapEntry *a, const MemMapEntry *b)
@@ -176,13 +184,59 @@ static bool mmix_validate_mmio_layout(Error **errp)
     return true;
 }
 
+static bool mmix_build_ram_layout(const MachineState *machine,
+                                  MMIXVirtRAMLayout *layout, Error **errp)
+{
+    const MemMapEntry *aperture = &mmix_virt_memmap[MMIX_VIRT_MMIO];
+    uint64_t high_end;
+
+    layout->low_phys = (MemMapEntry) {
+        .base = 0,
+        .size = MIN(machine->ram_size, aperture->base),
+    };
+    if (uadd64_overflow(aperture->base, aperture->size,
+                        &layout->high_phys.base)) {
+        error_setg(errp, "MMIX high RAM base overflows");
+        return false;
+    }
+    layout->high_phys.size = machine->ram_size - layout->low_phys.size;
+    if (uadd64_overflow(layout->high_phys.base, layout->high_phys.size,
+                        &high_end)) {
+        error_setg(errp, "MMIX high RAM range overflows");
+        return false;
+    }
+
+    return true;
+}
+
+static void mmix_map_ram(MMIXVirtMachineState *vms)
+{
+    MachineState *machine = MACHINE(vms);
+    MemoryRegion *sysmem = get_system_memory();
+
+    memory_region_init_alias(&vms->low_ram, OBJECT(machine), "mmix.lowram",
+                             machine->ram, 0,
+                             vms->ram_layout.low_phys.size);
+    memory_region_add_subregion(sysmem, vms->ram_layout.low_phys.base,
+                                &vms->low_ram);
+
+    if (vms->ram_layout.high_phys.size != 0) {
+        memory_region_init_alias(&vms->high_ram, OBJECT(machine),
+                                 "mmix.highram", machine->ram,
+                                 vms->ram_layout.low_phys.size,
+                                 vms->ram_layout.high_phys.size);
+        memory_region_add_subregion(sysmem, vms->ram_layout.high_phys.base,
+                                    &vms->high_ram);
+    }
+}
+
 static uint64_t mmix_virt_initial_stack(unsigned int cpu_index)
 {
     return MMIX_VIRT_INITIAL_STACK_BASE +
            cpu_index * MMIX_VIRT_INITIAL_STACK_SLOT_SIZE;
 }
 
-static bool mmix_validate_initial_stack_layout(const MachineState *machine,
+static bool mmix_validate_initial_stack_layout(const MMIXVirtRAMLayout *layout,
                                                Error **errp)
 {
     const MemMapEntry *area =
@@ -217,7 +271,7 @@ static bool mmix_validate_initial_stack_layout(const MachineState *machine,
     }
     if (area->size != MMIX_VIRT_INITIAL_STACK_AREA_SIZE ||
         !mmix_range_contains(&mmix_virt_memmap[MMIX_VIRT_LOW_RAM], area) ||
-        !mmix_range_fits_ram(machine, area)) {
+        !mmix_range_fits_ram(layout, area)) {
         error_setg(errp, "MMIX initial stack slots do not fit in Low RAM");
         return false;
     }
@@ -274,7 +328,7 @@ static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
     return cpu;
 }
 
-static bool mmix_validate_bootinfo_layout(const MachineState *machine,
+static bool mmix_validate_bootinfo_layout(const MMIXVirtRAMLayout *layout,
                                           size_t cmdline_size, Error **errp)
 {
     const MemMapEntry *platform =
@@ -284,7 +338,7 @@ static bool mmix_validate_bootinfo_layout(const MachineState *machine,
         &mmix_virt_memmap[MMIX_VIRT_KERNEL_CMDLINE];
 
     if (!mmix_range_contains(platform, bootinfo) ||
-        !mmix_range_fits_ram(machine, bootinfo)) {
+        !mmix_range_fits_ram(layout, bootinfo)) {
         error_setg(errp, "MMIX boot info does not fit in platform RAM");
         return false;
     }
@@ -300,7 +354,7 @@ static bool mmix_validate_bootinfo_layout(const MachineState *machine,
                    MMIX_BOOTINFO_KERNEL_CMDLINE_MAX);
         return false;
     }
-    if (cmdline_size != 0 && !mmix_range_fits_ram(machine, cmdline)) {
+    if (cmdline_size != 0 && !mmix_range_fits_ram(layout, cmdline)) {
         error_setg(errp,
                    "MMIX kernel command line does not fit in machine RAM");
         return false;
@@ -309,9 +363,10 @@ static bool mmix_validate_bootinfo_layout(const MachineState *machine,
     return true;
 }
 
-static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
-                                Error **errp)
+static bool mmix_write_bootinfo(MMIXVirtMachineState *vms,
+                                uint64_t boot_cpu_id, Error **errp)
 {
+    MachineState *machine = MACHINE(vms);
     const char *cmdline = machine->kernel_cmdline;
     const MemMapEntry *cmdline_region =
         &mmix_virt_memmap[MMIX_VIRT_KERNEL_CMDLINE];
@@ -320,7 +375,7 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
     uint64_t flags = 0;
     MemTxResult result;
 
-    if (!mmix_validate_bootinfo_layout(machine, cmdline_size, errp)) {
+    if (!mmix_validate_bootinfo_layout(&vms->ram_layout, cmdline_size, errp)) {
         return false;
     }
 
@@ -419,6 +474,12 @@ static bool mmix_write_bootinfo(MachineState *machine, uint64_t boot_cpu_id,
                         machine->smp.cpus);
     mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_IPI_REQUEST_MASK,
                         MMIX_RQ_IPI);
+    if (vms->ram_layout.high_phys.size != 0) {
+        mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_HIGH_RAM_BASE,
+                            vms->ram_layout.high_phys.base);
+        mmix_bootinfo_store(bootinfo, MMIX_BOOTINFO_FIELD_HIGH_RAM_SIZE,
+                            vms->ram_layout.high_phys.size);
+    }
 
     result = address_space_write(&address_space_memory,
                                  mmix_virt_memmap[MMIX_VIRT_BOOTINFO].base,
@@ -496,9 +557,12 @@ static bool mmix_argument_layout_size(int argc, size_t *layout_size,
     return true;
 }
 
-static bool mmix_write_semihosting_arguments(MachineState *machine,
+static bool mmix_write_semihosting_arguments(MMIXVirtMachineState *vms,
                                              Error **errp)
 {
+    MemMapEntry argument_block = {
+        .base = MMIX_POOL_SEGMENT_PHYS_BASE,
+    };
     int argc = semihosting_get_argc();
     size_t layout_size;
     size_t string_offset;
@@ -509,8 +573,8 @@ static bool mmix_write_semihosting_arguments(MachineState *machine,
     if (!mmix_argument_layout_size(argc, &layout_size, errp)) {
         return false;
     }
-    if (machine->ram_size < MMIX_POOL_SEGMENT_PHYS_BASE ||
-        machine->ram_size - MMIX_POOL_SEGMENT_PHYS_BASE < layout_size) {
+    argument_block.size = layout_size;
+    if (!mmix_range_fits_ram(&vms->ram_layout, &argument_block)) {
         error_setg(errp, "MMIX semihosting argument block does not fit "
                    "in machine RAM");
         return false;
@@ -549,7 +613,7 @@ static void mmix_apply_semihosting_startup_state(CPUState *cpu)
     mmix_cpu_write_reg(env, 1, MMIX_POOL_SEGMENT_BASE + MMIX_ARG_OCTA_SIZE);
 }
 
-static void mmix_setup_semihosting_arguments(MachineState *machine,
+static void mmix_setup_semihosting_arguments(MMIXVirtMachineState *vms,
                                              CPUState *cpu)
 {
     Error *err = NULL;
@@ -558,7 +622,7 @@ static void mmix_setup_semihosting_arguments(MachineState *machine,
         return;
     }
 
-    if (!mmix_write_semihosting_arguments(machine, &err)) {
+    if (!mmix_write_semihosting_arguments(vms, &err)) {
         error_reportf_err(err,
                           "could not set up MMIX semihosting arguments: ");
         exit(1);
@@ -603,7 +667,7 @@ static bool mmix_prepare_elf_startup(MMIXVirtMachineState *vms,
 
     switch (vms->elf_startup_abi) {
     case MMIX_ELF_STARTUP_ABI_BOOTINFO:
-        if (!mmix_write_bootinfo(machine, info->boot_cpu_id, errp)) {
+        if (!mmix_write_bootinfo(vms, info->boot_cpu_id, errp)) {
             error_prepend(errp, "could not set up MMIX boot info: ");
             return false;
         }
@@ -633,7 +697,7 @@ static void mmix_apply_elf_startup_state(MMIXVirtMachineState *vms,
         mmix_apply_elf_bootinfo_startup_state(cpu);
         return;
     case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
-        mmix_setup_semihosting_arguments(MACHINE(vms), cpu);
+        mmix_setup_semihosting_arguments(vms, cpu);
         return;
     default:
         g_assert_not_reached();
@@ -660,7 +724,7 @@ static void mmix_start_loaded_kernel(MMIXVirtMachineState *vms,
         }
     } else {
         mmix_apply_kernel_load_state(vms->cpus[0], info);
-        mmix_setup_semihosting_arguments(machine, vms->cpus[0]);
+        mmix_setup_semihosting_arguments(vms, vms->cpus[0]);
     }
 }
 
@@ -681,7 +745,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     if (vms->kernel_loaded) {
         mmix_start_loaded_kernel(vms, &vms->kernel_load_info);
     } else {
-        mmix_setup_semihosting_arguments(machine, vms->cpus[0]);
+        mmix_setup_semihosting_arguments(vms, vms->cpus[0]);
     }
 }
 
@@ -697,11 +761,12 @@ static void mmix_virt_init(MachineState *machine)
     unsigned int i;
 
     if (!mmix_validate_mmio_layout(&error_fatal) ||
-        !mmix_validate_initial_stack_layout(machine, &error_fatal)) {
+        !mmix_build_ram_layout(machine, &vms->ram_layout, &error_fatal) ||
+        !mmix_validate_initial_stack_layout(&vms->ram_layout, &error_fatal)) {
         return;
     }
 
-    memory_region_add_subregion(sysmem, 0, machine->ram);
+    mmix_map_ram(vms);
 
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
@@ -778,7 +843,7 @@ static void mmix_virt_init(MachineState *machine)
         vms->kernel_loaded = true;
         mmix_start_loaded_kernel(vms, &vms->kernel_load_info);
     } else {
-        mmix_setup_semihosting_arguments(machine, vms->cpus[0]);
+        mmix_setup_semihosting_arguments(vms, vms->cpus[0]);
     }
 }
 
