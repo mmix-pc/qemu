@@ -39,13 +39,27 @@ static bool mmix_detect_kernel_image_type(const char *filename,
     return true;
 }
 
-static ssize_t mmix_load_raw_kernel(const char *filename, uint64_t ram_size,
+static ssize_t mmix_load_raw_kernel(const char *filename,
+                                    const MMIXPhysicalRAMLayout *ram_layout,
                                     Error **errp)
 {
-    return load_image_targphys(filename, 0, ram_size, errp);
+    int64_t size = get_image_size(filename, errp);
+
+    if (size < 0) {
+        return -1;
+    }
+    if (!mmix_physical_ram_range_contains(&ram_layout->low, 0, size)) {
+        error_setg(errp, "MMIX raw kernel '%s' crosses the low physical RAM "
+                   "boundary",
+                   filename);
+        return -1;
+    }
+
+    return load_image_targphys(filename, 0, ram_layout->low.size, errp);
 }
 
-ssize_t mmix_load_kernel(const char *filename, uint64_t ram_size,
+ssize_t mmix_load_kernel(const char *filename,
+                         const MMIXPhysicalRAMLayout *ram_layout,
                          MMIXKernelLoadInfo *info, Error **errp)
 {
     MMIXKernelImageType type;
@@ -61,11 +75,11 @@ ssize_t mmix_load_kernel(const char *filename, uint64_t ram_size,
 
     switch (type) {
     case MMIX_KERNEL_IMAGE_MMO:
-        return mmix_load_mmo(filename, ram_size, info, errp);
+        return mmix_load_mmo(filename, ram_layout, info, errp);
     case MMIX_KERNEL_IMAGE_ELF:
-        return mmix_load_elf(filename, ram_size, info, errp);
+        return mmix_load_elf(filename, ram_layout, info, errp);
     case MMIX_KERNEL_IMAGE_RAW:
-        return mmix_load_raw_kernel(filename, ram_size, errp);
+        return mmix_load_raw_kernel(filename, ram_layout, errp);
     default:
         g_assert_not_reached();
     }

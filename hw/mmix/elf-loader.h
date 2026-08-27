@@ -12,7 +12,8 @@
 
 bool mmix_kernel_is_elf(const char *filename, Error **errp);
 
-ssize_t mmix_load_elf(const char *filename, uint64_t ram_size,
+ssize_t mmix_load_elf(const char *filename,
+                      const MMIXPhysicalRAMLayout *ram_layout,
                       MMIXKernelLoadInfo *info, Error **errp);
 
 #endif

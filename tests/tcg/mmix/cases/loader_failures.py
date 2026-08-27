@@ -58,12 +58,42 @@ LOADER_FAILURE_TESTS = [
     MMIXLoaderFailure(
         "elf-truncated-program-header-table",
         elf64_header(phnum=1),
-        ("could not load MMIX ELF kernel",),
+        ("truncated MMIX ELF program header table",),
     ),
     MMIXLoaderFailure(
         "elf-load-segment-outside-low-ram",
         elf64_image(0x06000000, halt()),
         ("MMIX ELF kernel", "loads outside Low RAM"),
+    ),
+    MMIXLoaderFailure(
+        "raw-crosses-low-ram-boundary",
+        halt(),
+        ("MMIX raw kernel", "crosses the low physical RAM boundary"),
+        sparse_size=0x10000001,
+    ),
+    MMIXLoaderFailure(
+        "elf-segment-at-mmio-aperture-start",
+        elf64_image(0x10000000, halt()),
+        ("MMIX ELF PT_LOAD segment 0", "non-RAM physical range"),
+        ("-m", "512M"),
+    ),
+    MMIXLoaderFailure(
+        "elf-segment-crosses-into-mmio-aperture",
+        elf64_image(0x0ffffffc, halt(), mem_size=8),
+        ("MMIX ELF PT_LOAD segment 0", "non-RAM physical range"),
+        ("-m", "512M"),
+    ),
+    MMIXLoaderFailure(
+        "elf-segment-crosses-out-of-mmio-aperture",
+        elf64_image(0x1ffffffc, halt(), mem_size=8),
+        ("MMIX ELF PT_LOAD segment 0", "non-RAM physical range"),
+        ("-m", "512M"),
+    ),
+    MMIXLoaderFailure(
+        "elf-segment-in-high-ram",
+        elf64_image(0x20000000, halt()),
+        ("MMIX ELF kernel", "loads outside Low RAM"),
+        ("-m", "512M"),
     ),
     MMIXLoaderFailure(
         "elf-kernel-command-line-too-long",
@@ -227,6 +257,20 @@ LOADER_FAILURE_TESTS = [
         "mmo-fixo-invalid-z",
         mmo_image([mmo_lop(MMIX_MMO_LOP_FIXO, 0, y=0, z=0)]),
         ("invalid MMIX .mmo lop_fixo z=0", "tetra 2"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-tetra-at-mmio-aperture-start",
+        mmo_image([mmo_loc(0x10000000), halt()]),
+        ("MMIX .mmo tetrabyte target 0x10000000",
+         "non-RAM physical range"),
+        ("-m", "512M"),
+    ),
+    MMIXLoaderFailure(
+        "mmo-tetra-at-mmio-aperture-end",
+        mmo_image([mmo_loc(0x1ffffffc), halt()]),
+        ("MMIX .mmo tetrabyte target 0x1ffffffc",
+         "non-RAM physical range"),
+        ("-m", "512M"),
     ),
     MMIXLoaderFailure(
         "mmo-unsupported-data-segment-range",

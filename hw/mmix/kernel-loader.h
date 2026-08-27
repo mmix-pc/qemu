@@ -9,6 +9,7 @@
 
 #include "exec/hwaddr.h"
 #include "qapi/error.h"
+#include "ram-layout.h"
 
 typedef enum MMIXKernelImageType {
     MMIX_KERNEL_IMAGE_RAW,
@@ -26,7 +27,8 @@ typedef struct MMIXKernelLoadInfo {
     uint64_t globals[256];
 } MMIXKernelLoadInfo;
 
-ssize_t mmix_load_kernel(const char *filename, uint64_t ram_size,
+ssize_t mmix_load_kernel(const char *filename,
+                         const MMIXPhysicalRAMLayout *ram_layout,
                          MMIXKernelLoadInfo *info, Error **errp);
 
 #endif

@@ -92,7 +92,7 @@ MMIX_VIRT_MEMMAP = {
     MMIX_VIRT_BOOTINFO: (0x0E800000, 0),
     MMIX_VIRT_KERNEL_CMDLINE: (0, 0x1000),
     MMIX_VIRT_FRAMEBUFFER: (0x0F000000, 0x01000000),
-    MMIX_VIRT_MMIO: (0x10000000, 0),
+    MMIX_VIRT_MMIO: (0x10000000, 0x10000000),
     MMIX_VIRT_UART0: (0x10000000, 0x100),
     MMIX_VIRT_VIRTIO_MMIO: (0x10001000, 0x1000),
     MMIX_VIRT_FRAMEBUFFER_CONTROL: (0x10002000, 0x1000),
@@ -860,6 +860,7 @@ class MMIXLoaderFailure:
     image: bytes
     patterns: tuple[str, ...]
     qemu_args: tuple[str, ...] = ()
+    sparse_size: Optional[int] = None
 
 
 @dataclasses.dataclass(frozen=True)

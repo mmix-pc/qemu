@@ -66,6 +66,36 @@ MMO_LOADER_TESTS = [
         regs={R1: 0x33},
     ),
     MMIXMMOTest(
+        "mmo-direct-high-ram-load",
+        mmo_image(
+            [
+                *set_octa(R1, 0x20000000),
+                insn(LDOU, R2, R1, R0),
+                halt(),
+                mmo_loc(0x20000000),
+                struct.pack(">Q", 0x0123456789abcdef),
+            ]
+        ),
+        pc=0x14,
+        regs={R2: 0x0123456789abcdef},
+        qemu_args=("-m", "512M"),
+    ),
+    MMIXMMOTest(
+        "mmo-direct-high-ram-last-octa-load",
+        mmo_image(
+            [
+                *set_octa(R1, 0x2ffffff8),
+                insn(LDOU, R2, R1, R0),
+                halt(),
+                mmo_loc(0x2ffffff8),
+                struct.pack(">Q", 0xfedcba9876543210),
+            ]
+        ),
+        pc=0x14,
+        regs={R2: 0xfedcba9876543210},
+        qemu_args=("-m", "512M"),
+    ),
+    MMIXMMOTest(
         "mmo-skip-sparse-load",
         mmo_image(
             [

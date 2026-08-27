@@ -244,6 +244,9 @@ def run_loader_failure(qemu, workdir, test):
     image = workdir / f"{test.name}.mmo"
 
     image.write_bytes(test.image)
+    if test.sparse_size is not None:
+        with image.open("r+b") as file:
+            file.truncate(test.sparse_size)
 
     result = run_kernel(
         qemu,
