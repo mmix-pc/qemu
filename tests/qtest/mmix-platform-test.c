@@ -364,6 +364,112 @@ static void test_mmix_platform_configurable_ram(void)
     g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
+static void mmix_assert_split_ram_devices(QTestState *qts)
+{
+    const uint64_t uart = mmix_devices[MMIX_DEVICE_UART0].base;
+    const uint64_t virtio = mmix_devices[MMIX_DEVICE_VIRTIO_BLOCK0].base;
+    const uint64_t framebuffer = mmix_devices[MMIX_DEVICE_FRAMEBUFFER].base;
+    const uint64_t timer = mmix_devices[MMIX_DEVICE_TIMER0].base;
+    const uint64_t intc = mmix_devices[MMIX_DEVICE_INTC].base;
+    const uint64_t ipi = mmix_devices[MMIX_DEVICE_IPI].base;
+
+    g_assert_cmphex(qtest_readb(qts, uart + MMIX_UART_LSR) &
+                    MMIX_UART_LSR_THRE, ==, MMIX_UART_LSR_THRE);
+    g_assert_cmphex(qtest_readl(qts, virtio + VIRTIO_MMIO_MAGIC_VALUE), ==,
+                    0x74726976);
+    g_assert_cmpuint(qtest_readq(qts, framebuffer +
+                                 MMIX_FRAMEBUFFER_REG_WIDTH), ==, 1024);
+    g_assert_cmpuint(qtest_readq(qts, timer + MMIX_TIMER_CONTEXT_BASE +
+                                 MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
+    g_assert_cmpuint(qtest_readl(qts, intc + MMIX_INTC_PENDING), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_ACTIVE_TARGETS), ==, 3);
+}
+
+static void test_mmix_platform_split_ram_contract(void)
+{
+    const char *cmdline = "console=ttyS0 split-ram=1";
+    const uint64_t framebuffer_base =
+        mmix_regions[MMIX_REGION_FRAMEBUFFER].base;
+    const uint64_t framebuffer_value = 0x0011223344556677ULL;
+    g_autofree char *elf = mmix_create_elf();
+    g_autofree char *quoted_elf = g_shell_quote(elf);
+    g_autofree char *quoted_cmdline = g_shell_quote(cmdline);
+    QTestState *qts = qtest_initf(
+        "-machine virt -m 512M -display none -smp 2 -kernel %s -append %s",
+        quoted_elf, quoted_cmdline);
+
+    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
+                     ==, 2);
+    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_RAM_SIZE_OFFSET),
+                    ==, 512 * MiB);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
+                    ==, 0x20000000);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
+                    ==, 256 * MiB);
+    mmix_assert_kernel_cmdline(qts, cmdline);
+    mmix_assert_split_ram_devices(qts);
+
+    qtest_writeq(qts, framebuffer_base, framebuffer_value);
+    g_assert_cmphex(qtest_readq(qts, framebuffer_base), ==,
+                    framebuffer_value);
+
+    qtest_system_reset(qts);
+    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
+                     ==, 2);
+    g_assert_cmphex(mmix_bootinfo_read(
+                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
+                    ==, 0x20000000);
+    mmix_assert_kernel_cmdline(qts, cmdline);
+    mmix_assert_split_ram_devices(qts);
+
+    qtest_quit(qts);
+    g_assert_cmpint(g_unlink(elf), ==, 0);
+}
+
+static void test_mmix_platform_aperture_isolation(void)
+{
+    static const struct {
+        uint64_t aperture;
+        uint64_t high_ram;
+        uint64_t value;
+    } probes[] = {
+        { 0x10008000, 0x20008000, 0x0123456789abcdefULL },
+        { 0x18000000, 0x28000000, 0xa5a55a5af0f00f0fULL },
+        { 0x1ffffff8, 0x2ffffff8, 0xfedcba9876543210ULL },
+    };
+    const uint64_t low_last = 0x0fffffff;
+    const uint64_t aperture_last = 0x1fffffff;
+    QTestState *qts = qtest_init("-machine virt -m 512M");
+    size_t i;
+
+    qtest_writeb(qts, low_last, 0x5a);
+    g_assert_cmphex(qtest_readb(qts, low_last), ==, 0x5a);
+    qtest_writeb(qts, aperture_last, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, aperture_last), !=, 0xa5);
+
+    for (i = 0; i < ARRAY_SIZE(probes); i++) {
+        qtest_writeq(qts, probes[i].high_ram, probes[i].value);
+        qtest_writeq(qts, probes[i].aperture, ~probes[i].value);
+        g_assert_cmphex(qtest_readq(qts, probes[i].high_ram), ==,
+                        probes[i].value);
+        g_assert_cmphex(qtest_readq(qts, probes[i].aperture), !=,
+                        ~probes[i].value);
+    }
+
+    qtest_system_reset(qts);
+    for (i = 0; i < ARRAY_SIZE(probes); i++) {
+        g_assert_cmphex(qtest_readq(qts, probes[i].high_ram), ==,
+                        probes[i].value);
+        qtest_writeq(qts, probes[i].aperture, probes[i].value);
+        g_assert_cmphex(qtest_readq(qts, probes[i].high_ram), ==,
+                        probes[i].value);
+    }
+
+    qtest_quit(qts);
+}
+
 static void test_mmix_platform_mmio_layout(void)
 {
     uint64_t aperture_end = mmix_virt_mmio_base + mmix_virt_mmio_size;
@@ -1031,6 +1137,10 @@ int main(int argc, char **argv)
                    test_mmix_platform_memory_layout);
     qtest_add_func("/mmix/platform/configurable-ram",
                    test_mmix_platform_configurable_ram);
+    qtest_add_func("/mmix/platform/split-ram-contract",
+                   test_mmix_platform_split_ram_contract);
+    qtest_add_func("/mmix/platform/aperture-isolation",
+                   test_mmix_platform_aperture_isolation);
     qtest_add_func("/mmix/platform/mmio-layout",
                    test_mmix_platform_mmio_layout);
     qtest_add_func("/mmix/platform/initial-stack-layout",
