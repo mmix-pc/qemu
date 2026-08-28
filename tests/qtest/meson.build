@@ -305,6 +305,7 @@ qtests_mmix = [
   'mmix-framebuffer-test',
   'mmix-intc-test',
   'mmix-ipi-test',
+  'mmix-platform-test',
   'mmix-physical-layout-test',
   'mmix-timer-test',
   'mmix-virtio-mmio-test',

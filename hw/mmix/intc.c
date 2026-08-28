@@ -316,7 +316,7 @@ static void mmix_intc_realize(DeviceState *dev, Error **errp)
         context->cpu = cpu;
         memory_region_init_io(&context->iomem, OBJECT(s),
                               &mmix_intc_context_ops, context, name,
-                              MMIX_VIRT_INTC_CONTEXT_STRIDE);
+                              MMIX_VIRT_INTC_CONTEXT_REGISTER_SIZE);
         memory_region_add_subregion(
             &s->container,
             MMIX_VIRT_INTC_CONTEXTS_OFFSET +
