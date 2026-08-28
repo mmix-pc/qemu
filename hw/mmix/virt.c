@@ -19,10 +19,12 @@
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
+#include "framebuffer.h"
 #include "intc.h"
 #include "ipi.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
+#include "ram-reservation.h"
 #include "timer.h"
 #include "virt.h"
 
@@ -38,6 +40,8 @@ struct MMIXVirtMachineState {
     MMIXPhysicalRAM ram;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
+    uint64_t framebuffer_base;
+    uint64_t framebuffer_size;
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
@@ -124,6 +128,53 @@ static bool mmix_virt_build_ram(MMIXVirtMachineState *vms, Error **errp)
     return true;
 }
 
+static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms, Error **errp)
+{
+    MachineState *machine = MACHINE(vms);
+    enum {
+        MMIX_RAM_REQUEST_BOOTSTRAP_STACKS,
+        MMIX_RAM_REQUEST_FRAMEBUFFER,
+        MMIX_RAM_REQUEST_COUNT,
+    };
+    const MMIXRAMReservationRequest requests[MMIX_RAM_REQUEST_COUNT] = {
+        [MMIX_RAM_REQUEST_BOOTSTRAP_STACKS] = {
+            .owner = "mmix-virt",
+            .name = "bootstrap-register-stacks",
+            .placement = MMIX_RAM_RESERVATION_FIXED,
+            .ownership_class = MMIX_RAM_OWNERSHIP_CPU_BOOTSTRAP,
+            .lifetime = MMIX_RAM_LIFETIME_UNTIL_GUEST_RELEASE,
+            .address = MMIX_VIRT_INITIAL_STACK_BASE,
+            .size = MMIX_VIRT_INITIAL_STACK_AREA_SIZE,
+            .alignment = MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
+        },
+        [MMIX_RAM_REQUEST_FRAMEBUFFER] = {
+            .owner = "mmix-framebuffer",
+            .name = "pixels",
+            .stable_id = 0,
+            .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+            .ownership_class = MMIX_RAM_OWNERSHIP_MACHINE,
+            .lifetime = MMIX_RAM_LIFETIME_PERMANENT,
+            .placement_class = MMIX_RAM_PLACEMENT_PERMANENT_MACHINE,
+            .size = MMIX_VIRT_FRAMEBUFFER_SIZE,
+            .alignment = MMIX_VIRT_FRAMEBUFFER_ALIGN,
+        },
+    };
+    MMIXRAMReservationPlan plan = { 0 };
+
+    if (!mmix_ram_reservation_plan(machine->ram_size, requests,
+                                   ARRAY_SIZE(requests), &plan, errp)) {
+        return false;
+    }
+
+    vms->framebuffer_base =
+        plan.reservations[MMIX_RAM_REQUEST_FRAMEBUFFER].content.start;
+    vms->framebuffer_size =
+        mmix_phys_range_size(
+            &plan.reservations[MMIX_RAM_REQUEST_FRAMEBUFFER].content);
+    mmix_ram_reservation_plan_clear(&plan);
+    return true;
+}
+
 static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
                                       unsigned int cpu_index)
 {
@@ -168,10 +219,12 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *intc;
     DeviceState *ipi;
     DeviceState *timer;
+    DeviceState *framebuffer;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
-        !mmix_virt_build_ram(vms, &error_fatal)) {
+        !mmix_virt_build_ram(vms, &error_fatal) ||
+        !mmix_virt_plan_ram(vms, &error_fatal)) {
         return;
     }
     if (machine->kernel_filename) {
@@ -203,6 +256,15 @@ static void mmix_virt_init(MachineState *machine)
                    qdev_get_gpio_in(intc, MMIX_VIRT_UART0_IRQ),
                    MMIX_VIRT_UART0_BAUD_BASE, serial_hd(0),
                    DEVICE_BIG_ENDIAN);
+
+    framebuffer = qdev_new(TYPE_MMIX_FRAMEBUFFER);
+    object_property_add_child(OBJECT(machine), "framebuffer",
+                              OBJECT(framebuffer));
+    qdev_prop_set_uint64(framebuffer, "base", vms->framebuffer_base);
+    qdev_prop_set_uint64(framebuffer, "size", vms->framebuffer_size);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(framebuffer), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(framebuffer), 0,
+                    MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE);
 
     ipi = qdev_new(TYPE_MMIX_IPI);
     object_property_add_child(OBJECT(machine), "ipi", OBJECT(ipi));
