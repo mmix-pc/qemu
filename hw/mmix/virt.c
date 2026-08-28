@@ -22,6 +22,7 @@
 #include "framebuffer.h"
 #include "intc.h"
 #include "ipi.h"
+#include "kernel-loader.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
 #include "ram-reservation.h"
@@ -213,6 +214,36 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     }
 }
 
+static void mmix_virt_reject_kernel(MachineState *machine)
+{
+    MMIXKernelImageType type;
+    Error *err = NULL;
+
+    if (!mmix_classify_kernel_image(machine->kernel_filename, &type, &err)) {
+        error_report_err(err);
+        exit(EXIT_FAILURE);
+    }
+
+    switch (type) {
+    case MMIX_KERNEL_IMAGE_MMO:
+        error_report("MMIX MMO -kernel loading is unavailable until sparse "
+                     "memory support is implemented");
+        break;
+    case MMIX_KERNEL_IMAGE_ELF:
+        error_report("MMIX ELF -kernel loading is not yet implemented for "
+                     "the contiguous RAM layout");
+        break;
+    case MMIX_KERNEL_IMAGE_RAW:
+        error_report("MMIX raw -kernel loading is not yet implemented for "
+                     "the contiguous RAM layout");
+        break;
+    default:
+        g_assert_not_reached();
+    }
+
+    exit(EXIT_FAILURE);
+}
+
 static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
@@ -228,9 +259,7 @@ static void mmix_virt_init(MachineState *machine)
         return;
     }
     if (machine->kernel_filename) {
-        error_report("MMIX virt -kernel loading is unavailable during the "
-                     "physical layout transition");
-        exit(EXIT_FAILURE);
+        mmix_virt_reject_kernel(machine);
     }
 
     memory_region_add_subregion(get_system_memory(), vms->ram.start,

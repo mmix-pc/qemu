@@ -11,9 +11,8 @@
 #include "kernel-loader.h"
 #include "mmo-loader.h"
 
-static bool mmix_detect_kernel_image_type(const char *filename,
-                                          MMIXKernelImageType *type,
-                                          Error **errp)
+bool mmix_classify_kernel_image(const char *filename,
+                                MMIXKernelImageType *type, Error **errp)
 {
     Error *local_err = NULL;
 
@@ -68,7 +67,7 @@ ssize_t mmix_load_kernel(const char *filename,
         .image_type = MMIX_KERNEL_IMAGE_RAW,
     };
 
-    if (!mmix_detect_kernel_image_type(filename, &type, errp)) {
+    if (!mmix_classify_kernel_image(filename, &type, errp)) {
         return -1;
     }
 

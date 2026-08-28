@@ -27,6 +27,9 @@ typedef struct MMIXKernelLoadInfo {
     uint64_t globals[256];
 } MMIXKernelLoadInfo;
 
+bool mmix_classify_kernel_image(const char *filename,
+                                MMIXKernelImageType *type, Error **errp);
+
 ssize_t mmix_load_kernel(const char *filename,
                          const MMIXPhysicalRAM *ram,
                          MMIXKernelLoadInfo *info, Error **errp);

@@ -5,6 +5,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "elf.h"
 #include "libqtest.h"
 #include "qemu/units.h"
 #include "qobject/qdict.h"
@@ -26,6 +27,13 @@ typedef struct MMIXRAMEndpointCase {
     const char *value;
     uint64_t size;
 } MMIXRAMEndpointCase;
+
+typedef struct MMIXKernelClassificationCase {
+    const char *name;
+    const uint8_t *data;
+    size_t size;
+    const char *diagnostic;
+} MMIXKernelClassificationCase;
 
 static void test_mmix_ram_accepted(gconstpointer opaque)
 {
@@ -288,14 +296,17 @@ static void test_mmix_high_physical_addresses_do_not_alias(void)
     qtest_quit(qts);
 }
 
-static void test_mmix_kernel_rejected(void)
+static void test_mmix_kernel_classification(gconstpointer opaque)
 {
+    const MMIXKernelClassificationCase *test = opaque;
     g_autoptr(GError) error = NULL;
+    g_autofree char *directory = NULL;
+    g_autofree char *filename = NULL;
     g_autofree char *stderr_text = NULL;
     const char *argv[] = {
         qtest_qemu_binary(NULL),
         "-machine", "virt",
-        "-kernel", "ignored.img",
+        "-kernel", NULL,
         "-display", "none",
         "-monitor", "none",
         "-serial", "none",
@@ -303,15 +314,25 @@ static void test_mmix_kernel_rejected(void)
     };
     int wait_status;
 
+    directory = g_dir_make_tmp("mmix-kernel-classification-XXXXXX", &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(directory);
+    filename = g_build_filename(directory, test->name, NULL);
+    g_assert_true(g_file_set_contents(filename, (const char *)test->data,
+                                      test->size, &error));
+    g_assert_no_error(error);
+    argv[4] = filename;
+
     g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
                                G_SPAWN_STDOUT_TO_DEV_NULL,
                                NULL, NULL, NULL, &stderr_text,
                                &wait_status, &error));
     g_assert_no_error(error);
     g_assert_cmpint(wait_status, !=, 0);
-    g_assert_nonnull(strstr(stderr_text,
-                           "MMIX virt -kernel loading is unavailable during "
-                           "the physical layout transition"));
+    g_assert_nonnull(strstr(stderr_text, test->diagnostic));
+
+    g_assert_cmpint(g_unlink(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
 }
 
 int main(int argc, char **argv)
@@ -349,6 +370,40 @@ int main(int argc, char **argv)
     static const char * const endpoint_names[] = {
         "minimum", "default", "above-4g",
     };
+    static const uint8_t raw_image[] = { 0, 0, 0, 0 };
+    static const uint8_t elf_image[EI_NIDENT] = {
+        ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3,
+    };
+    static const uint8_t mmo_image[] = { 0x98, 0x09, 0x01, 0x00 };
+    static const uint8_t truncated_elf[] = {
+        ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3,
+    };
+    static const uint8_t truncated_mmo[] = { 0x98, 0x09 };
+    static const MMIXKernelClassificationCase kernel_cases[] = {
+        {
+            "raw.img", raw_image, sizeof(raw_image),
+            "MMIX raw -kernel loading is not yet implemented",
+        },
+        {
+            "image.elf", elf_image, sizeof(elf_image),
+            "MMIX ELF -kernel loading is not yet implemented",
+        },
+        {
+            "image.mmo", mmo_image, sizeof(mmo_image),
+            "MMIX MMO -kernel loading is unavailable",
+        },
+        {
+            "truncated.elf", truncated_elf, sizeof(truncated_elf),
+            "truncated MMIX ELF header",
+        },
+        {
+            "truncated.mmo", truncated_mmo, sizeof(truncated_mmo),
+            "truncated MMIX .mmo preamble",
+        },
+    };
+    static const char * const kernel_case_names[] = {
+        "raw", "elf", "mmo", "truncated-elf", "truncated-mmo",
+    };
     unsigned int i;
 
     g_test_init(&argc, &argv, NULL);
@@ -383,7 +438,14 @@ int main(int argc, char **argv)
                    test_mmix_negative_alias_translation);
     qtest_add_func("/mmix/translation/high-physical-no-alias",
                    test_mmix_high_physical_addresses_do_not_alias);
-    qtest_add_func("/mmix/ram/kernel/rejected", test_mmix_kernel_rejected);
+    for (i = 0; i < ARRAY_SIZE(kernel_cases); i++) {
+        g_autofree char *path =
+            g_strdup_printf("/mmix/kernel/classification/%s",
+                            kernel_case_names[i]);
+
+        qtest_add_data_func(path, &kernel_cases[i],
+                            test_mmix_kernel_classification);
+    }
 
     return g_test_run();
 }
