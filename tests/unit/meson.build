@@ -52,6 +52,14 @@ tests = {
   'test-envlist': [],
 }
 
+if config_all_devices.has_key('CONFIG_MMIX_VIRT')
+  tests += {
+    'test-mmix-physical-layout': [
+      meson.project_source_root() / 'hw/mmix/physical-layout.c'
+    ],
+  }
+endif
+
 if have_system or have_tools
   tests += {
     'test-qmp-event': [testqapi],

@@ -6,6 +6,7 @@ mmix_ss.add(when: 'CONFIG_MMIX_VIRT', if_true: files(
   'ipi.c',
   'kernel-loader.c',
   'mmo-loader.c',
+  'physical-layout.c',
   'timer.c',
   'virt.c',
 ))
