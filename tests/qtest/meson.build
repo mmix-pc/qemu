@@ -303,6 +303,7 @@ qtests_hexagon = ['boot-serial-test']
 
 qtests_mmix = [
   'mmix-intc-test',
+  'mmix-ipi-test',
   'mmix-physical-layout-test',
 ]
 

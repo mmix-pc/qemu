@@ -18,6 +18,7 @@
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
 #include "intc.h"
+#include "ipi.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
 #include "virt.h"
@@ -162,6 +163,7 @@ static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     DeviceState *intc;
+    DeviceState *ipi;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
@@ -190,6 +192,17 @@ static void mmix_virt_init(MachineState *machine)
         vms->cpu_irqs[i] = qemu_allocate_irq(mmix_virt_cpu_irq,
                                               vms->cpus[i], 0);
         sysbus_connect_irq(SYS_BUS_DEVICE(intc), i, vms->cpu_irqs[i]);
+    }
+
+    ipi = qdev_new(TYPE_MMIX_IPI);
+    object_property_add_child(OBJECT(machine), "ipi", OBJECT(ipi));
+    qdev_prop_set_uint32(ipi, "num-cpus", machine->smp.cpus);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(ipi), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(ipi), 0, MMIX_VIRT_IPI_BASE);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(ipi), i,
+                           qdev_get_gpio_in_named(DEVICE(vms->cpus[i]),
+                                                  "ipi", 0));
     }
 }
 
