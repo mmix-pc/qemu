@@ -42,6 +42,7 @@ struct MMIXVirtMachineState {
     MMIXPhysicalRAM ram;
     MMIXBootPlan *boot_plan;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
+    uint64_t initial_stacks[MMIX_VIRT_MAX_CPUS];
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
     uint64_t framebuffer_base;
     uint64_t framebuffer_size;
@@ -53,12 +54,6 @@ static void mmix_virt_cpu_irq(void *opaque, int irq, int level)
 {
     g_assert(irq == 0);
     mmix_cpu_set_interrupt_controller(opaque, level);
-}
-
-static uint64_t mmix_virt_initial_stack(unsigned int cpu_index)
-{
-    return MMIX_VIRT_INITIAL_STACK_BASE +
-           cpu_index * MMIX_VIRT_INITIAL_STACK_SLOT_SIZE;
 }
 
 static bool mmix_virt_validate_memory(MachineState *machine, Error **errp)
@@ -121,13 +116,6 @@ static bool mmix_virt_build_ram(MMIXVirtMachineState *vms, Error **errp)
                    machine->ram_size);
         return false;
     }
-    if (!mmix_physical_ram_contains(&vms->ram,
-                                    MMIX_VIRT_INITIAL_STACK_BASE,
-                                    MMIX_VIRT_INITIAL_STACK_AREA_SIZE)) {
-        error_setg(errp, "MMIX initial stack area does not fit in RAM");
-        return false;
-    }
-
     return true;
 }
 
@@ -135,37 +123,46 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms, Error **errp)
 {
     MachineState *machine = MACHINE(vms);
     enum {
-        MMIX_RAM_REQUEST_BOOTSTRAP_STACKS,
         MMIX_RAM_REQUEST_FRAMEBUFFER,
-        MMIX_RAM_REQUEST_COUNT,
+        MMIX_RAM_REQUEST_STACK_BASE,
     };
-    const MMIXRAMReservationRequest requests[MMIX_RAM_REQUEST_COUNT] = {
-        [MMIX_RAM_REQUEST_BOOTSTRAP_STACKS] = {
-            .owner = "mmix-virt",
-            .name = "bootstrap-register-stacks",
-            .placement = MMIX_RAM_RESERVATION_FIXED,
-            .ownership_class = MMIX_RAM_OWNERSHIP_CPU_BOOTSTRAP,
-            .lifetime = MMIX_RAM_LIFETIME_UNTIL_GUEST_RELEASE,
-            .address = MMIX_VIRT_INITIAL_STACK_BASE,
-            .size = MMIX_VIRT_INITIAL_STACK_AREA_SIZE,
-            .alignment = MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
-        },
-        [MMIX_RAM_REQUEST_FRAMEBUFFER] = {
-            .owner = "mmix-framebuffer",
-            .name = "pixels",
-            .stable_id = 0,
-            .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
-            .ownership_class = MMIX_RAM_OWNERSHIP_MACHINE,
-            .lifetime = MMIX_RAM_LIFETIME_PERMANENT,
-            .placement_class = MMIX_RAM_PLACEMENT_PERMANENT_MACHINE,
-            .size = MMIX_VIRT_FRAMEBUFFER_SIZE,
-            .alignment = MMIX_VIRT_FRAMEBUFFER_ALIGN,
-        },
+    size_t request_count = MMIX_RAM_REQUEST_STACK_BASE + machine->smp.cpus;
+    g_autofree MMIXRAMReservationRequest *requests =
+        g_new0(MMIXRAMReservationRequest, request_count);
+    g_auto(GStrv) stack_names = g_new0(char *, machine->smp.cpus + 1);
+    const MMIXRAMReservationRequest framebuffer_request = {
+        .owner = "mmix-framebuffer",
+        .name = "pixels",
+        .stable_id = 0,
+        .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+        .ownership_class = MMIX_RAM_OWNERSHIP_MACHINE,
+        .lifetime = MMIX_RAM_LIFETIME_PERMANENT,
+        .placement_class = MMIX_RAM_PLACEMENT_PERMANENT_MACHINE,
+        .size = MMIX_VIRT_FRAMEBUFFER_SIZE,
+        .alignment = MMIX_VIRT_FRAMEBUFFER_ALIGN,
     };
     const MMIXRAMReservation *framebuffer;
+    unsigned int i;
+
+    requests[MMIX_RAM_REQUEST_FRAMEBUFFER] = framebuffer_request;
+    for (i = 0; i < machine->smp.cpus; i++) {
+        stack_names[i] = g_strdup_printf("initial-stack-%u", i);
+        requests[MMIX_RAM_REQUEST_STACK_BASE + i] =
+            (MMIXRAMReservationRequest) {
+                .owner = "mmix-cpu",
+                .name = stack_names[i],
+                .stable_id = i,
+                .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+                .ownership_class = MMIX_RAM_OWNERSHIP_CPU_BOOTSTRAP,
+                .lifetime = MMIX_RAM_LIFETIME_UNTIL_GUEST_RELEASE,
+                .placement_class = MMIX_RAM_PLACEMENT_CPU_BOOTSTRAP,
+                .size = MMIX_VIRT_INITIAL_STACK_SIZE,
+                .alignment = MMIX_VIRT_INITIAL_STACK_ALIGN,
+            };
+    }
 
     if (!mmix_boot_plan_build(machine->ram_size, NULL, NULL, requests,
-                              ARRAY_SIZE(requests), &vms->boot_plan, errp)) {
+                              request_count, &vms->boot_plan, errp)) {
         return false;
     }
 
@@ -174,6 +171,12 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms, Error **errp)
     vms->framebuffer_base = framebuffer->content.start;
     vms->framebuffer_size =
         mmix_phys_range_size(&framebuffer->content);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        const MMIXRAMReservation *stack = mmix_boot_plan_reservation(
+            vms->boot_plan, MMIX_RAM_REQUEST_STACK_BASE + i);
+
+        vms->initial_stacks[i] = stack->content.start;
+    }
     return true;
 }
 
@@ -184,16 +187,10 @@ static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
     g_autofree char *name = g_strdup_printf("cpu[%u]", cpu_index);
     Object *cpuobj = object_new(machine->cpu_type);
     CPUState *cpu = CPU(cpuobj);
-    uint64_t initial_stack = object_property_get_uint(
-        cpuobj, "initial-stack", &error_fatal);
 
     cpu->cpu_index = cpu_index;
-    if (machine->smp.cpus != 1 || cpu_index != 0 ||
-        initial_stack == MMIX_INITIAL_STACK) {
-        object_property_set_uint(cpuobj, "initial-stack",
-                                 mmix_virt_initial_stack(cpu_index),
-                                 &error_fatal);
-    }
+    object_property_set_uint(cpuobj, "initial-stack",
+                             vms->initial_stacks[cpu_index], &error_fatal);
     object_property_add_child(OBJECT(machine), name, cpuobj);
     qdev_realize_and_unref(DEVICE(cpuobj), NULL, &error_fatal);
     vms->cpus[cpu_index] = cpu;
@@ -211,6 +208,11 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     }
 
     for (i = 0; i < machine->smp.cpus; i++) {
+        MemTxResult result = address_space_set(
+            &address_space_memory, vms->initial_stacks[i], 0,
+            MMIX_VIRT_INITIAL_STACK_SIZE, MEMTXATTRS_UNSPECIFIED);
+
+        g_assert(result == MEMTX_OK);
         cpu_reset(vms->cpus[i]);
     }
 }

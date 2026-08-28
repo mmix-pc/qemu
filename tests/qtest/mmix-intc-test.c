@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "libqtest.h"
+#include "qemu/units.h"
 #include "qobject/qdict.h"
 
 #define MMIX_UART_BASE               UINT64_C(0x0001000010000000)
@@ -42,8 +43,7 @@
 #define MMIX_INTC_QOM_PATH           "/machine/intc"
 #define MMIX_INTC_OUTPUT_IRQ         "sysbus-irq"
 
-#define MMIX_INITIAL_STACK_BASE      UINT64_C(0x10000)
-#define MMIX_INITIAL_STACK_STRIDE    UINT64_C(0x8000)
+#define MMIX_INITIAL_STACK_SIZE      UINT64_C(0x8000)
 
 static uint64_t mmix_intc_word_reg(uint64_t base, unsigned int source)
 {
@@ -416,8 +416,7 @@ static void test_mmix_intc_cpu_limit(void)
         NULL,
     };
     QTestState *qts = mmix_intc_start(64);
-    uint64_t expected_stack =
-        MMIX_INITIAL_STACK_BASE + 63 * MMIX_INITIAL_STACK_STRIDE;
+    uint64_t expected_stack;
     int wait_status;
 
     response = qtest_qmp(
@@ -425,7 +424,10 @@ static void test_mmix_intc_cpu_limit(void)
         "{ 'execute': 'qom-get', "
         "  'arguments': { 'path': '/machine/cpu[63]', "
         "                 'property': 'initial-stack' } }");
-    g_assert_cmphex(qdict_get_int(response, "return"), ==, expected_stack);
+    expected_stack = qdict_get_int(response, "return");
+    g_assert_cmphex(expected_stack % (8 * KiB), ==, 0);
+    g_assert_cmphex(expected_stack + MMIX_INITIAL_STACK_SIZE, <=,
+                    512 * MiB);
     qtest_writeq(qts, expected_stack, UINT64_C(0x0123456789abcdef));
     g_assert_cmphex(qtest_readq(qts, expected_stack), ==,
                     UINT64_C(0x0123456789abcdef));

@@ -14,8 +14,7 @@
 #define MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE 0x0001000018000000ULL
 #define MMIX_VIRT_DEFAULT_RAM_SIZE (512 * MiB)
 #define MMIX_VIRT_MIN_RAM_SIZE (128 * MiB)
-#define MMIX_VIRT_INITIAL_STACK_BASE 0x00010000ULL
-#define MMIX_VIRT_INITIAL_STACK_SIZE (64 * 0x8000ULL)
+#define MMIX_VIRT_INITIAL_STACK_SIZE 0x8000ULL
 
 #define MMIX_VIRT_FRAMEBUFFER_WIDTH 1024
 #define MMIX_VIRT_FRAMEBUFFER_HEIGHT 768
@@ -50,6 +49,19 @@ static uint64_t mmix_framebuffer_base(QTestState *qts)
 {
     return qtest_readq(
         qts, mmix_framebuffer_reg(MMIX_VIRT_FRAMEBUFFER_REG_BASE));
+}
+
+static uint64_t mmix_initial_stack(QTestState *qts, unsigned int cpu)
+{
+    g_autofree char *path = g_strdup_printf("/machine/cpu[%u]", cpu);
+    g_autoptr(QDict) response = qtest_qmp(
+        qts,
+        "{ 'execute': 'qom-get',"
+        "  'arguments': { 'path': %s,"
+        "                 'property': 'initial-stack' } }",
+        path);
+
+    return qdict_get_int(response, "return");
 }
 
 static uint64_t mmix_framebuffer_pixel_addr(QTestState *qts,
@@ -202,6 +214,7 @@ static void mmix_framebuffer_assert_placement(const char *memory,
         g_strdup("-machine virt");
     QTestState *qts = qtest_init(args);
     uint64_t base = mmix_framebuffer_base(qts);
+    uint64_t stack = mmix_initial_stack(qts, 0);
 
     g_assert_cmphex(base, ==, ram_size - MMIX_VIRT_FRAMEBUFFER_SIZE);
     g_assert_cmphex(base % (8 * KiB), ==, 0);
@@ -209,8 +222,8 @@ static void mmix_framebuffer_assert_placement(const char *memory,
                         qts, mmix_framebuffer_reg(
                                  MMIX_VIRT_FRAMEBUFFER_REG_SIZE)), ==,
                     MMIX_VIRT_FRAMEBUFFER_SIZE);
-    g_assert_cmphex(MMIX_VIRT_INITIAL_STACK_BASE +
-                    MMIX_VIRT_INITIAL_STACK_SIZE, <=, base);
+    g_assert_cmphex(stack % (8 * KiB), ==, 0);
+    g_assert_cmphex(stack + MMIX_VIRT_INITIAL_STACK_SIZE, <=, base);
 
     qtest_quit(qts);
 }
@@ -271,15 +284,15 @@ static void test_mmix_framebuffer_memory_and_flush(void)
     const uint8_t last_pixel[4] = { 0, 0xab, 0xcd, 0xef };
     const uint8_t stack_value[4] = { 0xde, 0xad, 0xbe, 0xef };
     uint64_t base = mmix_framebuffer_base(qts);
+    uint64_t stack = mmix_initial_stack(qts, 0);
     uint8_t actual[4];
 
-    qtest_memwrite(qts, MMIX_VIRT_INITIAL_STACK_BASE, stack_value,
-                   sizeof(stack_value));
+    qtest_memwrite(qts, stack, stack_value, sizeof(stack_value));
     qtest_memwrite(qts, base, first_pixel,
                    sizeof(first_pixel));
     qtest_memread(qts, base, actual, sizeof(actual));
     g_assert_cmpmem(actual, sizeof(actual), first_pixel, sizeof(first_pixel));
-    qtest_memread(qts, MMIX_VIRT_INITIAL_STACK_BASE, actual, sizeof(actual));
+    qtest_memread(qts, stack, actual, sizeof(actual));
     g_assert_cmpmem(actual, sizeof(actual), stack_value, sizeof(stack_value));
 
     qtest_memwrite(qts,

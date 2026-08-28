@@ -57,6 +57,22 @@ static MMIXRAMReservationRequest metadata_request(void)
     };
 }
 
+static MMIXRAMReservationRequest stack_request(unsigned int cpu,
+                                                const char *name)
+{
+    return (MMIXRAMReservationRequest) {
+        .owner = "mmix-cpu",
+        .name = name,
+        .stable_id = cpu,
+        .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+        .ownership_class = MMIX_RAM_OWNERSHIP_CPU_BOOTSTRAP,
+        .lifetime = MMIX_RAM_LIFETIME_UNTIL_GUEST_RELEASE,
+        .placement_class = MMIX_RAM_PLACEMENT_CPU_BOOTSTRAP,
+        .size = 32 * KiB,
+        .alignment = 8 * KiB,
+    };
+}
+
 static void assert_range(const MMIXPhysRange *range, uint64_t start,
                          uint64_t end)
 {
@@ -170,7 +186,10 @@ static void assert_failed_rebuild_preserves_plan(
 
 static void test_failure_is_atomic(void)
 {
-    MMIXRAMReservationRequest initial = framebuffer_request();
+    MMIXRAMReservationRequest initial[] = {
+        framebuffer_request(),
+        stack_request(0, "initial-stack-0"),
+    };
     MMIXKernelLoadInfo initial_info = {
         .image_type = MMIX_KERNEL_IMAGE_ELF,
     };
@@ -195,10 +214,13 @@ static void test_failure_is_atomic(void)
         framebuffer_request(),
     };
     MMIXBootPlan *plan = NULL;
+    MMIXPhysRange initial_stack;
 
     g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, "good.elf",
-                                       &initial_info, &initial, 1, &plan,
+                                       &initial_info, initial,
+                                       ARRAY_SIZE(initial), &plan,
                                        &error_abort));
+    initial_stack = mmix_boot_plan_reservation(plan, 1)->content;
     assert_failed_rebuild_preserves_plan(&plan, content_overlap,
                                          ARRAY_SIZE(content_overlap),
                                          "overlaps another fixed content");
@@ -210,6 +232,9 @@ static void test_failure_is_atomic(void)
     assert_failed_rebuild_preserves_plan(&plan, exhausted,
                                          ARRAY_SIZE(exhausted),
                                          "does not fit in free RAM");
+    g_assert_cmpmem(&mmix_boot_plan_reservation(plan, 1)->content,
+                    sizeof(initial_stack), &initial_stack,
+                    sizeof(initial_stack));
     mmix_boot_plan_free(plan);
 }
 

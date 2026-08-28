@@ -10,6 +10,12 @@
 #include "qemu/units.h"
 #include "qobject/qdict.h"
 
+#define MMIX_DEFAULT_RAM_SIZE (512 * MiB)
+#define MMIX_INITIAL_STACK_SIZE (32 * KiB)
+#define MMIX_INITIAL_STACK_ALIGN (8 * KiB)
+#define MMIX_FRAMEBUFFER_CONTROL_BASE UINT64_C(0x0001000018000000)
+#define MMIX_FRAMEBUFFER_REG_BASE 0x20
+
 typedef struct MMIXRAMAcceptedCase {
     const char *value;
     uint64_t expected;
@@ -188,6 +194,76 @@ static void test_mmix_ram_survives_reset(void)
     qtest_system_reset(qts);
     qtest_memread(qts, 0x10000000, actual, sizeof(actual));
     g_assert_cmpmem(actual, sizeof(actual), pattern, sizeof(pattern));
+    qtest_quit(qts);
+}
+
+static uint64_t mmix_cpu_initial_stack(QTestState *qts, unsigned int cpu)
+{
+    g_autofree char *path = g_strdup_printf("/machine/cpu[%u]", cpu);
+    g_autoptr(QDict) response = qtest_qmp(
+        qts,
+        "{ 'execute': 'qom-get',"
+        "  'arguments': { 'path': %s,"
+        "                 'property': 'initial-stack' } }",
+        path);
+
+    return qdict_get_int(response, "return");
+}
+
+static uint64_t mmix_framebuffer_base(QTestState *qts)
+{
+    return qtest_readq(qts, MMIX_FRAMEBUFFER_CONTROL_BASE +
+                       MMIX_FRAMEBUFFER_REG_BASE);
+}
+
+static bool mmix_test_ranges_overlap(uint64_t left, uint64_t left_size,
+                                     uint64_t right, uint64_t right_size)
+{
+    return left < right + right_size && right < left + left_size;
+}
+
+static void test_mmix_initial_stack_single_cpu(void)
+{
+    QTestState *qts = qtest_init("-machine virt");
+    uint64_t stack = mmix_cpu_initial_stack(qts, 0);
+    uint64_t framebuffer = mmix_framebuffer_base(qts);
+
+    g_assert_cmphex(stack % MMIX_INITIAL_STACK_ALIGN, ==, 0);
+    g_assert_cmphex(stack + MMIX_INITIAL_STACK_SIZE, <=, framebuffer);
+    qtest_writeq(qts, stack, UINT64_C(0x1122334455667788));
+    qtest_writeq(qts, stack + MMIX_INITIAL_STACK_SIZE - sizeof(uint64_t),
+                 UINT64_C(0x8877665544332211));
+    qtest_system_reset(qts);
+    g_assert_cmphex(mmix_cpu_initial_stack(qts, 0), ==, stack);
+    g_assert_cmphex(qtest_readq(qts, stack), ==, 0);
+    g_assert_cmphex(qtest_readq(
+                        qts, stack + MMIX_INITIAL_STACK_SIZE -
+                             sizeof(uint64_t)), ==, 0);
+    qtest_quit(qts);
+}
+
+static void test_mmix_initial_stack_cpu_limit(void)
+{
+    uint64_t stacks[64];
+    QTestState *qts = qtest_init("-machine virt -smp 64");
+    uint64_t framebuffer = mmix_framebuffer_base(qts);
+    unsigned int i;
+    unsigned int j;
+
+    for (i = 0; i < ARRAY_SIZE(stacks); i++) {
+        stacks[i] = mmix_cpu_initial_stack(qts, i);
+        g_assert_cmphex(stacks[i] % MMIX_INITIAL_STACK_ALIGN, ==, 0);
+        g_assert_cmphex(stacks[i] + MMIX_INITIAL_STACK_SIZE, <=,
+                        MMIX_DEFAULT_RAM_SIZE);
+        g_assert_false(mmix_test_ranges_overlap(
+            stacks[i], MMIX_INITIAL_STACK_SIZE, framebuffer,
+            MMIX_DEFAULT_RAM_SIZE - framebuffer));
+        for (j = 0; j < i; j++) {
+            g_assert_false(mmix_test_ranges_overlap(
+                stacks[i], MMIX_INITIAL_STACK_SIZE, stacks[j],
+                MMIX_INITIAL_STACK_SIZE));
+        }
+    }
     qtest_quit(qts);
 }
 
@@ -432,6 +508,10 @@ int main(int argc, char **argv)
     qtest_add_func("/mmix/ram/contiguous/crosses-4g",
                    test_mmix_ram_crosses_4g);
     qtest_add_func("/mmix/ram/reset/cold", test_mmix_ram_survives_reset);
+    qtest_add_func("/mmix/ram/initial-stack/single-cpu",
+                   test_mmix_initial_stack_single_cpu);
+    qtest_add_func("/mmix/ram/initial-stack/cpu-limit",
+                   test_mmix_initial_stack_cpu_limit);
     qtest_add_func("/mmix/translation/flat-identity",
                    test_mmix_flat_translation_identity);
     qtest_add_func("/mmix/translation/negative-alias",
