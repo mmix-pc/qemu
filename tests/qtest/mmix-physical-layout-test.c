@@ -1,5 +1,5 @@
 /*
- * MMIX virt RAM configuration tests
+ * MMIX virt replacement physical layout tests
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -21,6 +21,11 @@ typedef struct MMIXRAMRejectedCase {
     const char *value;
     const char *diagnostic;
 } MMIXRAMRejectedCase;
+
+typedef struct MMIXRAMEndpointCase {
+    const char *value;
+    uint64_t size;
+} MMIXRAMEndpointCase;
 
 static void test_mmix_ram_accepted(gconstpointer opaque)
 {
@@ -93,6 +98,22 @@ static void mmix_assert_ram_bytes(QTestState *qts, uint64_t address,
     qtest_memwrite(qts, address, expected, size);
     qtest_memread(qts, address, actual, size);
     g_assert_cmpmem(actual, size, expected, size);
+}
+
+static void test_mmix_ram_exact_endpoint(gconstpointer opaque)
+{
+    const MMIXRAMEndpointCase *test = opaque;
+    const uint8_t pattern[] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    };
+    QTestState *qts = qtest_initf("-machine virt -m %s", test->value);
+
+    mmix_assert_ram_bytes(qts, 0, pattern, sizeof(pattern));
+    mmix_assert_ram_bytes(qts, test->size - sizeof(pattern), pattern,
+                          sizeof(pattern));
+    qtest_writeb(qts, test->size, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, test->size), !=, 0xa5);
+    qtest_quit(qts);
 }
 
 static void test_mmix_ram_contiguous_default(void)
@@ -314,12 +335,20 @@ int main(int argc, char **argv)
         { "512M", "-numa", "node,mem=512M",
           "NUMA is not supported by this machine-type" },
     };
+    static const MMIXRAMEndpointCase endpoints[] = {
+        { "128M", 128 * MiB },
+        { "512M", 512 * MiB },
+        { "8G", 8 * GiB },
+    };
     static const char * const accepted_names[] = {
         "default", "minimum", "aligned-boundary", "normalized", "above-4g",
         "maximum",
     };
     static const char * const rejected_names[] = {
         "below-minimum", "above-maximum", "maxmem", "slots", "numa",
+    };
+    static const char * const endpoint_names[] = {
+        "minimum", "default", "above-4g",
     };
     unsigned int i;
 
@@ -336,6 +365,13 @@ int main(int argc, char **argv)
             g_strdup_printf("/mmix/ram/rejected/%s", rejected_names[i]);
 
         qtest_add_data_func(path, &rejected[i], test_mmix_ram_rejected);
+    }
+    for (i = 0; i < ARRAY_SIZE(endpoints); i++) {
+        g_autofree char *path =
+            g_strdup_printf("/mmix/ram/endpoint/%s", endpoint_names[i]);
+
+        qtest_add_data_func(path, &endpoints[i],
+                            test_mmix_ram_exact_endpoint);
     }
     qtest_add_func("/mmix/ram/contiguous/default",
                    test_mmix_ram_contiguous_default);

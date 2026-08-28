@@ -45,6 +45,7 @@ static void test_layout_constants(void)
     };
     const MMIXPhysRange *ram =
         &mmix_virt_phys_regions[MMIX_VIRT_PHYS_RAM];
+    MMIXPhysRange maximum_ram;
     unsigned int i;
     unsigned int j;
 
@@ -55,6 +56,12 @@ static void test_layout_constants(void)
     g_assert_cmphex(ram->start, ==, 0);
     g_assert_cmphex(ram->end, ==, MMIX_VIRT_RAM_PHYS_LIMIT);
     g_assert_cmphex(MMIX_VIRT_RAM_MAX_SIZE, <, ram->end);
+    g_assert_true(mmix_phys_range_init(&maximum_ram, 0,
+                                       MMIX_VIRT_RAM_MAX_SIZE));
+    g_assert_true(mmix_phys_range_contains_addr(
+        &maximum_ram, MMIX_VIRT_RAM_MAX_SIZE - 1));
+    g_assert_false(mmix_phys_range_contains_addr(
+        &maximum_ram, MMIX_VIRT_RAM_MAX_SIZE));
 
     for (i = 0; i < MMIX_VIRT_PHYS_REGION_COUNT; i++) {
         const MMIXPhysRange *range = &mmix_virt_phys_regions[i];
