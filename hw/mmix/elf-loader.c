@@ -102,7 +102,7 @@ static void mmix_elf_read_phdr(const uint8_t *data, uint64_t table_offset,
 
 static bool mmix_validate_elf_load_ranges(
     const char *filename, const Elf64_Ehdr *ehdr,
-    const MMIXPhysicalRAMLayout *ram_layout, Error **errp)
+    const MMIXPhysicalRAM *ram, Error **errp)
 {
     g_autoptr(GMappedFile) mapped = NULL;
     g_autoptr(GError) gerr = NULL;
@@ -162,19 +162,11 @@ static bool mmix_validate_elf_load_ranges(
         if (memory_size == 0) {
             continue;
         }
-        if (!mmix_physical_ram_contains(ram_layout, address, memory_size)) {
+        if (!mmix_physical_ram_contains(ram, address, memory_size)) {
             error_setg(errp, "MMIX ELF PT_LOAD segment %u in '%s' targets "
                        "non-RAM physical range at 0x%" HWADDR_PRIx
                        " with size 0x%" PRIx64, i, filename, address,
                        memory_size);
-            return false;
-        }
-        if (!mmix_physical_ram_range_contains(&ram_layout->low, address,
-                                              memory_size) ||
-            address >= MMIX_POOL_SEGMENT_PHYS_BASE ||
-            memory_size > MMIX_POOL_SEGMENT_PHYS_BASE - address) {
-            error_setg(errp, "MMIX ELF kernel '%s' loads outside Low RAM",
-                       filename);
             return false;
         }
     }
@@ -399,20 +391,6 @@ static bool mmix_load_elf_segments(const char *filename, uint64_t *entry,
     return true;
 }
 
-static bool mmix_validate_elf_low_ram_range(const char *filename,
-                                            uint64_t lowaddr,
-                                            uint64_t highaddr,
-                                            Error **errp)
-{
-    if (lowaddr < MMIX_POOL_SEGMENT_PHYS_BASE &&
-        highaddr <= MMIX_POOL_SEGMENT_PHYS_BASE) {
-        return true;
-    }
-
-    error_setg(errp, "MMIX ELF kernel '%s' loads outside Low RAM", filename);
-    return false;
-}
-
 static void mmix_apply_elf_load_info(MMIXKernelLoadInfo *info, uint64_t entry)
 {
     info->entry = entry;
@@ -421,7 +399,7 @@ static void mmix_apply_elf_load_info(MMIXKernelLoadInfo *info, uint64_t entry)
 }
 
 ssize_t mmix_load_elf(const char *filename,
-                      const MMIXPhysicalRAMLayout *ram_layout,
+                      const MMIXPhysicalRAM *ram,
                       MMIXKernelLoadInfo *info, Error **errp)
 {
     Elf64_Ehdr ehdr;
@@ -433,12 +411,7 @@ ssize_t mmix_load_elf(const char *filename,
     if (!mmix_validate_elf_header(filename, &ehdr, errp)) {
         return -1;
     }
-    if (!mmix_physical_ram_range_contains(&ram_layout->low, 0,
-                                          MMIX_POOL_SEGMENT_PHYS_BASE)) {
-        error_setg(errp, "MMIX ELF Low RAM window does not fit in machine RAM");
-        return -1;
-    }
-    if (!mmix_validate_elf_load_ranges(filename, &ehdr, ram_layout, errp)) {
+    if (!mmix_validate_elf_load_ranges(filename, &ehdr, ram, errp)) {
         return -1;
     }
     if (!mmix_load_elf_registers(filename, &ehdr, info, errp)) {
@@ -448,10 +421,6 @@ ssize_t mmix_load_elf(const char *filename,
                                 &loaded_size, errp)) {
         return -1;
     }
-    if (!mmix_validate_elf_low_ram_range(filename, lowaddr, highaddr, errp)) {
-        return -1;
-    }
-
     mmix_apply_elf_load_info(info, entry);
     return loaded_size;
 }

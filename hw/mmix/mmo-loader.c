@@ -30,6 +30,17 @@
 #define MMIX_MMO_TETRA_SIZE 4
 #define MMIX_MMO_PREAMBLE_SIZE MMIX_MMO_TETRA_SIZE
 #define MMIX_MMO_GLOBAL_REGS 256
+#define MMIX_MMO_POOL_BASE UINT64_C(0x4000000000000000)
+#define MMIX_MMO_POOL_PHYS_BASE UINT64_C(0x0000000006000000)
+#define MMIX_MMO_POOL_SIZE UINT64_C(0x0000000000800000)
+#define MMIX_MMO_DATA_BASE UINT64_C(0x2000000000000000)
+#define MMIX_MMO_DATA_PHYS_BASE UINT64_C(0x0000000006800000)
+#define MMIX_MMO_DATA_SIZE UINT64_C(0x0000000004000000)
+#define MMIX_MMO_STACK_BASE UINT64_C(0x6000000000000000)
+#define MMIX_MMO_STACK_PHYS_BASE UINT64_C(0x000000000a800000)
+#define MMIX_MMO_STACK_SIZE UINT64_C(0x0000000004000000)
+#define MMIX_MMO_POSITIVE_HIGH_BASE UINT64_C(0x2000000000000000)
+#define MMIX_MMO_NEGATIVE_BASE UINT64_C(0x8000000000000000)
 
 /*
  * Keep raw -kernel loading unchanged while separating MMO input from raw
@@ -40,7 +51,7 @@
 typedef struct MMIXMMOLoader {
     FILE *file;
     const char *filename;
-    const MMIXPhysicalRAMLayout *ram_layout;
+    const MMIXPhysicalRAM *ram;
     uint64_t cur_loc;
     uint64_t tetra_index;
     uint64_t pending_tetra_index;
@@ -49,6 +60,20 @@ typedef struct MMIXMMOLoader {
     bool validate_only;
     uint8_t pending_tetra[MMIX_MMO_TETRA_SIZE];
 } MMIXMMOLoader;
+
+static bool mmix_mmo_segment_to_phys(uint64_t address, uint64_t base,
+                                     hwaddr phys_base, uint64_t size,
+                                     hwaddr *physical)
+{
+    uint64_t offset = address - base;
+
+    if (address < base || offset >= size) {
+        return false;
+    }
+
+    *physical = phys_base + offset;
+    return true;
+}
 
 static bool mmix_read_mmo_preamble(const char *filename,
                                    uint8_t preamble[MMIX_MMO_PREAMBLE_SIZE],
@@ -311,16 +336,23 @@ static bool mmix_mmo_translate_address(MMIXMMOLoader *loader, uint64_t address,
                                        const char *name, hwaddr *physical,
                                        Error **errp)
 {
-    if (mmix_bare_data_segment_to_phys(address, physical)) {
+    if (mmix_mmo_segment_to_phys(address, MMIX_MMO_DATA_BASE,
+                                 MMIX_MMO_DATA_PHYS_BASE,
+                                 MMIX_MMO_DATA_SIZE, physical)) {
         return true;
     }
-    if (mmix_bare_pool_segment_to_phys(address, physical)) {
+    if (mmix_mmo_segment_to_phys(address, MMIX_MMO_POOL_BASE,
+                                 MMIX_MMO_POOL_PHYS_BASE,
+                                 MMIX_MMO_POOL_SIZE, physical)) {
         return true;
     }
-    if (mmix_bare_stack_segment_to_phys(address, physical)) {
+    if (mmix_mmo_segment_to_phys(address, MMIX_MMO_STACK_BASE,
+                                 MMIX_MMO_STACK_PHYS_BASE,
+                                 MMIX_MMO_STACK_SIZE, physical)) {
         return true;
     }
-    if (mmix_bare_unsupported_high_segment(address)) {
+    if (address >= MMIX_MMO_POSITIVE_HIGH_BASE &&
+        address < MMIX_MMO_NEGATIVE_BASE) {
         error_setg(errp, "unsupported MMIX .mmo high-segment %s address 0x%"
                    HWADDR_PRIx " at tetra %" PRIu64, name, address,
                    loader->tetra_index);
@@ -348,7 +380,7 @@ static bool mmix_mmo_check_address(MMIXMMOLoader *loader, uint64_t address,
     if (!mmix_mmo_translate_address(loader, address, name, physical, errp)) {
         return false;
     }
-    if (!mmix_physical_ram_contains(loader->ram_layout, *physical, size)) {
+    if (!mmix_physical_ram_contains(loader->ram, *physical, size)) {
         error_setg(errp, "MMIX .mmo %s target 0x%" HWADDR_PRIx
                    " maps to a non-RAM physical range", name, address);
         return false;
@@ -615,7 +647,7 @@ static bool mmix_mmo_read_symbol_tail(MMIXMMOLoader *loader, Error **errp)
 }
 
 static ssize_t mmix_load_mmo_pass(const char *filename,
-                                  const MMIXPhysicalRAMLayout *ram_layout,
+                                  const MMIXPhysicalRAM *ram,
                                   MMIXKernelLoadInfo *info, bool validate_only,
                                   Error **errp)
 {
@@ -623,7 +655,7 @@ static ssize_t mmix_load_mmo_pass(const char *filename,
     Error *local_err = NULL;
     MMIXMMOLoader loader = {
         .filename = filename,
-        .ram_layout = ram_layout,
+        .ram = ram,
         .validate_only = validate_only,
     };
 
@@ -739,15 +771,15 @@ fail:
 }
 
 ssize_t mmix_load_mmo(const char *filename,
-                      const MMIXPhysicalRAMLayout *ram_layout,
+                      const MMIXPhysicalRAM *ram,
                       MMIXKernelLoadInfo *info, Error **errp)
 {
     MMIXKernelLoadInfo validated_info = { 0 };
 
-    if (mmix_load_mmo_pass(filename, ram_layout, &validated_info, true,
+    if (mmix_load_mmo_pass(filename, ram, &validated_info, true,
                            errp) < 0) {
         return -1;
     }
 
-    return mmix_load_mmo_pass(filename, ram_layout, info, false, errp);
+    return mmix_load_mmo_pass(filename, ram, info, false, errp);
 }

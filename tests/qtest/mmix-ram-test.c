@@ -85,6 +85,130 @@ static void test_mmix_ram_rejected(gconstpointer opaque)
     g_assert_nonnull(strstr(stderr_text, test->diagnostic));
 }
 
+static void mmix_assert_ram_bytes(QTestState *qts, uint64_t address,
+                                  const uint8_t *expected, size_t size)
+{
+    g_autofree uint8_t *actual = g_malloc(size);
+
+    qtest_memwrite(qts, address, expected, size);
+    qtest_memread(qts, address, actual, size);
+    g_assert_cmpmem(actual, size, expected, size);
+}
+
+static void test_mmix_ram_contiguous_default(void)
+{
+    static const uint64_t legacy_addresses[] = {
+        0x06000000,
+        0x06800000,
+        0x0a800000,
+        0x0e800000,
+        0x0f000000,
+        0x10000000,
+        0x10001000,
+        0x10002000,
+        0x10003000,
+        0x10004000,
+        0x10006000,
+    };
+    const uint8_t pattern[] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    };
+    QTestState *qts = qtest_init("-machine virt");
+    unsigned int i;
+
+    mmix_assert_ram_bytes(qts, 0, pattern, sizeof(pattern));
+    for (i = 0; i < ARRAY_SIZE(legacy_addresses); i++) {
+        mmix_assert_ram_bytes(qts, legacy_addresses[i], pattern,
+                              sizeof(pattern));
+    }
+    mmix_assert_ram_bytes(qts, 512 * MiB - sizeof(pattern), pattern,
+                          sizeof(pattern));
+
+    qtest_writeb(qts, 512 * MiB, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, 512 * MiB), !=, 0xa5);
+    qtest_quit(qts);
+}
+
+static void test_mmix_ram_crosses_4g(void)
+{
+    const uint8_t pattern[] = {
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+        0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01,
+    };
+    const uint64_t ram_size = 8 * GiB;
+    QTestState *qts = qtest_init("-machine virt -m 8G");
+
+    mmix_assert_ram_bytes(qts, 4 * GiB - sizeof(pattern) / 2,
+                          pattern, sizeof(pattern));
+    mmix_assert_ram_bytes(qts, ram_size - sizeof(pattern), pattern,
+                          sizeof(pattern));
+    qtest_writeb(qts, ram_size, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, ram_size), !=, 0xa5);
+    qtest_quit(qts);
+}
+
+static void test_mmix_ram_survives_reset(void)
+{
+    const uint8_t pattern[] = {
+        0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
+    };
+    uint8_t actual[sizeof(pattern)];
+    QTestState *qts = qtest_init("-machine virt");
+
+    qtest_memwrite(qts, 0x10000000, pattern, sizeof(pattern));
+    qtest_system_reset(qts);
+    qtest_memread(qts, 0x10000000, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), pattern, sizeof(pattern));
+    qtest_quit(qts);
+}
+
+static void test_mmix_flat_translation_identity(void)
+{
+    static const uint64_t addresses[] = {
+        UINT64_C(0x2000000000000000),
+        UINT64_C(0x4000000000000000),
+        UINT64_C(0x6000000000000000),
+    };
+    QTestState *qts = qtest_init("-machine virt");
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(addresses); i++) {
+        g_autofree char *expected =
+            g_strdup_printf("gpa: 0x%016" PRIx64, addresses[i]);
+        g_autofree char *response =
+            qtest_hmp(qts, "gva2gpa 0x%016" PRIx64, addresses[i]);
+
+        g_assert_nonnull(strstr(response, expected));
+    }
+    qtest_quit(qts);
+}
+
+static void test_mmix_kernel_rejected(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+    const char *argv[] = {
+        qtest_qemu_binary(NULL),
+        "-machine", "virt",
+        "-kernel", "ignored.img",
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", "none",
+        NULL,
+    };
+    int wait_status;
+
+    g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
+                               G_SPAWN_STDOUT_TO_DEV_NULL,
+                               NULL, NULL, NULL, &stderr_text,
+                               &wait_status, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(wait_status, !=, 0);
+    g_assert_nonnull(strstr(stderr_text,
+                           "MMIX virt -kernel loading is unavailable during "
+                           "the physical layout transition"));
+}
+
 int main(int argc, char **argv)
 {
     static const MMIXRAMAcceptedCase accepted[] = {
@@ -128,6 +252,14 @@ int main(int argc, char **argv)
 
         qtest_add_data_func(path, &rejected[i], test_mmix_ram_rejected);
     }
+    qtest_add_func("/mmix/ram/contiguous/default",
+                   test_mmix_ram_contiguous_default);
+    qtest_add_func("/mmix/ram/contiguous/crosses-4g",
+                   test_mmix_ram_crosses_4g);
+    qtest_add_func("/mmix/ram/reset/cold", test_mmix_ram_survives_reset);
+    qtest_add_func("/mmix/translation/flat-identity",
+                   test_mmix_flat_translation_identity);
+    qtest_add_func("/mmix/ram/kernel/rejected", test_mmix_kernel_rejected);
 
     return g_test_run();
 }

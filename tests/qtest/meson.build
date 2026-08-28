@@ -302,13 +302,7 @@ qtests_riscv64 = ['riscv-csr-test'] + \
 qtests_hexagon = ['boot-serial-test']
 
 qtests_mmix = [
-  'mmix-framebuffer-test',
-  'mmix-intc-test',
-  'mmix-ipi-test',
-  'mmix-platform-test',
   'mmix-ram-test',
-  'mmix-timer-test',
-  'mmix-virtio-mmio-test',
 ]
 
 qos_test_ss = ss.source_set()

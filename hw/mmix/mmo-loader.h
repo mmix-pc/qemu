@@ -7,7 +7,7 @@
 bool mmix_kernel_is_mmo(const char *filename, Error **errp);
 
 ssize_t mmix_load_mmo(const char *filename,
-                      const MMIXPhysicalRAMLayout *ram_layout,
+                      const MMIXPhysicalRAM *ram,
                       MMIXKernelLoadInfo *info, Error **errp);
 
 #endif

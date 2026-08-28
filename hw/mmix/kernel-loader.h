@@ -28,7 +28,7 @@ typedef struct MMIXKernelLoadInfo {
 } MMIXKernelLoadInfo;
 
 ssize_t mmix_load_kernel(const char *filename,
-                         const MMIXPhysicalRAMLayout *ram_layout,
+                         const MMIXPhysicalRAM *ram,
                          MMIXKernelLoadInfo *info, Error **errp);
 
 #endif

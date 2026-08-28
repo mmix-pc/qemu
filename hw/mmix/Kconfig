@@ -2,7 +2,3 @@ config MMIX_VIRT
     bool
     default y
     depends on MMIX
-    select FRAMEBUFFER
-    select SERIAL_MM
-    select VIRTIO_BLK
-    select VIRTIO_MMIO
