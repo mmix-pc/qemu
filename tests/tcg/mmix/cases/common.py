@@ -270,7 +270,9 @@ def parse_bootinfo(data):
     return dict(zip(MMIX_BOOTINFO_FIELDS, values))
 
 
-def expected_bootinfo(ram_size=256 * 1024 * 1024):
+def expected_bootinfo(ram_size=512 * 1024 * 1024):
+    high_ram_size = max(0, ram_size - 256 * 1024 * 1024)
+
     return {
         "magic": MMIX_BOOTINFO_MAGIC,
         "version": MMIX_BOOTINFO_VERSION,
@@ -317,8 +319,8 @@ def expected_bootinfo(ram_size=256 * 1024 * 1024):
         "ipi_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0],
         "ipi_target_count": 1,
         "ipi_request_mask": RQ_IPI,
-        "high_ram_base": 0,
-        "high_ram_size": 0,
+        "high_ram_base": 0x20000000 if high_ram_size else 0,
+        "high_ram_size": high_ram_size,
     }
 
 

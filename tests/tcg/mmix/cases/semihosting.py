@@ -624,7 +624,7 @@ SEMIHOSTING_TESTS = [
         qemu_args=("-semihosting-config", "enable=on,arg=prog"),
     ),
     MMIXTest(
-        "semihosting-argv-minimal-pool-ram",
+        "semihosting-argv-minimum-machine-ram",
         argv_layout_program(
             [(R3, 0), (R4, 1)],
             [(R10, R3, 0), (R11, R3, 4)],
@@ -640,7 +640,7 @@ SEMIHOSTING_TESTS = [
             R10: ord("p"),
             R11: 0,
         },
-        qemu_args=("-m", "97M",
+        qemu_args=("-m", "128M",
                    "-semihosting-config", "enable=on,arg=prog"),
     ),
     MMIXTest(

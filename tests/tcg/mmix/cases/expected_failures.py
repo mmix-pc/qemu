@@ -151,17 +151,9 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
 
 SEMIHOSTING_PROCESS_FAILURE_TESTS = [
     MMIXProcessFailure(
-        "semihosting-argv-block-outside-ram",
+        "semihosting-argv-below-minimum-ram",
         halt(),
-        ("-m", "16M", "-semihosting-config", "enable=on,arg=prog"),
-        ("could not set up MMIX semihosting arguments",
-         "MMIX semihosting argument block does not fit in machine RAM"),
-    ),
-    MMIXProcessFailure(
-        "semihosting-argv-pool-backing-outside-ram",
-        halt(),
-        ("-m", "64M", "-semihosting-config", "enable=on,arg=prog"),
-        ("could not set up MMIX semihosting arguments",
-         "MMIX semihosting argument block does not fit in machine RAM"),
+        ("-m", "127M", "-semihosting-config", "enable=on,arg=prog"),
+        ("MMIX virt RAM size 0x7f00000 is below the minimum 0x8000000",),
     ),
 ]

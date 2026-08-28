@@ -493,23 +493,6 @@ ELF_LOADER_TESTS = [
 ]
 
 
-def large_elf_argc_argv_qemu_args():
-    args = [
-        "-m",
-        "97M",
-        "-machine",
-        "elf-startup-abi=argc-argv",
-    ]
-
-    for index in range(11):
-        config = f"arg={index:02d}{'x' * 99998}"
-        if index == 0:
-            config = f"enable=on,{config}"
-        args.extend(("-semihosting-config", config))
-
-    return tuple(args)
-
-
 ELF_STARTUP_PROCESS_FAILURE_TESTS = [
     MMIXProcessFailure(
         "elf-argc-argv-semihosting-disabled",
@@ -540,29 +523,17 @@ ELF_STARTUP_PROCESS_FAILURE_TESTS = [
         ),
     ),
     MMIXProcessFailure(
-        "elf-argc-argv-block-outside-ram",
+        "elf-argc-argv-below-minimum-ram",
         elf64_image(0, halt()),
         (
             "-m",
-            "96M",
+            "127M",
             "-machine",
             "elf-startup-abi=argc-argv",
             "-semihosting-config",
             "enable=on,arg=prog",
         ),
-        (
-            "could not set up MMIX semihosting arguments",
-            "MMIX semihosting argument block does not fit in machine RAM",
-        ),
-    ),
-    MMIXProcessFailure(
-        "elf-argc-argv-block-exceeds-pool-backing",
-        elf64_image(0, halt()),
-        large_elf_argc_argv_qemu_args(),
-        (
-            "could not set up MMIX semihosting arguments",
-            "MMIX semihosting argument block does not fit in machine RAM",
-        ),
+        ("MMIX virt RAM size 0x7f00000 is below the minimum 0x8000000",),
     ),
 ]
 

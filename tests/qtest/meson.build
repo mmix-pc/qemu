@@ -306,6 +306,7 @@ qtests_mmix = [
   'mmix-intc-test',
   'mmix-ipi-test',
   'mmix-platform-test',
+  'mmix-ram-test',
   'mmix-timer-test',
   'mmix-virtio-mmio-test',
 ]

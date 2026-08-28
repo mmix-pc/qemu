@@ -591,10 +591,10 @@ static void test_mmix_platform_bootinfo_headless(void)
                     ==, mmix_virt_mmio_base);
     g_assert_cmphex(mmix_bootinfo_read(
                         qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
-                    ==, 0);
+                    ==, 0x20000000);
     g_assert_cmphex(mmix_bootinfo_read(
                         qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
-                    ==, 0);
+                    ==, 256 * MiB);
     for (i = 0; i < ARRAY_SIZE(implemented_device_offsets); i++) {
         g_assert_cmpuint(mmix_bootinfo_read(qts,
                                            implemented_device_offsets[i]),

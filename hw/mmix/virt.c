@@ -24,6 +24,7 @@
 #include "intc.h"
 #include "ipi.h"
 #include "kernel-loader.h"
+#include "physical-layout.h"
 #include "ram-layout.h"
 #include "timer.h"
 #include "virt.h"
@@ -38,6 +39,9 @@ typedef enum MMIXELFStartupABI {
 
 OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
 
+typedef bool (*MMIXCreateDefaultMemdev)(MachineState *machine,
+                                        const char *path, Error **errp);
+
 struct MMIXVirtMachineState {
     MachineState parent_obj;
     MemoryRegion low_ram;
@@ -49,6 +53,8 @@ struct MMIXVirtMachineState {
     MMIXKernelLoadInfo kernel_load_info;
     bool kernel_loaded;
 };
+
+static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
 
 const MemMapEntry mmix_virt_memmap[MMIX_VIRT_MEMMAP_COUNT] = {
     [MMIX_VIRT_LOW_RAM] =      { 0, MMIX_POOL_SEGMENT_PHYS_BASE },
@@ -744,10 +750,61 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     }
 }
 
+static bool mmix_virt_validate_memory(MachineState *machine, Error **errp)
+{
+    uint64_t size = machine->ram_size;
+
+    if (size < MMIX_VIRT_RAM_MIN_SIZE) {
+        error_setg(errp,
+                   "MMIX virt RAM size 0x%" PRIx64
+                   " is below the minimum 0x%" PRIx64,
+                   size, MMIX_VIRT_RAM_MIN_SIZE);
+        return false;
+    }
+    if (size > MMIX_VIRT_RAM_MAX_SIZE) {
+        error_setg(errp,
+                   "MMIX virt RAM size 0x%" PRIx64
+                   " exceeds the maximum 0x%" PRIx64,
+                   size, MMIX_VIRT_RAM_MAX_SIZE);
+        return false;
+    }
+    if (size % MMIX_VIRT_RAM_ALIGN != 0) {
+        error_setg(errp,
+                   "MMIX virt RAM size 0x%" PRIx64
+                   " must be aligned to 0x%x bytes",
+                   size, MMIX_VIRT_RAM_ALIGN);
+        return false;
+    }
+    if (machine->maxram_size != size) {
+        error_setg(errp,
+                   "MMIX virt does not support maxmem 0x%" PRIx64,
+                   machine->maxram_size);
+        return false;
+    }
+    if (machine->ram_slots) {
+        error_setg(errp,
+                   "MMIX virt does not support memory slots 0x%" PRIx64,
+                   machine->ram_slots);
+        return false;
+    }
+
+    return true;
+}
+
+static bool mmix_virt_create_default_memdev(MachineState *machine,
+                                            const char *path, Error **errp)
+{
+    if (!mmix_virt_validate_memory(machine, errp)) {
+        return false;
+    }
+
+    return mmix_parent_create_default_memdev(machine, path, errp);
+}
+
 static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
-    MemoryRegion *sysmem = get_system_memory();
+    MemoryRegion *sysmem;
     DeviceState *framebuffer;
     DeviceState *intc;
     DeviceState *ipi;
@@ -755,12 +812,14 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *virtio_mmio;
     unsigned int i;
 
-    if (!mmix_validate_mmio_layout(&error_fatal) ||
+    if (!mmix_virt_validate_memory(machine, &error_fatal) ||
+        !mmix_validate_mmio_layout(&error_fatal) ||
         !mmix_build_ram_layout(machine, &vms->ram_layout, &error_fatal) ||
         !mmix_validate_initial_stack_layout(&vms->ram_layout, &error_fatal)) {
         return;
     }
 
+    sysmem = get_system_memory();
     mmix_map_ram(vms);
 
     for (i = 0; i < machine->smp.cpus; i++) {
@@ -890,8 +949,10 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     mc->default_cpus = 1;
     mc->min_cpus = 1;
     mc->max_cpus = MMIX_VIRT_MAX_CPUS;
-    mc->default_ram_size = 256 * MiB;
+    mc->default_ram_size = MMIX_VIRT_RAM_DEFAULT_SIZE;
     mc->default_ram_id = "mmix.ram";
+    mmix_parent_create_default_memdev = mc->create_default_memdev;
+    mc->create_default_memdev = mmix_virt_create_default_memdev;
 
     object_class_property_add_str(oc, "elf-startup-abi",
                                   mmix_virt_get_elf_startup_abi,
