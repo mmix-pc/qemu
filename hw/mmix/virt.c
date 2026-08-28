@@ -19,6 +19,7 @@
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
+#include "boot-plan.h"
 #include "framebuffer.h"
 #include "intc.h"
 #include "ipi.h"
@@ -39,6 +40,7 @@ typedef bool (*MMIXCreateDefaultMemdev)(MachineState *machine,
 struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXPhysicalRAM ram;
+    MMIXBootPlan *boot_plan;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
     uint64_t framebuffer_base;
@@ -160,19 +162,18 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms, Error **errp)
             .alignment = MMIX_VIRT_FRAMEBUFFER_ALIGN,
         },
     };
-    MMIXRAMReservationPlan plan = { 0 };
+    const MMIXRAMReservation *framebuffer;
 
-    if (!mmix_ram_reservation_plan(machine->ram_size, requests,
-                                   ARRAY_SIZE(requests), &plan, errp)) {
+    if (!mmix_boot_plan_build(machine->ram_size, NULL, NULL, requests,
+                              ARRAY_SIZE(requests), &vms->boot_plan, errp)) {
         return false;
     }
 
-    vms->framebuffer_base =
-        plan.reservations[MMIX_RAM_REQUEST_FRAMEBUFFER].content.start;
+    framebuffer = mmix_boot_plan_reservation(
+        vms->boot_plan, MMIX_RAM_REQUEST_FRAMEBUFFER);
+    vms->framebuffer_base = framebuffer->content.start;
     vms->framebuffer_size =
-        mmix_phys_range_size(
-            &plan.reservations[MMIX_RAM_REQUEST_FRAMEBUFFER].content);
-    mmix_ram_reservation_plan_clear(&plan);
+        mmix_phys_range_size(&framebuffer->content);
     return true;
 }
 
@@ -354,11 +355,19 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     mc->create_default_memdev = mmix_virt_create_default_memdev;
 }
 
+static void mmix_virt_instance_finalize(Object *obj)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    mmix_boot_plan_free(vms->boot_plan);
+}
+
 static const TypeInfo mmix_virt_machine_typeinfo = {
     .name = TYPE_MMIX_VIRT_MACHINE,
     .parent = TYPE_MACHINE,
     .class_init = mmix_virt_class_init,
     .instance_size = sizeof(MMIXVirtMachineState),
+    .instance_finalize = mmix_virt_instance_finalize,
 };
 
 static void mmix_virt_machine_init_register_types(void)
