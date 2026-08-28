@@ -14,6 +14,7 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
+#include "hw/virtio/virtio-mmio.h"
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
@@ -223,6 +224,25 @@ static void mmix_virt_init(MachineState *machine)
         sysbus_connect_irq(SYS_BUS_DEVICE(timer), i,
                            qdev_get_gpio_in(intc,
                                            MMIX_VIRT_TIMER_IRQ_BASE + i));
+    }
+
+    /*
+     * Realization prepends each bus to QEMU's default-bus search order.
+     * Creating high slots first makes command-line devices fill from slot 0.
+     */
+    for (i = MMIX_VIRT_VIRTIO_MMIO_COUNT; i-- > 0;) {
+        g_autofree char *name = g_strdup_printf("virtio-mmio[%u]", i);
+        DeviceState *virtio_mmio = qdev_new(TYPE_VIRTIO_MMIO);
+
+        object_property_add_child(OBJECT(machine), name, OBJECT(virtio_mmio));
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(virtio_mmio), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(virtio_mmio), 0,
+                        MMIX_VIRT_VIRTIO_MMIO_BASE +
+                        i * MMIX_VIRT_VIRTIO_MMIO_STRIDE);
+        sysbus_connect_irq(SYS_BUS_DEVICE(virtio_mmio), 0,
+                           qdev_get_gpio_in(intc,
+                                            MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE +
+                                            i));
     }
 }
 
