@@ -26,6 +26,7 @@ from lib.qemu import (
     QEMU_SEMIHOSTING_ARGS,
     QEMU_SEMIHOSTING_STDIN_ARGS,
     build_kernel_command,
+    build_smp_elf_loader_command,
     read_log,
     run_kernel,
     run_loader,
@@ -892,7 +893,7 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
          "resuming CPU0 after shared-source retrigger")
 
     cpu0_timer_mask = 1 << test.timer_irq_base
-    write_mmio(intc_enable_address(0), cpu0_timer_mask, width="l")
+    write_mmio(intc_enable_address(0), cpu0_timer_mask)
     set_irq(1)
     wait(1, test.handler_count_offset, 1,
          "retargeting the shared source to CPU1")
@@ -1308,7 +1309,8 @@ def _run_smp_shootdown_protocol(qtest, test):
     write(test.halt_offset, 1)
 
 
-def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
+def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
+                          *, use_loader=False):
     image = workdir / f"{test.name}.elf"
     qtest_path = workdir / socket_name
 
@@ -1320,20 +1322,23 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
     listener.bind(str(qtest_path))
     listener.listen(1)
     listener.settimeout(5)
-    command = build_kernel_command(
-        qemu,
-        image,
-        qemu_args=(
-            *test.qemu_args,
-            "-S",
-            "-qmp",
-            "stdio",
-            "-qtest",
-            f"unix:{qtest_path}",
-            "-qtest-log",
-            "/dev/null",
-        ),
+    qemu_args = (
+        *test.qemu_args,
+        "-S",
+        "-qmp",
+        "stdio",
+        "-qtest",
+        f"unix:{qtest_path}",
+        "-qtest-log",
+        "/dev/null",
     )
+    if use_loader:
+        command = build_smp_elf_loader_command(
+            qemu, image, test.main_start, trace="int",
+            log=workdir / f"{test.name}.log", qemu_args=qemu_args,
+        )
+    else:
+        command = build_kernel_command(qemu, image, qemu_args=qemu_args)
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -1415,4 +1420,149 @@ def run_mttcg_shootdown_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shootdown_protocol,
         "m49-qtest.sock",
+    )
+
+
+def run_l3_mttcg_shared_interrupt_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_l3_shared_interrupt_protocol,
+        "l3-shared-interrupt-qtest.sock", use_loader=True,
+    )
+
+
+def _run_l3_shared_interrupt_protocol(qtest, test):
+    def read(cpu, offset):
+        address = test.mailbox_base + cpu * test.mailbox_slot_size + offset
+        response = _qtest_command(qtest, f"readq {address:#x}")
+        return int(response[1], 0)
+
+    def write(cpu, offset, value):
+        address = test.mailbox_base + cpu * test.mailbox_slot_size + offset
+        _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+
+    def set_irq(level):
+        _qtest_command(
+            qtest,
+            f"set_irq_in /machine/intc unnamed-gpio-in "
+            f"{test.shared_irq} {level}",
+        )
+
+    def wait_until(predicate, description):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.001)
+        raise AssertionError(f"{test.name}: timed out while {description}")
+
+    for cpu in range(test.cpu_count):
+        wait_until(
+            lambda cpu=cpu: read(cpu, test.stage_offset) == test.stage_ready,
+            f"waiting for CPU{cpu} startup",
+        )
+
+    set_irq(1)
+    wait_until(
+        lambda: sum(read(cpu, test.shared_count_offset)
+                    for cpu in range(test.cpu_count)) == 1,
+        "selecting the first shared-source owner",
+    )
+    first_counts = [read(cpu, test.shared_count_offset)
+                    for cpu in range(test.cpu_count)]
+    assert sorted(first_counts) == [0, 1]
+    owner = first_counts.index(1)
+    assert read(owner, test.claim_offset) == test.shared_irq
+    assert read(owner, test.handler_rq_offset) & test.interrupt_request
+
+    write(owner, test.handler_ack_offset, 1)
+    wait_until(
+        lambda: sum(read(cpu, test.shared_count_offset)
+                    for cpu in range(test.cpu_count)) == 2,
+        "retriggering the still-asserted shared source",
+    )
+    counts = [read(cpu, test.shared_count_offset)
+              for cpu in range(test.cpu_count)]
+    retrigger_owner = next(
+        cpu for cpu in range(test.cpu_count)
+        if counts[cpu] > first_counts[cpu]
+    )
+    assert read(retrigger_owner, test.claim_offset) == test.shared_irq
+    set_irq(0)
+    write(retrigger_owner, test.handler_ack_offset,
+          counts[retrigger_owner])
+    wait_until(
+        lambda: sum(read(cpu, test.handler_done_offset)
+                    for cpu in range(test.cpu_count)) == 2,
+        "completing the retriggered shared source",
+    )
+
+    for cpu, count in enumerate(counts):
+        assert read(cpu, test.handler_done_offset) == count
+        if count:
+            expected_stack = (
+                test.initial_stack + cpu * test.initial_stack_slot_size
+            )
+            assert read(cpu, test.ro_entry_offset) == expected_stack
+            assert read(cpu, test.rs_entry_offset) == expected_stack
+    write(0, test.halt_offset, 1)
+
+
+def _run_l3_cpu_isolation_protocol(qtest, test):
+    def read(cpu, offset):
+        response = _qtest_command(
+            qtest, f"readq {test.mailbox(cpu, offset):#x}"
+        )
+        return int(response[1], 0)
+
+    def write(address, value):
+        _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+
+    def wait(cpu, offset, expected, description):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            if actual == expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    for cpu in test.cpu_ids:
+        wait(cpu, test.ready_offset, 1, "waiting for startup")
+
+    targets = sum(1 << cpu for cpu in test.cpu_ids)
+    write(test.ipi_base + 0x8, targets)
+    for cpu in test.cpu_ids:
+        wait(cpu, test.ipi_count_offset, 1, "handling its IPI")
+        rq = read(cpu, test.ipi_rq_offset)
+        assert rq & test.ipi_request
+        assert rq & test.timer_request == 0
+
+    for cpu in test.cpu_ids:
+        write(test.timer_context(cpu, 0x00), 0)
+        write(test.timer_context(cpu, 0x08), 0x3)
+    for cpu in test.cpu_ids:
+        wait(cpu, test.timer_count_offset, 1, "handling its timer")
+        rq = read(cpu, test.timer_rq_offset)
+        assert rq & test.timer_request
+        assert rq & test.ipi_request == 0
+        assert read(cpu, test.timer_claim_offset) == 16 + cpu
+        expected_stack = (
+            test.initial_stack + cpu * test.initial_stack_slot_size
+        )
+        assert read(cpu, test.handler_ro_offset) == expected_stack
+        assert read(cpu, test.handler_rs_offset) == expected_stack
+
+    assert read(0, test.handler_ro_offset) != read(
+        63, test.handler_ro_offset
+    )
+    write(test.mailbox(0, test.halt_offset), 1)
+
+
+def run_l3_mttcg_cpu_isolation_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_l3_cpu_isolation_protocol,
+        "l3-cpu-isolation-qtest.sock", use_loader=True,
     )
