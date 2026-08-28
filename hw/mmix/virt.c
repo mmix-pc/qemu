@@ -8,6 +8,7 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "system/address-spaces.h"
+#include "hw/char/serial-mm.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
 #include "hw/core/irq.h"
@@ -195,6 +196,12 @@ static void mmix_virt_init(MachineState *machine)
                                               vms->cpus[i], 0);
         sysbus_connect_irq(SYS_BUS_DEVICE(intc), i, vms->cpu_irqs[i]);
     }
+
+    serial_mm_init(get_system_memory(), MMIX_VIRT_UART0_BASE,
+                   MMIX_VIRT_UART0_REGISTER_SHIFT,
+                   qdev_get_gpio_in(intc, MMIX_VIRT_UART0_IRQ),
+                   MMIX_VIRT_UART0_BAUD_BASE, serial_hd(0),
+                   DEVICE_BIG_ENDIAN);
 
     ipi = qdev_new(TYPE_MMIX_IPI);
     object_property_add_child(OBJECT(machine), "ipi", OBJECT(ipi));
