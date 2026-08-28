@@ -58,6 +58,15 @@ bool mmix_kernel_is_elf(const char *filename, Error **errp)
 static bool mmix_validate_elf_header(const char *filename, Elf64_Ehdr *ehdr,
                                      Error **errp)
 {
+    int64_t file_size = get_image_size(filename, errp);
+
+    if (file_size < 0) {
+        return false;
+    }
+    if (file_size < sizeof(*ehdr)) {
+        error_setg(errp, "truncated MMIX ELF header in '%s'", filename);
+        return false;
+    }
     if (!load_elf_hdr(filename, ehdr, NULL, errp)) {
         return false;
     }
@@ -82,6 +91,12 @@ static bool mmix_validate_elf_header(const char *filename, Elf64_Ehdr *ehdr,
                    be16_to_cpu(ehdr->e_machine), filename);
         return false;
     }
+    if (ehdr->e_ident[EI_VERSION] != EV_CURRENT ||
+        be32_to_cpu(ehdr->e_version) != EV_CURRENT ||
+        be16_to_cpu(ehdr->e_ehsize) != sizeof(*ehdr)) {
+        error_setg(errp, "invalid MMIX ELF header in '%s'", filename);
+        return false;
+    }
 
     return true;
 }
@@ -100,9 +115,21 @@ static void mmix_elf_read_phdr(const uint8_t *data, uint64_t table_offset,
            sizeof(*phdr));
 }
 
-static bool mmix_validate_elf_load_ranges(
+static bool mmix_elf_alignment_valid(uint64_t alignment)
+{
+    return alignment <= 1 || (alignment & (alignment - 1)) == 0;
+}
+
+static bool mmix_elf_ranges_overlap(const MMIXKernelImageRange *left,
+                                    const MMIXKernelImageRange *right)
+{
+    return left->address < right->address + right->size &&
+           right->address < left->address + left->size;
+}
+
+static bool mmix_preflight_elf_segments(
     const char *filename, const Elf64_Ehdr *ehdr,
-    const MMIXPhysicalRAM *ram, Error **errp)
+    const MMIXPhysicalRAM *ram, GArray **image_ranges, Error **errp)
 {
     g_autoptr(GMappedFile) mapped = NULL;
     g_autoptr(GError) gerr = NULL;
@@ -111,13 +138,19 @@ static bool mmix_validate_elf_load_ranges(
     uint64_t table_offset = be64_to_cpu(ehdr->e_phoff);
     uint16_t entry_size = be16_to_cpu(ehdr->e_phentsize);
     uint16_t entry_count = be16_to_cpu(ehdr->e_phnum);
-    Elf64_Phdr phdr;
+    g_autoptr(GArray) ranges = g_array_new(false, false,
+                                           sizeof(MMIXKernelImageRange));
+    uint64_t entry = be64_to_cpu(ehdr->e_entry);
+    bool entry_valid = false;
     unsigned int i;
 
-    if (entry_count == 0) {
-        return true;
+    if (entry_count == PN_XNUM) {
+        error_setg(errp,
+                   "unsupported MMIX ELF extended program header numbering "
+                   "in '%s'", filename);
+        return false;
     }
-    if (entry_size != sizeof(Elf64_Phdr)) {
+    if (entry_count == 0 || entry_size != sizeof(Elf64_Phdr)) {
         error_setg(errp, "invalid MMIX ELF program header table in '%s'",
                    filename);
         return false;
@@ -139,24 +172,53 @@ static bool mmix_validate_elf_load_ranges(
     }
 
     for (i = 0; i < entry_count; i++) {
+        Elf64_Phdr phdr;
+        MMIXKernelImageRange range;
+        uint32_t type;
+        uint32_t flags;
         uint64_t address;
+        uint64_t virtual_address;
         uint64_t offset;
         uint64_t file_size_part;
         uint64_t memory_size;
+        uint64_t alignment;
+        unsigned int j;
 
         mmix_elf_read_phdr(data, table_offset, entry_size, i, &phdr);
-        if (be32_to_cpu(phdr.p_type) != PT_LOAD) {
+        type = be32_to_cpu(phdr.p_type);
+        if (type == PT_INTERP) {
+            error_setg(errp, "unsupported MMIX ELF interpreter segment %u "
+                       "in '%s'", i, filename);
+            return false;
+        }
+        if (type != PT_LOAD) {
             continue;
         }
 
         address = be64_to_cpu(phdr.p_paddr);
+        virtual_address = be64_to_cpu(phdr.p_vaddr);
         offset = be64_to_cpu(phdr.p_offset);
         file_size_part = be64_to_cpu(phdr.p_filesz);
         memory_size = be64_to_cpu(phdr.p_memsz);
+        alignment = be64_to_cpu(phdr.p_align);
+        flags = be32_to_cpu(phdr.p_flags);
         if (file_size_part > memory_size ||
             !mmix_elf_file_range(file_size, offset, file_size_part)) {
             error_setg(errp, "invalid MMIX ELF PT_LOAD segment %u in '%s'",
                        i, filename);
+            return false;
+        }
+        if (!mmix_elf_alignment_valid(alignment) ||
+            (alignment > 1 &&
+             offset % alignment != virtual_address % alignment)) {
+            error_setg(errp, "invalid MMIX ELF PT_LOAD alignment in segment "
+                       "%u of '%s'", i, filename);
+            return false;
+        }
+        if (virtual_address != address) {
+            error_setg(errp, "MMIX ELF PT_LOAD segment %u in '%s' does not "
+                       "use identical virtual and physical addresses", i,
+                       filename);
             return false;
         }
         if (memory_size == 0) {
@@ -169,8 +231,68 @@ static bool mmix_validate_elf_load_ranges(
                        memory_size);
             return false;
         }
+
+        range = (MMIXKernelImageRange) {
+            .address = address,
+            .size = memory_size,
+            .index = i,
+        };
+        for (j = 0; j < ranges->len; j++) {
+            const MMIXKernelImageRange *previous =
+                &g_array_index(ranges, MMIXKernelImageRange, j);
+
+            if (mmix_elf_ranges_overlap(previous, &range)) {
+                error_setg(errp, "MMIX ELF PT_LOAD segments %u and %u in "
+                           "'%s' overlap", previous->index, i, filename);
+                return false;
+            }
+        }
+        g_array_append_val(ranges, range);
+
+        if ((flags & PF_X) && memory_size >= 4 && entry % 4 == 0 &&
+            entry >= address &&
+            entry - address <= memory_size - 4) {
+            entry_valid = true;
+        }
     }
 
+    if (ranges->len == 0) {
+        error_setg(errp, "MMIX ELF '%s' has no nonempty PT_LOAD segment",
+                   filename);
+        return false;
+    }
+    if (!entry_valid) {
+        error_setg(errp, "MMIX ELF entry 0x%" PRIx64 " in '%s' is not a "
+                   "complete aligned instruction in an executable PT_LOAD "
+                   "segment", entry, filename);
+        return false;
+    }
+
+    *image_ranges = g_steal_pointer(&ranges);
+    return true;
+}
+
+bool mmix_preflight_elf_kernel(const char *filename,
+                               const MMIXPhysicalRAM *ram,
+                               MMIXKernelLoadInfo *info,
+                               GArray **image_ranges, Error **errp)
+{
+    g_autoptr(GArray) ranges = NULL;
+    Elf64_Ehdr ehdr;
+
+    g_return_val_if_fail(image_ranges != NULL, false);
+    if (!mmix_validate_elf_header(filename, &ehdr, errp) ||
+        !mmix_preflight_elf_segments(filename, &ehdr, ram, &ranges, errp)) {
+        return false;
+    }
+
+    *info = (MMIXKernelLoadInfo) {
+        .entry = be64_to_cpu(ehdr.e_entry),
+        .image_type = MMIX_KERNEL_IMAGE_ELF,
+        .boot_cpu_id = 0,
+    };
+    g_clear_pointer(image_ranges, g_array_unref);
+    *image_ranges = g_steal_pointer(&ranges);
     return true;
 }
 
@@ -402,16 +524,18 @@ ssize_t mmix_load_elf(const char *filename,
                       const MMIXPhysicalRAM *ram,
                       MMIXKernelLoadInfo *info, Error **errp)
 {
+    g_autoptr(GArray) image_ranges = NULL;
     Elf64_Ehdr ehdr;
     uint64_t entry;
     uint64_t lowaddr;
     uint64_t highaddr;
     ssize_t loaded_size;
 
-    if (!mmix_validate_elf_header(filename, &ehdr, errp)) {
+    if (!mmix_preflight_elf_kernel(filename, ram, info, &image_ranges,
+                                   errp)) {
         return -1;
     }
-    if (!mmix_validate_elf_load_ranges(filename, &ehdr, ram, errp)) {
+    if (!mmix_validate_elf_header(filename, &ehdr, errp)) {
         return -1;
     }
     if (!mmix_load_elf_registers(filename, &ehdr, info, errp)) {

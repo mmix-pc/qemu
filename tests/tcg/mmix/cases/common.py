@@ -193,6 +193,7 @@ ET_EXEC = 2
 EM_X86_64 = 62
 EM_MMIX = 80
 PT_LOAD = 1
+PT_INTERP = 3
 SHT_NULL = 0
 SHT_PROGBITS = 1
 SHT_STRTAB = 3
@@ -634,7 +635,7 @@ def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
 
 
 def elf64_phdr(load_address, data, mem_size=None, offset=0x100,
-               ph_type=PT_LOAD, flags=5, virtual_address=None):
+               ph_type=PT_LOAD, flags=5, virtual_address=None, alignment=1):
     if mem_size is None:
         mem_size = len(data)
     if virtual_address is None:
@@ -648,7 +649,7 @@ def elf64_phdr(load_address, data, mem_size=None, offset=0x100,
         load_address,
         len(data),
         mem_size,
-        0x1000,
+        alignment,
     )
 
 
@@ -678,10 +679,26 @@ def elf64_shdr(name=0, section_type=SHT_NULL, flags=0, address=0, offset=0,
 
 
 _ELF64_EHDR_FIELDS = {
+    "entry": (24, "Q"),
+    "program_offset": (32, "Q"),
     "section_offset": (40, "Q"),
+    "header_size": (52, "H"),
+    "program_entry_size": (54, "H"),
+    "program_count": (56, "H"),
     "section_entry_size": (58, "H"),
     "section_count": (60, "H"),
     "section_names_index": (62, "H"),
+}
+
+_ELF64_PHDR_FIELDS = {
+    "type": (0, "I"),
+    "flags": (4, "I"),
+    "offset": (8, "Q"),
+    "virtual_address": (16, "Q"),
+    "physical_address": (24, "Q"),
+    "file_size": (32, "Q"),
+    "memory_size": (40, "Q"),
+    "alignment": (48, "Q"),
 }
 
 _ELF64_SHDR_FIELDS = {
@@ -716,6 +733,19 @@ def elf64_read_ehdr_field(image, field):
 
 def elf64_patch_ehdr_field(image, field, value):
     return _elf64_patch_field(image, 0, _ELF64_EHDR_FIELDS, field, value)
+
+
+def elf64_patch_phdr_field(image, index, field, value):
+    table_offset = _elf64_read_field(
+        image, 0, _ELF64_EHDR_FIELDS, "program_offset"
+    )
+    entry_size = _elf64_read_field(
+        image, 0, _ELF64_EHDR_FIELDS, "program_entry_size"
+    )
+    return _elf64_patch_field(
+        image, table_offset + index * entry_size,
+        _ELF64_PHDR_FIELDS, field, value
+    )
 
 
 def elf64_read_shdr_field(image, index, field):

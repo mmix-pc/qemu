@@ -27,6 +27,12 @@ typedef struct MMIXKernelLoadInfo {
     uint64_t globals[256];
 } MMIXKernelLoadInfo;
 
+typedef struct MMIXKernelImageRange {
+    hwaddr address;
+    uint64_t size;
+    uint16_t index;
+} MMIXKernelImageRange;
+
 enum {
     MMIX_RAW_ENTRY = 0x100,
     MMIX_RAW_MIN_SIZE = MMIX_RAW_ENTRY + 4,

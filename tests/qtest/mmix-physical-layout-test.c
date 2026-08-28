@@ -563,7 +563,7 @@ int main(int argc, char **argv)
         },
         {
             "image.elf", elf_image, sizeof(elf_image),
-            "MMIX ELF -kernel loading is not yet implemented",
+            "truncated MMIX ELF header",
         },
         {
             "image.mmo", mmo_image, sizeof(mmo_image),

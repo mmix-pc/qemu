@@ -22,6 +22,7 @@
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
 #include "boot-plan.h"
+#include "elf-loader.h"
 #include "framebuffer.h"
 #include "intc.h"
 #include "ipi.h"
@@ -136,7 +137,7 @@ static bool mmix_virt_has_semihosting_args(void)
 
 static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                                const MMIXKernelLoadInfo *image_info,
-                               uint64_t image_size, Error **errp)
+                               const GArray *image_ranges, Error **errp)
 {
     MachineState *machine = MACHINE(vms);
     enum {
@@ -144,10 +145,12 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
         MMIX_RAM_REQUEST_STACK_BASE,
     };
     size_t image_index = MMIX_RAM_REQUEST_STACK_BASE + machine->smp.cpus;
-    size_t request_count = image_index + (image_info != NULL);
+    size_t image_range_count = image_ranges ? image_ranges->len : 0;
+    size_t request_count = image_index + image_range_count;
     g_autofree MMIXRAMReservationRequest *requests =
         g_new0(MMIXRAMReservationRequest, request_count);
     g_auto(GStrv) stack_names = g_new0(char *, machine->smp.cpus + 1);
+    g_auto(GStrv) image_names = g_new0(char *, image_range_count + 1);
     const MMIXRAMReservationRequest framebuffer_request = {
         .owner = "mmix-framebuffer",
         .name = "pixels",
@@ -178,17 +181,23 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                 .alignment = MMIX_VIRT_INITIAL_STACK_ALIGN,
             };
     }
-    if (image_info) {
-        requests[image_index] = (MMIXRAMReservationRequest) {
+    for (i = 0; i < image_range_count; i++) {
+        const MMIXKernelImageRange *range =
+            &g_array_index(image_ranges, MMIXKernelImageRange, i);
+
+        image_names[i] = image_info->image_type == MMIX_KERNEL_IMAGE_RAW ?
+            g_strdup("raw-image") :
+            g_strdup_printf("load-segment-%u", range->index);
+        requests[image_index + i] = (MMIXRAMReservationRequest) {
             .owner = "mmix-kernel",
-            .name = "raw-image",
-            .stable_id = 0,
+            .name = image_names[i],
+            .stable_id = range->index,
             .placement = MMIX_RAM_RESERVATION_FIXED,
             .ownership_class = MMIX_RAM_OWNERSHIP_IMAGE,
             .lifetime = MMIX_RAM_LIFETIME_PERMANENT,
             .placement_class = MMIX_RAM_PLACEMENT_LOADER,
-            .address = 0,
-            .size = image_size,
+            .address = range->address,
+            .size = range->size,
             .alignment = 1,
         };
     }
@@ -260,7 +269,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
 
 static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                                      MMIXKernelLoadInfo *info,
-                                     uint64_t *image_size, Error **errp)
+                                     GArray **image_ranges, Error **errp)
 {
     MachineState *machine = MACHINE(vms);
     MMIXKernelImageType type;
@@ -275,10 +284,12 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                    "sparse memory support is implemented");
         return false;
     case MMIX_KERNEL_IMAGE_ELF:
-        error_setg(errp, "MMIX ELF -kernel loading is not yet implemented "
-                   "for the contiguous RAM layout");
-        return false;
-    case MMIX_KERNEL_IMAGE_RAW:
+        return mmix_preflight_elf_kernel(machine->kernel_filename, &vms->ram,
+                                         info, image_ranges, errp);
+    case MMIX_KERNEL_IMAGE_RAW: {
+        uint64_t image_size;
+        MMIXKernelImageRange range;
+
         if (machine->smp.cpus != 1) {
             error_setg(errp, "MMIX raw -kernel loading requires exactly one "
                        "CPU");
@@ -304,8 +315,19 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                        "-initrd");
             return false;
         }
-        return mmix_preflight_raw_kernel(machine->kernel_filename, &vms->ram,
-                                         info, image_size, errp);
+        if (!mmix_preflight_raw_kernel(machine->kernel_filename, &vms->ram,
+                                       info, &image_size, errp)) {
+            return false;
+        }
+        range = (MMIXKernelImageRange) {
+            .address = 0,
+            .size = image_size,
+            .index = 0,
+        };
+        *image_ranges = g_array_new(false, false, sizeof(range));
+        g_array_append_val(*image_ranges, range);
+        return true;
+    }
     default:
         g_assert_not_reached();
     }
@@ -320,7 +342,7 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *framebuffer;
     MMIXKernelLoadInfo image_info;
     const MMIXKernelLoadInfo *image_info_ptr = NULL;
-    uint64_t image_size = 0;
+    g_autoptr(GArray) image_ranges = NULL;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
@@ -328,14 +350,21 @@ static void mmix_virt_init(MachineState *machine)
         return;
     }
     if (machine->kernel_filename) {
-        if (!mmix_virt_prepare_kernel(vms, &image_info, &image_size,
+        if (!mmix_virt_prepare_kernel(vms, &image_info, &image_ranges,
                                       &error_fatal)) {
             return;
         }
         image_info_ptr = &image_info;
     }
-    if (!mmix_virt_plan_ram(vms, image_info_ptr, image_size, &error_fatal)) {
+    if (!mmix_virt_plan_ram(vms, image_info_ptr, image_ranges, &error_fatal)) {
         return;
+    }
+
+    if (image_info_ptr &&
+        image_info_ptr->image_type == MMIX_KERNEL_IMAGE_ELF) {
+        error_report("MMIX ELF -kernel preflight succeeded; loading awaits "
+                     "direct-entry startup implementation");
+        exit(EXIT_FAILURE);
     }
 
     memory_region_add_subregion(get_system_memory(), vms->ram.start,
@@ -343,7 +372,9 @@ static void mmix_virt_init(MachineState *machine)
 
     if (image_info_ptr &&
         mmix_commit_raw_kernel(machine->kernel_filename, &vms->ram,
-                               image_size, &error_fatal) < 0) {
+                               g_array_index(image_ranges,
+                                             MMIXKernelImageRange, 0).size,
+                               &error_fatal) < 0) {
         return;
     }
 
