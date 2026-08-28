@@ -41,6 +41,15 @@ typedef struct MMIXKernelClassificationCase {
     const char *diagnostic;
 } MMIXKernelClassificationCase;
 
+typedef struct MMIXRawRejectionCase {
+    uint64_t image_size;
+    const char *memory;
+    const char *machine;
+    const char *option;
+    const char *value;
+    const char *diagnostic;
+} MMIXRawRejectionCase;
+
 static void test_mmix_ram_accepted(gconstpointer opaque)
 {
     const MMIXRAMAcceptedCase *test = opaque;
@@ -411,6 +420,98 @@ static void test_mmix_kernel_classification(gconstpointer opaque)
     g_assert_cmpint(g_rmdir(directory), ==, 0);
 }
 
+static char *mmix_create_sparse_raw(const char *directory, uint64_t size)
+{
+    g_autofree char *filename = g_build_filename(directory, "image.raw", NULL);
+    int fd = g_open(filename, O_CREAT | O_EXCL | O_WRONLY, 0600);
+
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_cmpint(ftruncate(fd, size), ==, 0);
+    g_assert_cmpint(close(fd), ==, 0);
+    return g_steal_pointer(&filename);
+}
+
+static void test_mmix_raw_minimum_and_reset(void)
+{
+    uint8_t image[0x104] = { 0 };
+    uint8_t actual[sizeof(image)];
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory =
+        g_dir_make_tmp("mmix-raw-direct-XXXXXX", &error);
+    g_autofree char *filename = NULL;
+    g_autofree char *registers = NULL;
+    QTestState *qts;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(directory);
+    filename = g_build_filename(directory, "minimum.raw", NULL);
+    image[0] = 0x11;
+    image[0xff] = 0x22;
+    image[0x100] = 0x33;
+    image[0x103] = 0x44;
+    g_assert_true(g_file_set_contents(filename, (const char *)image,
+                                      sizeof(image), &error));
+    g_assert_no_error(error);
+
+    qts = qtest_initf("-machine virt -kernel %s", filename);
+    qtest_memread(qts, 0, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), image, sizeof(image));
+    registers = qtest_hmp(qts, "info registers");
+    g_assert_nonnull(strstr(registers, "pc=0x0000000000000100"));
+
+    qtest_memset(qts, 0, 0xa5, sizeof(image));
+    qtest_system_reset(qts);
+    qtest_memread(qts, 0, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), image, sizeof(image));
+    g_clear_pointer(&registers, g_free);
+    registers = qtest_hmp(qts, "info registers");
+    g_assert_nonnull(strstr(registers, "pc=0x0000000000000100"));
+    qtest_quit(qts);
+
+    g_assert_cmpint(g_unlink(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
+static void test_mmix_raw_rejected(gconstpointer opaque)
+{
+    const MMIXRawRejectionCase *test = opaque;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory =
+        g_dir_make_tmp("mmix-raw-rejected-XXXXXX", &error);
+    g_autofree char *filename = NULL;
+    g_autofree char *stderr_text = NULL;
+    const char *argv[18] = {
+        qtest_qemu_binary(NULL),
+        "-machine", test->machine ?: "virt",
+        "-m", test->memory ?: "128M",
+        "-kernel", NULL,
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", "none",
+    };
+    int wait_status;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(directory);
+    filename = mmix_create_sparse_raw(directory, test->image_size);
+    argv[6] = filename;
+    if (test->option) {
+        argv[13] = test->option;
+        argv[14] = !strcmp(test->value, "$IMAGE") ? filename : test->value;
+    }
+
+    g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
+                               G_SPAWN_STDOUT_TO_DEV_NULL,
+                               NULL, NULL, NULL, &stderr_text,
+                               &wait_status, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(wait_status, !=, 0);
+    g_assert_nonnull(strstr(stderr_text, test->diagnostic));
+
+    g_assert_cmpint(g_unlink(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     static const MMIXRAMAcceptedCase accepted[] = {
@@ -458,7 +559,7 @@ int main(int argc, char **argv)
     static const MMIXKernelClassificationCase kernel_cases[] = {
         {
             "raw.img", raw_image, sizeof(raw_image),
-            "MMIX raw -kernel loading is not yet implemented",
+            "MMIX raw kernel",
         },
         {
             "image.elf", elf_image, sizeof(elf_image),
@@ -479,6 +580,44 @@ int main(int argc, char **argv)
     };
     static const char * const kernel_case_names[] = {
         "raw", "elf", "mmo", "truncated-elf", "truncated-mmo",
+    };
+    static const MMIXRawRejectionCase raw_rejections[] = {
+        {
+            128 * MiB, "128M", NULL, NULL, NULL,
+            "MMIX RAM reservation 'mmix-framebuffer/pixels' does not fit",
+        },
+        {
+            128 * MiB + 1, "128M", NULL, NULL, NULL,
+            "does not fit in physical RAM",
+        },
+        {
+            125 * MiB, "128M", NULL, NULL, NULL,
+            "MMIX RAM reservation 'mmix-cpu/initial-stack-0' does not fit",
+        },
+        {
+            0x104, NULL, NULL, "-smp", "2",
+            "requires exactly one CPU",
+        },
+        {
+            0x104, NULL, "virt,elf-startup-abi=argc-argv", NULL, NULL,
+            "does not support ELF startup ABI 'argc-argv'",
+        },
+        {
+            0x104, NULL, NULL, "-semihosting-config", "enable=on,arg=x",
+            "does not accept semihosting arguments",
+        },
+        {
+            0x104, NULL, NULL, "-append", "x",
+            "does not accept -append",
+        },
+        {
+            0x104, NULL, NULL, "-initrd", "$IMAGE",
+            "does not accept -initrd",
+        },
+    };
+    static const char * const raw_rejection_names[] = {
+        "ram-endpoint", "oversized", "startup-collision", "smp",
+        "argc-argv", "semihosting-args", "append", "initrd",
     };
     unsigned int i;
 
@@ -512,6 +651,8 @@ int main(int argc, char **argv)
                    test_mmix_initial_stack_single_cpu);
     qtest_add_func("/mmix/ram/initial-stack/cpu-limit",
                    test_mmix_initial_stack_cpu_limit);
+    qtest_add_func("/mmix/kernel/raw/minimum-reset",
+                   test_mmix_raw_minimum_and_reset);
     qtest_add_func("/mmix/translation/flat-identity",
                    test_mmix_flat_translation_identity);
     qtest_add_func("/mmix/translation/negative-alias",
@@ -525,6 +666,14 @@ int main(int argc, char **argv)
 
         qtest_add_data_func(path, &kernel_cases[i],
                             test_mmix_kernel_classification);
+    }
+    for (i = 0; i < ARRAY_SIZE(raw_rejections); i++) {
+        g_autofree char *path =
+            g_strdup_printf("/mmix/kernel/raw/rejected/%s",
+                            raw_rejection_names[i]);
+
+        qtest_add_data_func(path, &raw_rejections[i],
+                            test_mmix_raw_rejected);
     }
 
     return g_test_run();

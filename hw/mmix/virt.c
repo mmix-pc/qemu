@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/option.h"
 #include "system/address-spaces.h"
 #include "hw/char/serial-mm.h"
 #include "hw/core/boards.h"
@@ -15,6 +16,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/virtio/virtio-mmio.h"
+#include "semihosting/semihost.h"
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
@@ -32,6 +34,11 @@
 
 #define TYPE_MMIX_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 
+typedef enum MMIXELFStartupABI {
+    MMIX_ELF_STARTUP_ABI_BARE,
+    MMIX_ELF_STARTUP_ABI_ARGC_ARGV,
+} MMIXELFStartupABI;
+
 OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
 
 typedef bool (*MMIXCreateDefaultMemdev)(MachineState *machine,
@@ -41,6 +48,7 @@ struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXPhysicalRAM ram;
     MMIXBootPlan *boot_plan;
+    MMIXELFStartupABI elf_startup_abi;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
     uint64_t initial_stacks[MMIX_VIRT_MAX_CPUS];
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
@@ -119,14 +127,24 @@ static bool mmix_virt_build_ram(MMIXVirtMachineState *vms, Error **errp)
     return true;
 }
 
-static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms, Error **errp)
+static bool mmix_virt_has_semihosting_args(void)
+{
+    QemuOpts *opts = qemu_opts_find(&qemu_semihosting_config_opts, NULL);
+
+    return opts && qemu_opt_find(opts, "arg");
+}
+
+static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
+                               const MMIXKernelLoadInfo *image_info,
+                               uint64_t image_size, Error **errp)
 {
     MachineState *machine = MACHINE(vms);
     enum {
         MMIX_RAM_REQUEST_FRAMEBUFFER,
         MMIX_RAM_REQUEST_STACK_BASE,
     };
-    size_t request_count = MMIX_RAM_REQUEST_STACK_BASE + machine->smp.cpus;
+    size_t image_index = MMIX_RAM_REQUEST_STACK_BASE + machine->smp.cpus;
+    size_t request_count = image_index + (image_info != NULL);
     g_autofree MMIXRAMReservationRequest *requests =
         g_new0(MMIXRAMReservationRequest, request_count);
     g_auto(GStrv) stack_names = g_new0(char *, machine->smp.cpus + 1);
@@ -160,9 +178,25 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms, Error **errp)
                 .alignment = MMIX_VIRT_INITIAL_STACK_ALIGN,
             };
     }
+    if (image_info) {
+        requests[image_index] = (MMIXRAMReservationRequest) {
+            .owner = "mmix-kernel",
+            .name = "raw-image",
+            .stable_id = 0,
+            .placement = MMIX_RAM_RESERVATION_FIXED,
+            .ownership_class = MMIX_RAM_OWNERSHIP_IMAGE,
+            .lifetime = MMIX_RAM_LIFETIME_PERMANENT,
+            .placement_class = MMIX_RAM_PLACEMENT_LOADER,
+            .address = 0,
+            .size = image_size,
+            .alignment = 1,
+        };
+    }
 
-    if (!mmix_boot_plan_build(machine->ram_size, NULL, NULL, requests,
-                              request_count, &vms->boot_plan, errp)) {
+    if (!mmix_boot_plan_build(machine->ram_size,
+                              image_info ? machine->kernel_filename : NULL,
+                              image_info, requests, request_count,
+                              &vms->boot_plan, errp)) {
         return false;
     }
 
@@ -215,36 +249,66 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         g_assert(result == MEMTX_OK);
         cpu_reset(vms->cpus[i]);
     }
+
+    if (mmix_boot_plan_image_info(vms->boot_plan)) {
+        const MMIXKernelLoadInfo *info =
+            mmix_boot_plan_image_info(vms->boot_plan);
+
+        cpu_set_pc(vms->cpus[info->boot_cpu_id], info->entry);
+    }
 }
 
-static void mmix_virt_reject_kernel(MachineState *machine)
+static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
+                                     MMIXKernelLoadInfo *info,
+                                     uint64_t *image_size, Error **errp)
 {
+    MachineState *machine = MACHINE(vms);
     MMIXKernelImageType type;
-    Error *err = NULL;
 
-    if (!mmix_classify_kernel_image(machine->kernel_filename, &type, &err)) {
-        error_report_err(err);
-        exit(EXIT_FAILURE);
+    if (!mmix_classify_kernel_image(machine->kernel_filename, &type, errp)) {
+        return false;
     }
 
     switch (type) {
     case MMIX_KERNEL_IMAGE_MMO:
-        error_report("MMIX MMO -kernel loading is unavailable until sparse "
-                     "memory support is implemented");
-        break;
+        error_setg(errp, "MMIX MMO -kernel loading is unavailable until "
+                   "sparse memory support is implemented");
+        return false;
     case MMIX_KERNEL_IMAGE_ELF:
-        error_report("MMIX ELF -kernel loading is not yet implemented for "
-                     "the contiguous RAM layout");
-        break;
+        error_setg(errp, "MMIX ELF -kernel loading is not yet implemented "
+                   "for the contiguous RAM layout");
+        return false;
     case MMIX_KERNEL_IMAGE_RAW:
-        error_report("MMIX raw -kernel loading is not yet implemented for "
-                     "the contiguous RAM layout");
-        break;
+        if (machine->smp.cpus != 1) {
+            error_setg(errp, "MMIX raw -kernel loading requires exactly one "
+                       "CPU");
+            return false;
+        }
+        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_ARGC_ARGV) {
+            error_setg(errp, "MMIX raw -kernel loading does not support ELF "
+                       "startup ABI 'argc-argv'");
+            return false;
+        }
+        if (mmix_virt_has_semihosting_args()) {
+            error_setg(errp, "MMIX raw -kernel loading does not accept "
+                       "semihosting arguments");
+            return false;
+        }
+        if (machine->kernel_cmdline && machine->kernel_cmdline[0]) {
+            error_setg(errp, "MMIX raw -kernel loading does not accept "
+                       "-append");
+            return false;
+        }
+        if (machine->initrd_filename) {
+            error_setg(errp, "MMIX raw -kernel loading does not accept "
+                       "-initrd");
+            return false;
+        }
+        return mmix_preflight_raw_kernel(machine->kernel_filename, &vms->ram,
+                                         info, image_size, errp);
     default:
         g_assert_not_reached();
     }
-
-    exit(EXIT_FAILURE);
 }
 
 static void mmix_virt_init(MachineState *machine)
@@ -254,19 +318,34 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *ipi;
     DeviceState *timer;
     DeviceState *framebuffer;
+    MMIXKernelLoadInfo image_info;
+    const MMIXKernelLoadInfo *image_info_ptr = NULL;
+    uint64_t image_size = 0;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
-        !mmix_virt_build_ram(vms, &error_fatal) ||
-        !mmix_virt_plan_ram(vms, &error_fatal)) {
+        !mmix_virt_build_ram(vms, &error_fatal)) {
         return;
     }
     if (machine->kernel_filename) {
-        mmix_virt_reject_kernel(machine);
+        if (!mmix_virt_prepare_kernel(vms, &image_info, &image_size,
+                                      &error_fatal)) {
+            return;
+        }
+        image_info_ptr = &image_info;
+    }
+    if (!mmix_virt_plan_ram(vms, image_info_ptr, image_size, &error_fatal)) {
+        return;
     }
 
     memory_region_add_subregion(get_system_memory(), vms->ram.start,
                                 machine->ram);
+
+    if (image_info_ptr &&
+        mmix_commit_raw_kernel(machine->kernel_filename, &vms->ram,
+                               image_size, &error_fatal) < 0) {
+        return;
+    }
 
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
@@ -340,6 +419,35 @@ static void mmix_virt_init(MachineState *machine)
     }
 }
 
+static char *mmix_virt_get_elf_startup_abi(Object *obj, Error **errp)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    switch (vms->elf_startup_abi) {
+    case MMIX_ELF_STARTUP_ABI_BARE:
+        return g_strdup("bare");
+    case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
+        return g_strdup("argc-argv");
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void mmix_virt_set_elf_startup_abi(Object *obj, const char *value,
+                                          Error **errp)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    if (!strcmp(value, "bare")) {
+        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BARE;
+    } else if (!strcmp(value, "argc-argv")) {
+        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_ARGC_ARGV;
+    } else {
+        error_setg(errp, "Invalid MMIX ELF startup ABI '%s'", value);
+        error_append_hint(errp, "Valid values are bare and argc-argv.\n");
+    }
+}
+
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -355,6 +463,20 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     mc->default_ram_id = "mmix.ram";
     mmix_parent_create_default_memdev = mc->create_default_memdev;
     mc->create_default_memdev = mmix_virt_create_default_memdev;
+
+    object_class_property_add_str(oc, "elf-startup-abi",
+                                  mmix_virt_get_elf_startup_abi,
+                                  mmix_virt_set_elf_startup_abi);
+    object_class_property_set_description(
+        oc, "elf-startup-abi",
+        "Set the ELF startup ABI (bare or argc-argv)");
+}
+
+static void mmix_virt_instance_init(Object *obj)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BARE;
 }
 
 static void mmix_virt_instance_finalize(Object *obj)
@@ -369,6 +491,7 @@ static const TypeInfo mmix_virt_machine_typeinfo = {
     .parent = TYPE_MACHINE,
     .class_init = mmix_virt_class_init,
     .instance_size = sizeof(MMIXVirtMachineState),
+    .instance_init = mmix_virt_instance_init,
     .instance_finalize = mmix_virt_instance_finalize,
 };
 
