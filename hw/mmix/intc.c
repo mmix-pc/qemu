@@ -11,82 +11,95 @@
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
-#include "qemu/log.h"
 #include "intc.h"
 
-static uint32_t mmix_intc_irq_mask(unsigned irq)
+#define MMIX_INTC_NO_OWNER (-1)
+
+static unsigned int mmix_intc_word(unsigned int source)
 {
-    if (irq < MMIX_VIRT_SHARED_IRQ_FIRST || irq >= MMIX_VIRT_INTC_IRQ_COUNT) {
-        return 0;
+    return source / 64;
+}
+
+static uint64_t mmix_intc_bit(unsigned int source)
+{
+    return UINT64_C(1) << (source % 64);
+}
+
+static bool mmix_intc_source_active(unsigned int source)
+{
+    if (source == MMIX_VIRT_UART0_IRQ) {
+        return true;
     }
-    return 1U << irq;
+    if (source >= MMIX_VIRT_TIMER_IRQ_BASE &&
+        source < MMIX_VIRT_TIMER_IRQ_BASE + MMIX_VIRT_MAX_CPUS) {
+        return true;
+    }
+    return source >= MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE &&
+           source < MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE +
+                    MMIX_VIRT_VIRTIO_MMIO_COUNT;
 }
 
-static uint32_t mmix_intc_valid_irq_mask(void)
+static bool mmix_intc_source_fixed(unsigned int source, uint32_t *cpu)
 {
-    return UINT32_MAX & ~1U;
+    if (source < MMIX_VIRT_TIMER_IRQ_BASE ||
+        source >= MMIX_VIRT_TIMER_IRQ_BASE + MMIX_VIRT_MAX_CPUS) {
+        return false;
+    }
+
+    *cpu = source - MMIX_VIRT_TIMER_IRQ_BASE;
+    return true;
 }
 
-static uint32_t mmix_intc_shared_irq_mask(void)
-{
-    return ((1U << (MMIX_VIRT_SHARED_IRQ_LAST + 1)) - 1) &
-           ~((1U << MMIX_VIRT_SHARED_IRQ_FIRST) - 1);
-}
-
-static bool mmix_intc_context_active(MMIXIntcState *s, uint32_t cpu)
+static bool mmix_intc_context_active(const MMIXIntcState *s, uint32_t cpu)
 {
     return cpu < s->num_cpus;
 }
 
-static uint32_t mmix_intc_fixed_irq_mask(uint32_t cpu)
+static uint64_t mmix_intc_active_mask(unsigned int word)
 {
-    return mmix_intc_irq_mask(MMIX_VIRT_TIMER_IRQ_BASE + cpu);
-}
+    uint64_t mask = 0;
+    unsigned int first = word * 64;
+    unsigned int source;
 
-static uint32_t mmix_intc_claimed_mask(MMIXIntcState *s)
-{
-    uint32_t claimed = 0;
-    uint32_t cpu;
-
-    for (cpu = 0; cpu < s->num_cpus; cpu++) {
-        claimed |= s->claimed[cpu];
-    }
-    return claimed;
-}
-
-static uint32_t mmix_intc_shared_claimable(MMIXIntcState *s, uint32_t cpu)
-{
-    uint32_t candidates = s->pending & mmix_intc_shared_irq_mask() &
-                          ~mmix_intc_claimed_mask(s);
-    uint32_t claimable = 0;
-
-    while (candidates) {
-        uint32_t irq = ctz32(candidates);
-        uint32_t mask = mmix_intc_irq_mask(irq);
-        uint32_t owner;
-
-        for (owner = 0; owner < s->num_cpus; owner++) {
-            if (s->enable[owner] & mask) {
-                if (owner == cpu) {
-                    claimable |= mask;
-                }
-                break;
-            }
+    for (source = first; source < first + 64; source++) {
+        if (mmix_intc_source_active(source)) {
+            mask |= mmix_intc_bit(source);
         }
-        candidates &= ~mask;
     }
-    return claimable;
+    return mask;
 }
 
-static uint32_t mmix_intc_claimable(MMIXIntcState *s, uint32_t cpu)
+static uint64_t mmix_intc_enable_mask(uint32_t cpu, unsigned int word)
 {
-    if (!mmix_intc_context_active(s, cpu)) {
-        return 0;
-    }
+    uint64_t mask = mmix_intc_active_mask(word);
+    unsigned int first = word * 64;
+    unsigned int source;
 
-    return (s->pending & s->enable[cpu] & ~s->claimed[cpu] &
-            mmix_intc_fixed_irq_mask(cpu)) |
-           mmix_intc_shared_claimable(s, cpu);
+    for (source = first; source < first + 64; source++) {
+        uint32_t fixed_cpu;
+
+        if (mmix_intc_source_fixed(source, &fixed_cpu) &&
+            fixed_cpu != cpu) {
+            mask &= ~mmix_intc_bit(source);
+        }
+    }
+    return mask;
+}
+
+static bool mmix_intc_context_claimable(const MMIXIntcState *s,
+                                        uint32_t cpu)
+{
+    unsigned int word;
+
+    if (!mmix_intc_context_active(s, cpu)) {
+        return false;
+    }
+    for (word = 0; word < MMIX_VIRT_INTC_BITMAP_WORDS; word++) {
+        if (s->pending[word] & s->enable[cpu][word]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void mmix_intc_update(MMIXIntcState *s)
@@ -94,154 +107,174 @@ static void mmix_intc_update(MMIXIntcState *s)
     uint32_t cpu;
 
     for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
-        qemu_set_irq(s->irq[cpu], !!mmix_intc_claimable(s, cpu));
+        qemu_set_irq(s->irq[cpu], mmix_intc_context_claimable(s, cpu));
     }
 }
 
-static uint32_t mmix_intc_claim(MMIXIntcState *s, uint32_t cpu)
+static uint64_t mmix_intc_claim(MMIXIntcState *s, uint32_t cpu)
 {
-    uint32_t claimable;
-    uint32_t irq;
-    uint32_t mask;
+    unsigned int word;
 
-    claimable = mmix_intc_claimable(s, cpu);
-    if (!claimable) {
+    if (!mmix_intc_context_active(s, cpu)) {
         return 0;
     }
 
-    irq = ctz32(claimable);
-    mask = mmix_intc_irq_mask(irq);
-    g_assert(mask != 0);
+    for (word = 0; word < MMIX_VIRT_INTC_BITMAP_WORDS; word++) {
+        uint64_t candidates = s->pending[word] & s->enable[cpu][word];
+        unsigned int source;
 
-    s->pending &= ~mask;
-    s->claimed[cpu] |= mask;
-    mmix_intc_update(s);
-
-    return irq;
-}
-
-static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu, uint32_t irq)
-{
-    uint32_t mask;
-
-    if (!mmix_intc_context_active(s, cpu)) {
-        return;
-    }
-
-    mask = mmix_intc_irq_mask(irq);
-    if (!(mask & s->claimed[cpu])) {
-        return;
-    }
-
-    s->claimed[cpu] &= ~mask;
-    if (s->input_level & mask) {
-        s->pending |= mask;
-    }
-    mmix_intc_update(s);
-}
-
-static bool mmix_intc_context_offset(MMIXIntcState *s, hwaddr addr,
-                                     uint32_t *cpu, hwaddr *reg)
-{
-    hwaddr context;
-
-    if (addr < MMIX_VIRT_INTC_CONTEXT_BASE) {
-        return false;
-    }
-
-    context = addr - MMIX_VIRT_INTC_CONTEXT_BASE;
-    *cpu = context / MMIX_VIRT_INTC_CONTEXT_STRIDE;
-    if (*cpu >= MMIX_VIRT_INTC_CONTEXT_COUNT) {
-        return false;
-    }
-
-    *reg = context % MMIX_VIRT_INTC_CONTEXT_STRIDE;
-    return mmix_intc_context_active(s, *cpu);
-}
-
-static uint64_t mmix_intc_read(void *opaque, hwaddr addr, unsigned size)
-{
-    MMIXIntcState *s = opaque;
-    uint32_t cpu;
-    hwaddr reg;
-
-    (void)size;
-
-    if (addr == MMIX_VIRT_INTC_PENDING) {
-        return s->pending;
-    }
-    if (mmix_intc_context_offset(s, addr, &cpu, &reg)) {
-        switch (reg) {
-        case MMIX_VIRT_INTC_CONTEXT_ENABLE:
-            return s->enable[cpu];
-        case MMIX_VIRT_INTC_CONTEXT_CLAIM:
-            return mmix_intc_claim(s, cpu);
-        default:
-            break;
+        if (!candidates) {
+            continue;
         }
+        source = word * 64 + ctz64(candidates);
+        g_assert(s->owner[source] == MMIX_INTC_NO_OWNER);
+        s->pending[word] &= ~mmix_intc_bit(source);
+        s->owner[source] = cpu;
+        mmix_intc_update(s);
+        return source;
     }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "%s: unimplemented register read 0x%02" HWADDR_PRIx "\n",
-                  __func__, addr);
     return 0;
 }
 
-static void mmix_intc_write(void *opaque, hwaddr addr,
-                            uint64_t value, unsigned size)
+static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu,
+                               unsigned int source)
 {
-    MMIXIntcState *s = opaque;
-    uint32_t cpu;
-    hwaddr reg;
+    unsigned int word;
+    uint64_t bit;
 
-    (void)size;
-
-    if (mmix_intc_context_offset(s, addr, &cpu, &reg)) {
-        switch (reg) {
-        case MMIX_VIRT_INTC_CONTEXT_ENABLE:
-            s->enable[cpu] = value & mmix_intc_valid_irq_mask();
-            mmix_intc_update(s);
-            return;
-        case MMIX_VIRT_INTC_CONTEXT_COMPLETE:
-            mmix_intc_complete(s, cpu, value);
-            return;
-        default:
-            break;
-        }
-    }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "%s: unimplemented register write 0x%02" HWADDR_PRIx "\n",
-                  __func__, addr);
-}
-
-static const MemoryRegionOps mmix_intc_ops = {
-    .read = mmix_intc_read,
-    .write = mmix_intc_write,
-    .endianness = DEVICE_BIG_ENDIAN,
-    .valid.min_access_size = 4,
-    .valid.max_access_size = 4,
-    .impl.min_access_size = 4,
-    .impl.max_access_size = 4,
-};
-
-static void mmix_intc_set_irq(void *opaque, int irq, int level)
-{
-    MMIXIntcState *s = opaque;
-    uint32_t mask = mmix_intc_irq_mask(irq);
-
-    if (!mask) {
+    if (!mmix_intc_context_active(s, cpu) ||
+        source >= MMIX_VIRT_INTC_IRQ_COUNT || s->owner[source] != cpu) {
         return;
     }
 
+    word = mmix_intc_word(source);
+    bit = mmix_intc_bit(source);
+    s->owner[source] = MMIX_INTC_NO_OWNER;
+    if (s->input_level[word] & bit) {
+        s->pending[word] |= bit;
+    }
+    mmix_intc_update(s);
+}
+
+static uint64_t mmix_intc_global_read(void *opaque, hwaddr addr,
+                                      unsigned int size)
+{
+    MMIXIntcState *s = opaque;
+
+    (void)size;
+
+    if (addr == MMIX_VIRT_INTC_GLOBAL_SOURCE_COUNT) {
+        return MMIX_VIRT_INTC_IRQ_COUNT;
+    }
+    if (addr == MMIX_VIRT_INTC_GLOBAL_CONTEXT_COUNT) {
+        return s->num_cpus;
+    }
+    if (addr >= MMIX_VIRT_INTC_GLOBAL_PENDING_BASE &&
+        addr < MMIX_VIRT_INTC_GLOBAL_PENDING_BASE +
+               MMIX_VIRT_INTC_BITMAP_WORDS * sizeof(uint64_t)) {
+        unsigned int word =
+            (addr - MMIX_VIRT_INTC_GLOBAL_PENDING_BASE) / sizeof(uint64_t);
+
+        return s->pending[word];
+    }
+    return 0;
+}
+
+static void mmix_intc_global_write(void *opaque, hwaddr addr,
+                                   uint64_t value, unsigned int size)
+{
+    (void)opaque;
+    (void)addr;
+    (void)value;
+    (void)size;
+}
+
+static uint64_t mmix_intc_context_read(void *opaque, hwaddr addr,
+                                       unsigned int size)
+{
+    MMIXIntcContext *context = opaque;
+    MMIXIntcState *s = context->intc;
+
+    (void)size;
+
+    if (!mmix_intc_context_active(s, context->cpu)) {
+        return 0;
+    }
+    if (addr < MMIX_VIRT_INTC_BITMAP_WORDS * sizeof(uint64_t)) {
+        return s->enable[context->cpu][addr / sizeof(uint64_t)];
+    }
+    if (addr == MMIX_VIRT_INTC_CONTEXT_CLAIM) {
+        return mmix_intc_claim(s, context->cpu);
+    }
+    return 0;
+}
+
+static void mmix_intc_context_write(void *opaque, hwaddr addr,
+                                    uint64_t value, unsigned int size)
+{
+    MMIXIntcContext *context = opaque;
+    MMIXIntcState *s = context->intc;
+
+    (void)size;
+
+    if (!mmix_intc_context_active(s, context->cpu)) {
+        return;
+    }
+    if (addr < MMIX_VIRT_INTC_BITMAP_WORDS * sizeof(uint64_t)) {
+        unsigned int word = addr / sizeof(uint64_t);
+
+        s->enable[context->cpu][word] =
+            value & mmix_intc_enable_mask(context->cpu, word);
+        mmix_intc_update(s);
+        return;
+    }
+    if (addr == MMIX_VIRT_INTC_CONTEXT_COMPLETE) {
+        mmix_intc_complete(s, context->cpu, value);
+    }
+}
+
+static const MemoryRegionOps mmix_intc_global_ops = {
+    .read = mmix_intc_global_read,
+    .write = mmix_intc_global_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid.min_access_size = 8,
+    .valid.max_access_size = 8,
+    .valid.unaligned = false,
+    .impl.min_access_size = 8,
+    .impl.max_access_size = 8,
+};
+
+static const MemoryRegionOps mmix_intc_context_ops = {
+    .read = mmix_intc_context_read,
+    .write = mmix_intc_context_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid.min_access_size = 8,
+    .valid.max_access_size = 8,
+    .valid.unaligned = false,
+    .impl.min_access_size = 8,
+    .impl.max_access_size = 8,
+};
+
+static void mmix_intc_set_irq(void *opaque, int source, int level)
+{
+    MMIXIntcState *s = opaque;
+    unsigned int word;
+    uint64_t bit;
+
+    if (!mmix_intc_source_active(source)) {
+        return;
+    }
+
+    word = mmix_intc_word(source);
+    bit = mmix_intc_bit(source);
     if (level) {
-        if (!(s->input_level & mask)) {
-            s->pending |= mask;
+        s->input_level[word] |= bit;
+        if (s->owner[source] == MMIX_INTC_NO_OWNER) {
+            s->pending[word] |= bit;
         }
-        s->input_level |= mask;
     } else {
-        s->input_level &= ~mask;
-        s->pending &= ~mask;
+        s->input_level[word] &= ~bit;
+        s->pending[word] &= ~bit;
     }
     mmix_intc_update(s);
 }
@@ -249,20 +282,18 @@ static void mmix_intc_set_irq(void *opaque, int irq, int level)
 static void mmix_intc_reset(DeviceState *dev)
 {
     MMIXIntcState *s = MMIX_INTC(dev);
-    uint32_t cpu;
 
-    s->pending = 0;
-    s->input_level = 0;
-    memset(s->claimed, 0, sizeof(s->claimed));
+    memset(s->pending, 0, sizeof(s->pending));
+    memset(s->input_level, 0, sizeof(s->input_level));
+    memset(s->owner, 0xff, sizeof(s->owner));
     memset(s->enable, 0, sizeof(s->enable));
-    for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
-        qemu_set_irq(s->irq[cpu], 0);
-    }
+    mmix_intc_update(s);
 }
 
 static void mmix_intc_realize(DeviceState *dev, Error **errp)
 {
     MMIXIntcState *s = MMIX_INTC(dev);
+    uint32_t cpu;
 
     if (s->num_cpus == 0 || s->num_cpus > MMIX_VIRT_INTC_CONTEXT_COUNT) {
         error_setg(errp, "num-cpus must be between 1 and %u",
@@ -270,21 +301,87 @@ static void mmix_intc_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    memory_region_init_io(&s->iomem, OBJECT(s), &mmix_intc_ops, s,
-                          TYPE_MMIX_INTC, MMIX_VIRT_INTC_SIZE);
+    memory_region_init(&s->container, OBJECT(s), TYPE_MMIX_INTC,
+                       MMIX_VIRT_INTC_RESERVATION_SIZE);
+    memory_region_init_io(&s->global_iomem, OBJECT(s), &mmix_intc_global_ops,
+                          s, "mmix-intc-global",
+                          MMIX_VIRT_INTC_GLOBAL_SIZE);
+    memory_region_add_subregion(&s->container, 0, &s->global_iomem);
+
+    for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
+        MMIXIntcContext *context = &s->context[cpu];
+        g_autofree char *name = g_strdup_printf("mmix-intc-context[%u]", cpu);
+
+        context->intc = s;
+        context->cpu = cpu;
+        memory_region_init_io(&context->iomem, OBJECT(s),
+                              &mmix_intc_context_ops, context, name,
+                              MMIX_VIRT_INTC_CONTEXT_STRIDE);
+        memory_region_add_subregion(
+            &s->container,
+            MMIX_VIRT_INTC_CONTEXTS_OFFSET +
+            cpu * MMIX_VIRT_INTC_CONTEXT_STRIDE,
+            &context->iomem);
+    }
+}
+
+static int mmix_intc_post_load(void *opaque, int version_id)
+{
+    MMIXIntcState *s = opaque;
+    unsigned int cpu;
+    unsigned int source;
+    unsigned int word;
+
+    (void)version_id;
+
+    for (word = 0; word < MMIX_VIRT_INTC_BITMAP_WORDS; word++) {
+        uint64_t active = mmix_intc_active_mask(word);
+
+        if ((s->pending[word] | s->input_level[word]) & ~active ||
+            s->pending[word] & ~s->input_level[word]) {
+            return -EINVAL;
+        }
+        for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
+            uint64_t allowed = mmix_intc_context_active(s, cpu) ?
+                mmix_intc_enable_mask(cpu, word) : 0;
+
+            if (s->enable[cpu][word] & ~allowed) {
+                return -EINVAL;
+            }
+        }
+    }
+    for (source = 0; source < MMIX_VIRT_INTC_IRQ_COUNT; source++) {
+        int owner = s->owner[source];
+        uint32_t fixed_cpu;
+
+        if (owner != MMIX_INTC_NO_OWNER &&
+            (owner < 0 || owner >= (int)s->num_cpus ||
+             !mmix_intc_source_active(source) ||
+             (mmix_intc_source_fixed(source, &fixed_cpu) &&
+              owner != (int)fixed_cpu) ||
+             (s->pending[mmix_intc_word(source)] &
+              mmix_intc_bit(source)))) {
+            return -EINVAL;
+        }
+    }
+    mmix_intc_update(s);
+    return 0;
 }
 
 static const VMStateDescription vmstate_mmix_intc = {
     .name = TYPE_MMIX_INTC,
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = mmix_intc_post_load,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT32(pending, MMIXIntcState),
-        VMSTATE_UINT32(input_level, MMIXIntcState),
-        VMSTATE_UINT32_ARRAY(claimed, MMIXIntcState,
-                             MMIX_VIRT_INTC_CONTEXT_COUNT),
-        VMSTATE_UINT32_ARRAY(enable, MMIXIntcState,
-                             MMIX_VIRT_INTC_CONTEXT_COUNT),
+        VMSTATE_UINT64_ARRAY(pending, MMIXIntcState,
+                             MMIX_VIRT_INTC_BITMAP_WORDS),
+        VMSTATE_UINT64_ARRAY(input_level, MMIXIntcState,
+                             MMIX_VIRT_INTC_BITMAP_WORDS),
+        VMSTATE_INT16_ARRAY(owner, MMIXIntcState, MMIX_VIRT_INTC_IRQ_COUNT),
+        VMSTATE_UINT64_2DARRAY(enable, MMIXIntcState,
+                              MMIX_VIRT_INTC_CONTEXT_COUNT,
+                              MMIX_VIRT_INTC_BITMAP_WORDS),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -300,7 +397,7 @@ static void mmix_intc_instance_init(Object *obj)
     MMIXIntcState *s = MMIX_INTC(obj);
     uint32_t cpu;
 
-    sysbus_init_mmio(dev, &s->iomem);
+    sysbus_init_mmio(dev, &s->container);
     for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
         sysbus_init_irq(dev, &s->irq[cpu]);
     }

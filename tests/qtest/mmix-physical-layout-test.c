@@ -257,7 +257,6 @@ static void test_mmix_high_physical_addresses_do_not_alias(void)
         UINT64_C(0x0001000000000000),
         UINT64_C(0x0001000010000000),
         UINT64_C(0x0001000020000000),
-        UINT64_C(0x0001000030000000),
         UINT64_C(0x0001000040000000),
         UINT64_C(0x0001000080000000),
         UINT64_C(0x0001000100000000),

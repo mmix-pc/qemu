@@ -10,10 +10,14 @@
 #include "system/address-spaces.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/sysbus.h"
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
+#include "intc.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
 #include "virt.h"
@@ -29,9 +33,16 @@ struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXPhysicalRAM ram;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
+    qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
+
+static void mmix_virt_cpu_irq(void *opaque, int irq, int level)
+{
+    g_assert(irq == 0);
+    mmix_cpu_set_interrupt_controller(opaque, level);
+}
 
 static uint64_t mmix_virt_initial_stack(unsigned int cpu_index)
 {
@@ -150,6 +161,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
 static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
+    DeviceState *intc;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
@@ -167,6 +179,17 @@ static void mmix_virt_init(MachineState *machine)
 
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
+    }
+
+    intc = qdev_new(TYPE_MMIX_INTC);
+    object_property_add_child(OBJECT(machine), "intc", OBJECT(intc));
+    qdev_prop_set_uint32(intc, "num-cpus", machine->smp.cpus);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(intc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(intc), 0, MMIX_VIRT_INTC_BASE);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        vms->cpu_irqs[i] = qemu_allocate_irq(mmix_virt_cpu_irq,
+                                              vms->cpus[i], 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(intc), i, vms->cpu_irqs[i]);
     }
 }
 
