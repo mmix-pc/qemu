@@ -4,6 +4,7 @@ mmix_ss.add(when: 'CONFIG_MMIX_VIRT', if_true: files(
   'ipi.c',
   'physical-layout.c',
   'ram-reservation.c',
+  'timer.c',
   'virt.c',
 ))
 

@@ -21,6 +21,7 @@
 #include "ipi.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
+#include "timer.h"
 #include "virt.h"
 
 #define TYPE_MMIX_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
@@ -164,6 +165,7 @@ static void mmix_virt_init(MachineState *machine)
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     DeviceState *intc;
     DeviceState *ipi;
+    DeviceState *timer;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
@@ -203,6 +205,17 @@ static void mmix_virt_init(MachineState *machine)
         sysbus_connect_irq(SYS_BUS_DEVICE(ipi), i,
                            qdev_get_gpio_in_named(DEVICE(vms->cpus[i]),
                                                   "ipi", 0));
+    }
+
+    timer = qdev_new(TYPE_MMIX_TIMER);
+    object_property_add_child(OBJECT(machine), "timer", OBJECT(timer));
+    qdev_prop_set_uint32(timer, "num-cpus", machine->smp.cpus);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(timer), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(timer), 0, MMIX_VIRT_TIMER_BASE);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(timer), i,
+                           qdev_get_gpio_in(intc,
+                                           MMIX_VIRT_TIMER_IRQ_BASE + i));
     }
 }
 

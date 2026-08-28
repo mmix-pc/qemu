@@ -305,6 +305,7 @@ qtests_mmix = [
   'mmix-intc-test',
   'mmix-ipi-test',
   'mmix-physical-layout-test',
+  'mmix-timer-test',
 ]
 
 qos_test_ss = ss.source_set()

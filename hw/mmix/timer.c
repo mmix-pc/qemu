@@ -11,7 +11,6 @@
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
-#include "qemu/log.h"
 #include "qemu/timer.h"
 #include "timer.h"
 
@@ -21,22 +20,22 @@ static uint64_t mmix_timer_control_mask(void)
            MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
 }
 
-static bool mmix_timer_enabled(MMIXTimerState *s, uint32_t cpu)
+static bool mmix_timer_enabled(const MMIXTimerState *s, uint32_t cpu)
 {
     return s->control[cpu] & MMIX_VIRT_TIMER_CONTROL_ENABLE;
 }
 
-static bool mmix_timer_irq_enabled(MMIXTimerState *s, uint32_t cpu)
+static bool mmix_timer_irq_enabled(const MMIXTimerState *s, uint32_t cpu)
 {
     return s->control[cpu] & MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
 }
 
-static bool mmix_timer_pending(MMIXTimerState *s, uint32_t cpu)
+static bool mmix_timer_pending(const MMIXTimerState *s, uint32_t cpu)
 {
     return s->status[cpu] & MMIX_VIRT_TIMER_STATUS_PENDING;
 }
 
-static bool mmix_timer_context_active(MMIXTimerState *s, uint32_t cpu)
+static bool mmix_timer_context_active(const MMIXTimerState *s, uint32_t cpu)
 {
     return cpu < s->num_cpus;
 }
@@ -81,104 +80,99 @@ static void mmix_timer_update(MMIXTimerState *s)
 
 static void mmix_timer_expire(void *opaque)
 {
-    MMIXTimerState *s = opaque;
-
-    mmix_timer_update(s);
+    mmix_timer_update(opaque);
 }
 
-static bool mmix_timer_context_offset(hwaddr addr, uint32_t *cpu, hwaddr *reg)
+static uint64_t mmix_timer_global_read(void *opaque, hwaddr addr,
+                                       unsigned int size)
 {
-    hwaddr context;
-
-    if (addr < MMIX_VIRT_TIMER_CONTEXT_BASE) {
-        return false;
-    }
-
-    context = addr - MMIX_VIRT_TIMER_CONTEXT_BASE;
-    *cpu = context / MMIX_VIRT_TIMER_CONTEXT_STRIDE;
-    if (*cpu >= MMIX_VIRT_TIMER_CONTEXT_COUNT) {
-        return false;
-    }
-
-    *reg = context % MMIX_VIRT_TIMER_CONTEXT_STRIDE;
-    return true;
-}
-
-static uint64_t mmix_timer_read(void *opaque, hwaddr addr, unsigned size)
-{
-    MMIXTimerState *s = opaque;
-    uint32_t cpu;
-    hwaddr reg;
-
+    (void)opaque;
     (void)size;
 
     if (addr == MMIX_VIRT_TIMER_TIME) {
         return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     }
-    if (mmix_timer_context_offset(addr, &cpu, &reg)) {
-        if (!mmix_timer_context_active(s, cpu)) {
-            return 0;
-        }
-        switch (reg) {
-        case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
-            return s->compare[cpu];
-        case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
-            return s->control[cpu];
-        case MMIX_VIRT_TIMER_CONTEXT_STATUS:
-            return s->status[cpu];
-        default:
-            break;
-        }
-    }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "%s: unimplemented register read 0x%02" HWADDR_PRIx "\n",
-                  __func__, addr);
     return 0;
 }
 
-static void mmix_timer_write(void *opaque, hwaddr addr,
-                             uint64_t value, unsigned size)
+static void mmix_timer_global_write(void *opaque, hwaddr addr,
+                                    uint64_t value, unsigned int size)
 {
-    MMIXTimerState *s = opaque;
-    uint32_t cpu;
-    hwaddr reg;
+    (void)opaque;
+    (void)addr;
+    (void)value;
+    (void)size;
+}
+
+static uint64_t mmix_timer_context_read(void *opaque, hwaddr addr,
+                                        unsigned int size)
+{
+    MMIXTimerContext *context = opaque;
+    MMIXTimerState *s = context->timer;
 
     (void)size;
 
-    if (mmix_timer_context_offset(addr, &cpu, &reg)) {
-        if (!mmix_timer_context_active(s, cpu)) {
-            return;
-        }
-        switch (reg) {
-        case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
-            s->compare[cpu] = value;
-            mmix_timer_update(s);
-            return;
-        case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
-            s->control[cpu] = value & mmix_timer_control_mask();
-            mmix_timer_update(s);
-            return;
-        case MMIX_VIRT_TIMER_CONTEXT_STATUS:
-            s->status[cpu] &= ~(value & MMIX_VIRT_TIMER_STATUS_PENDING);
-            mmix_timer_update(s);
-            return;
-        default:
-            break;
-        }
+    if (!mmix_timer_context_active(s, context->cpu)) {
+        return 0;
     }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "%s: unimplemented register write 0x%02" HWADDR_PRIx "\n",
-                  __func__, addr);
+    switch (addr) {
+    case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
+        return s->compare[context->cpu];
+    case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
+        return s->control[context->cpu];
+    case MMIX_VIRT_TIMER_CONTEXT_STATUS:
+        return s->status[context->cpu];
+    default:
+        return 0;
+    }
 }
 
-static const MemoryRegionOps mmix_timer_ops = {
-    .read = mmix_timer_read,
-    .write = mmix_timer_write,
+static void mmix_timer_context_write(void *opaque, hwaddr addr,
+                                     uint64_t value, unsigned int size)
+{
+    MMIXTimerContext *context = opaque;
+    MMIXTimerState *s = context->timer;
+
+    (void)size;
+
+    if (!mmix_timer_context_active(s, context->cpu)) {
+        return;
+    }
+    switch (addr) {
+    case MMIX_VIRT_TIMER_CONTEXT_COMPARE:
+        s->compare[context->cpu] = value;
+        break;
+    case MMIX_VIRT_TIMER_CONTEXT_CONTROL:
+        s->control[context->cpu] = value & mmix_timer_control_mask();
+        break;
+    case MMIX_VIRT_TIMER_CONTEXT_STATUS:
+        s->status[context->cpu] &=
+            ~(value & MMIX_VIRT_TIMER_STATUS_PENDING);
+        break;
+    default:
+        return;
+    }
+    mmix_timer_update(s);
+}
+
+static const MemoryRegionOps mmix_timer_global_ops = {
+    .read = mmix_timer_global_read,
+    .write = mmix_timer_global_write,
     .endianness = DEVICE_BIG_ENDIAN,
     .valid.min_access_size = 8,
     .valid.max_access_size = 8,
+    .valid.unaligned = false,
+    .impl.min_access_size = 8,
+    .impl.max_access_size = 8,
+};
+
+static const MemoryRegionOps mmix_timer_context_ops = {
+    .read = mmix_timer_context_read,
+    .write = mmix_timer_context_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid.min_access_size = 8,
+    .valid.max_access_size = 8,
+    .valid.unaligned = false,
     .impl.min_access_size = 8,
     .impl.max_access_size = 8,
 };
@@ -199,6 +193,7 @@ static void mmix_timer_reset(DeviceState *dev)
 static void mmix_timer_realize(DeviceState *dev, Error **errp)
 {
     MMIXTimerState *s = MMIX_TIMER(dev);
+    uint32_t cpu;
 
     if (s->num_cpus == 0 || s->num_cpus > MMIX_VIRT_TIMER_CONTEXT_COUNT) {
         error_setg(errp, "num-cpus must be between 1 and %u",
@@ -207,8 +202,29 @@ static void mmix_timer_realize(DeviceState *dev, Error **errp)
     }
 
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, mmix_timer_expire, s);
-    memory_region_init_io(&s->iomem, OBJECT(s), &mmix_timer_ops, s,
-                          TYPE_MMIX_TIMER, MMIX_VIRT_TIMER_SIZE);
+    memory_region_init(&s->container, OBJECT(s), TYPE_MMIX_TIMER,
+                       MMIX_VIRT_TIMER_RESERVATION_SIZE);
+    memory_region_init_io(&s->global_iomem, OBJECT(s),
+                          &mmix_timer_global_ops, s, "mmix-timer-global",
+                          MMIX_VIRT_TIMER_GLOBAL_REGISTER_SIZE);
+    memory_region_add_subregion(&s->container, 0, &s->global_iomem);
+
+    for (cpu = 0; cpu < MMIX_VIRT_TIMER_CONTEXT_COUNT; cpu++) {
+        MMIXTimerContext *context = &s->context[cpu];
+        g_autofree char *name =
+            g_strdup_printf("mmix-timer-context[%u]", cpu);
+
+        context->timer = s;
+        context->cpu = cpu;
+        memory_region_init_io(&context->iomem, OBJECT(s),
+                              &mmix_timer_context_ops, context, name,
+                              MMIX_VIRT_TIMER_CONTEXT_REGISTER_SIZE);
+        memory_region_add_subregion(
+            &s->container,
+            MMIX_VIRT_TIMER_CONTEXTS_OFFSET +
+            cpu * MMIX_VIRT_TIMER_CONTEXT_STRIDE,
+            &context->iomem);
+    }
 }
 
 static void mmix_timer_unrealize(DeviceState *dev)
@@ -219,10 +235,30 @@ static void mmix_timer_unrealize(DeviceState *dev)
     s->timer = NULL;
 }
 
+static int mmix_timer_post_load(void *opaque, int version_id)
+{
+    MMIXTimerState *s = opaque;
+    uint32_t cpu;
+
+    (void)version_id;
+
+    for (cpu = 0; cpu < MMIX_VIRT_TIMER_CONTEXT_COUNT; cpu++) {
+        if (s->control[cpu] & ~mmix_timer_control_mask() ||
+            s->status[cpu] & ~MMIX_VIRT_TIMER_STATUS_PENDING ||
+            (!mmix_timer_context_active(s, cpu) &&
+             (s->compare[cpu] || s->control[cpu] || s->status[cpu]))) {
+            return -EINVAL;
+        }
+    }
+    mmix_timer_update(s);
+    return 0;
+}
+
 static const VMStateDescription vmstate_mmix_timer = {
     .name = TYPE_MMIX_TIMER,
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = mmix_timer_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64_ARRAY(compare, MMIXTimerState,
                              MMIX_VIRT_TIMER_CONTEXT_COUNT),
@@ -246,7 +282,7 @@ static void mmix_timer_instance_init(Object *obj)
     MMIXTimerState *s = MMIX_TIMER(obj);
     uint32_t cpu;
 
-    sysbus_init_mmio(dev, &s->iomem);
+    sysbus_init_mmio(dev, &s->container);
     for (cpu = 0; cpu < MMIX_VIRT_TIMER_CONTEXT_COUNT; cpu++) {
         sysbus_init_irq(dev, &s->irq[cpu]);
     }
