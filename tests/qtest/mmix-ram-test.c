@@ -162,6 +162,17 @@ static void test_mmix_ram_survives_reset(void)
     qtest_quit(qts);
 }
 
+static void mmix_assert_debug_translation(QTestState *qts, uint64_t virtual,
+                                          uint64_t physical)
+{
+    g_autofree char *expected =
+        g_strdup_printf("gpa: 0x%" PRIx64, physical);
+    g_autofree char *response =
+        qtest_hmp(qts, "gva2gpa 0x%016" PRIx64, virtual);
+
+    g_assert_nonnull(strstr(response, expected));
+}
+
 static void test_mmix_flat_translation_identity(void)
 {
     static const uint64_t addresses[] = {
@@ -173,13 +184,87 @@ static void test_mmix_flat_translation_identity(void)
     unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(addresses); i++) {
-        g_autofree char *expected =
-            g_strdup_printf("gpa: 0x%016" PRIx64, addresses[i]);
-        g_autofree char *response =
-            qtest_hmp(qts, "gva2gpa 0x%016" PRIx64, addresses[i]);
-
-        g_assert_nonnull(strstr(response, expected));
+        mmix_assert_debug_translation(qts, addresses[i], addresses[i]);
     }
+    qtest_quit(qts);
+}
+
+static void test_mmix_negative_alias_translation(void)
+{
+    static const struct {
+        uint64_t start;
+        uint64_t end;
+    } ranges[] = {
+        { UINT64_C(0x0001000000000000), UINT64_C(0x0001000010000000) },
+        { UINT64_C(0x0001000010000000), UINT64_C(0x0001000020000000) },
+        { UINT64_C(0x0001000020000000), UINT64_C(0x0001000030000000) },
+        { UINT64_C(0x0001000030000000), UINT64_C(0x0001000040000000) },
+        { UINT64_C(0x0001000040000000), UINT64_C(0x0001000080000000) },
+        { UINT64_C(0x0001000080000000), UINT64_C(0x0001000100000000) },
+        { UINT64_C(0x0001000100000000), UINT64_C(0x0001000110000000) },
+        { UINT64_C(0x0001000200000000), UINT64_C(0x0001000300000000) },
+        { UINT64_C(0x0001010000000000), UINT64_C(0x0001110000000000) },
+    };
+    QTestState *qts = qtest_init("-machine virt");
+    unsigned int i;
+
+    mmix_assert_debug_translation(qts, UINT64_C(0x8000000000000000), 0);
+    mmix_assert_debug_translation(qts, UINT64_C(0x800000001fffffff),
+                                  UINT64_C(0x000000001fffffff));
+    for (i = 0; i < ARRAY_SIZE(ranges); i++) {
+        uint64_t addresses[] = {
+            ranges[i].start,
+            ranges[i].end - 1,
+            ranges[i].end,
+        };
+        unsigned int j;
+
+        for (j = 0; j < ARRAY_SIZE(addresses); j++) {
+            mmix_assert_debug_translation(
+                qts, addresses[j] | UINT64_C(0x8000000000000000),
+                addresses[j]);
+        }
+    }
+    mmix_assert_debug_translation(qts, UINT64_MAX,
+                                  UINT64_C(0x7fffffffffffffff));
+    qtest_quit(qts);
+}
+
+static void test_mmix_high_physical_addresses_do_not_alias(void)
+{
+    static const uint64_t absent_addresses[] = {
+        UINT64_C(0x0001000000000000),
+        UINT64_C(0x0001000010000000),
+        UINT64_C(0x0001000020000000),
+        UINT64_C(0x0001000030000000),
+        UINT64_C(0x0001000040000000),
+        UINT64_C(0x0001000080000000),
+        UINT64_C(0x0001000100000000),
+        UINT64_C(0x0001000110000000),
+        UINT64_C(0x0001000200000000),
+        UINT64_C(0x0001010000000000),
+        UINT64_C(0x8000000000000000),
+    };
+    static const struct {
+        uint64_t high;
+        uint64_t low;
+    } addresses[] = {
+        { UINT64_C(0x0001000000000000), UINT64_C(0x0000000000000000) },
+        { UINT64_C(0x0001000010000000), UINT64_C(0x0000000010000000) },
+    };
+    QTestState *qts = qtest_init("-machine virt");
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(absent_addresses); i++) {
+        qtest_writeb(qts, absent_addresses[i], 0xa5);
+        g_assert_cmphex(qtest_readb(qts, absent_addresses[i]), !=, 0xa5);
+    }
+    for (i = 0; i < ARRAY_SIZE(addresses); i++) {
+        qtest_writeb(qts, addresses[i].low, 0x5a);
+        qtest_writeb(qts, addresses[i].high, 0xa5);
+        g_assert_cmphex(qtest_readb(qts, addresses[i].low), ==, 0x5a);
+    }
+    g_assert_cmphex(qtest_readb(qts, 0), ==, 0x5a);
     qtest_quit(qts);
 }
 
@@ -259,6 +344,10 @@ int main(int argc, char **argv)
     qtest_add_func("/mmix/ram/reset/cold", test_mmix_ram_survives_reset);
     qtest_add_func("/mmix/translation/flat-identity",
                    test_mmix_flat_translation_identity);
+    qtest_add_func("/mmix/translation/negative-alias",
+                   test_mmix_negative_alias_translation);
+    qtest_add_func("/mmix/translation/high-physical-no-alias",
+                   test_mmix_high_physical_addresses_do_not_alias);
     qtest_add_func("/mmix/ram/kernel/rejected", test_mmix_kernel_rejected);
 
     return g_test_run();

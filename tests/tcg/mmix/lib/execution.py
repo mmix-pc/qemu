@@ -28,6 +28,7 @@ from lib.qemu import (
     build_kernel_command,
     read_log,
     run_kernel,
+    run_loader,
 )
 
 
@@ -62,7 +63,7 @@ def _semihosting_config_args(test, *, chardev=None, chardev_id=None):
     return tuple(args)
 
 
-def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
+def _run_one(qemu, workdir, test, runner, *, qemu_args=(), stdin_data=None):
     image = workdir / f"{test.name}.bin"
     log = workdir / f"{test.name}.log"
 
@@ -70,14 +71,24 @@ def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
     if log.exists():
         log.unlink()
 
-    completed = run_kernel(qemu, image, trace="int", log=log,
-                           qemu_args=qemu_args, check=False, timeout=10,
-                           stdin_data=_test_stdin_data(test, stdin_data))
+    completed = runner(qemu, image, trace="int", log=log,
+                       qemu_args=qemu_args, check=False, timeout=10,
+                       stdin_data=_test_stdin_data(test, stdin_data))
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
     assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)
+
+
+def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
+    _run_one(qemu, workdir, test, run_kernel, qemu_args=qemu_args,
+             stdin_data=stdin_data)
+
+
+def run_one_with_loader(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
+    _run_one(qemu, workdir, test, run_loader, qemu_args=qemu_args,
+             stdin_data=stdin_data)
 
 
 def run_semihosting_one(qemu, workdir, test):

@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/qemu-print.h"
+#include "addressing.h"
 #include "cpu.h"
 #include "semihosting.h"
 #include "accel/tcg/cpu-loop.h"
@@ -510,7 +511,10 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                                                  MMIX_RQ_PROGRAM_N,
                                                  allow_traps && !debug);
         }
-        translation->physical = address & ~(1ULL << 63);
+        if (!mmix_negative_alias_to_phys(address, &translation->physical)) {
+            return mmix_finish_translation_fault(env, translation, causes,
+                                                 allow_traps && !debug);
+        }
         translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
         return true;
     }
