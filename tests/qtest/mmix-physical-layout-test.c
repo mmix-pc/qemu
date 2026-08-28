@@ -7,8 +7,13 @@
 #include "qemu/osdep.h"
 #include "elf.h"
 #include "libqtest.h"
+#include "qemu/bswap.h"
 #include "qemu/units.h"
 #include "qobject/qdict.h"
+
+#ifndef EM_MMIX
+#define EM_MMIX 80
+#endif
 
 #define MMIX_DEFAULT_RAM_SIZE (512 * MiB)
 #define MMIX_INITIAL_STACK_SIZE (32 * KiB)
@@ -512,6 +517,119 @@ static void test_mmix_raw_rejected(gconstpointer opaque)
     g_assert_cmpint(g_rmdir(directory), ==, 0);
 }
 
+static char *mmix_create_bare_elf(const char *directory, uint64_t ram_size)
+{
+    enum {
+        CODE_OFFSET = 0x100,
+        DATA_OFFSET = 0x200,
+        SEGMENT_MEMORY_SIZE = 8,
+    };
+    const uint64_t code_address = 4 * GiB;
+    const uint64_t data_address = ram_size - SEGMENT_MEMORY_SIZE;
+    const uint8_t code[] = { 0x11, 0x22, 0x33, 0x44 };
+    const uint8_t data[] = { 0xaa, 0xbb, 0xcc, 0xdd };
+    uint8_t image[DATA_OFFSET + sizeof(data)] = { 0 };
+    Elf64_Ehdr ehdr = { 0 };
+    Elf64_Phdr phdrs[2] = { 0 };
+    g_autofree char *filename =
+        g_build_filename(directory, "bare.elf", NULL);
+    g_autoptr(GError) error = NULL;
+
+    memcpy(ehdr.e_ident, ELFMAG, SELFMAG);
+    ehdr.e_ident[EI_CLASS] = ELFCLASS64;
+    ehdr.e_ident[EI_DATA] = ELFDATA2MSB;
+    ehdr.e_ident[EI_VERSION] = EV_CURRENT;
+    ehdr.e_type = cpu_to_be16(ET_EXEC);
+    ehdr.e_machine = cpu_to_be16(EM_MMIX);
+    ehdr.e_version = cpu_to_be32(EV_CURRENT);
+    ehdr.e_entry = cpu_to_be64(code_address);
+    ehdr.e_phoff = cpu_to_be64(sizeof(ehdr));
+    ehdr.e_ehsize = cpu_to_be16(sizeof(ehdr));
+    ehdr.e_phentsize = cpu_to_be16(sizeof(phdrs[0]));
+    ehdr.e_phnum = cpu_to_be16(ARRAY_SIZE(phdrs));
+
+    phdrs[0].p_type = cpu_to_be32(PT_LOAD);
+    phdrs[0].p_flags = cpu_to_be32(PF_R | PF_X);
+    phdrs[0].p_offset = cpu_to_be64(CODE_OFFSET);
+    phdrs[0].p_vaddr = cpu_to_be64(code_address);
+    phdrs[0].p_paddr = cpu_to_be64(code_address);
+    phdrs[0].p_filesz = cpu_to_be64(sizeof(code));
+    phdrs[0].p_memsz = cpu_to_be64(SEGMENT_MEMORY_SIZE);
+    phdrs[0].p_align = cpu_to_be64(1);
+
+    phdrs[1].p_type = cpu_to_be32(PT_LOAD);
+    phdrs[1].p_flags = cpu_to_be32(PF_R | PF_W);
+    phdrs[1].p_offset = cpu_to_be64(DATA_OFFSET);
+    phdrs[1].p_vaddr = cpu_to_be64(data_address);
+    phdrs[1].p_paddr = cpu_to_be64(data_address);
+    phdrs[1].p_filesz = cpu_to_be64(sizeof(data));
+    phdrs[1].p_memsz = cpu_to_be64(SEGMENT_MEMORY_SIZE);
+    phdrs[1].p_align = cpu_to_be64(1);
+
+    memcpy(image, &ehdr, sizeof(ehdr));
+    memcpy(image + sizeof(ehdr), phdrs, sizeof(phdrs));
+    memcpy(image + CODE_OFFSET, code, sizeof(code));
+    memcpy(image + DATA_OFFSET, data, sizeof(data));
+    g_assert_true(g_file_set_contents(filename, (const char *)image,
+                                      sizeof(image), &error));
+    g_assert_no_error(error);
+    return g_steal_pointer(&filename);
+}
+
+static void test_mmix_bare_elf_load_and_reset(void)
+{
+    const uint64_t ram_size = 8 * GiB;
+    const uint64_t code_address = 4 * GiB;
+    const uint64_t data_address = ram_size - 8;
+    const uint8_t expected_code[] = {
+        0x11, 0x22, 0x33, 0x44, 0, 0, 0, 0,
+    };
+    const uint8_t expected_data[] = {
+        0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0,
+    };
+    uint8_t actual[8];
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory =
+        g_dir_make_tmp("mmix-elf-bare-XXXXXX", &error);
+    g_autofree char *filename = NULL;
+    g_autofree char *registers = NULL;
+    QTestState *qts;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(directory);
+    filename = mmix_create_bare_elf(directory, ram_size);
+    qts = qtest_initf("-machine virt -m 8G -kernel %s", filename);
+
+    qtest_memread(qts, code_address, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual),
+                    expected_code, sizeof(expected_code));
+    qtest_memread(qts, data_address, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual),
+                    expected_data, sizeof(expected_data));
+    registers = qtest_hmp(qts, "info registers");
+    g_assert_nonnull(strstr(registers, "pc=0x0000000100000000"));
+    g_assert_nonnull(strstr(registers, "rL=0"));
+    g_assert_nonnull(strstr(registers, "r0  =0x0000000000000000"));
+    g_assert_nonnull(strstr(registers, "r1  =0x0000000000000000"));
+
+    qtest_memset(qts, code_address, 0xa5, sizeof(actual));
+    qtest_memset(qts, data_address, 0xa5, sizeof(actual));
+    qtest_system_reset(qts);
+    qtest_memread(qts, code_address, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual),
+                    expected_code, sizeof(expected_code));
+    qtest_memread(qts, data_address, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual),
+                    expected_data, sizeof(expected_data));
+    g_clear_pointer(&registers, g_free);
+    registers = qtest_hmp(qts, "info registers");
+    g_assert_nonnull(strstr(registers, "pc=0x0000000100000000"));
+    qtest_quit(qts);
+
+    g_assert_cmpint(g_unlink(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     static const MMIXRAMAcceptedCase accepted[] = {
@@ -653,6 +771,8 @@ int main(int argc, char **argv)
                    test_mmix_initial_stack_cpu_limit);
     qtest_add_func("/mmix/kernel/raw/minimum-reset",
                    test_mmix_raw_minimum_and_reset);
+    qtest_add_func("/mmix/kernel/elf/bare-load-reset",
+                   test_mmix_bare_elf_load_and_reset);
     qtest_add_func("/mmix/translation/flat-identity",
                    test_mmix_flat_translation_identity);
     qtest_add_func("/mmix/translation/negative-alias",

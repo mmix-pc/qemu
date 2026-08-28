@@ -284,6 +284,31 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                    "sparse memory support is implemented");
         return false;
     case MMIX_KERNEL_IMAGE_ELF:
+        if (vms->elf_startup_abi != MMIX_ELF_STARTUP_ABI_BARE) {
+            error_setg(errp, "MMIX ELF startup ABI 'argc-argv' is not yet "
+                       "implemented for direct boot");
+            return false;
+        }
+        if (machine->smp.cpus != 1) {
+            error_setg(errp, "MMIX ELF startup ABI 'bare' requires exactly "
+                       "one CPU");
+            return false;
+        }
+        if (mmix_virt_has_semihosting_args()) {
+            error_setg(errp, "MMIX ELF startup ABI 'bare' does not accept "
+                       "semihosting arguments");
+            return false;
+        }
+        if (machine->kernel_cmdline && machine->kernel_cmdline[0]) {
+            error_setg(errp, "MMIX ELF startup ABI 'bare' does not accept "
+                       "-append");
+            return false;
+        }
+        if (machine->initrd_filename) {
+            error_setg(errp, "MMIX ELF startup ABI 'bare' does not accept "
+                       "-initrd");
+            return false;
+        }
         return mmix_preflight_elf_kernel(machine->kernel_filename, &vms->ram,
                                          info, image_ranges, errp);
     case MMIX_KERNEL_IMAGE_RAW: {
@@ -360,22 +385,29 @@ static void mmix_virt_init(MachineState *machine)
         return;
     }
 
-    if (image_info_ptr &&
-        image_info_ptr->image_type == MMIX_KERNEL_IMAGE_ELF) {
-        error_report("MMIX ELF -kernel preflight succeeded; loading awaits "
-                     "direct-entry startup implementation");
-        exit(EXIT_FAILURE);
-    }
-
     memory_region_add_subregion(get_system_memory(), vms->ram.start,
                                 machine->ram);
 
-    if (image_info_ptr &&
-        mmix_commit_raw_kernel(machine->kernel_filename, &vms->ram,
-                               g_array_index(image_ranges,
-                                             MMIXKernelImageRange, 0).size,
-                               &error_fatal) < 0) {
-        return;
+    if (image_info_ptr) {
+        switch (image_info_ptr->image_type) {
+        case MMIX_KERNEL_IMAGE_RAW:
+            if (mmix_commit_raw_kernel(
+                    machine->kernel_filename, &vms->ram,
+                    g_array_index(image_ranges,
+                                  MMIXKernelImageRange, 0).size,
+                    &error_fatal) < 0) {
+                return;
+            }
+            break;
+        case MMIX_KERNEL_IMAGE_ELF:
+            if (mmix_commit_elf_kernel(machine->kernel_filename,
+                                       &error_fatal) < 0) {
+                return;
+            }
+            break;
+        default:
+            g_assert_not_reached();
+        }
     }
 
     for (i = 0; i < machine->smp.cpus; i++) {

@@ -17,6 +17,8 @@ bool mmix_preflight_elf_kernel(const char *filename,
                                MMIXKernelLoadInfo *info,
                                GArray **image_ranges, Error **errp);
 
+ssize_t mmix_commit_elf_kernel(const char *filename, Error **errp);
+
 ssize_t mmix_load_elf(const char *filename,
                       const MMIXPhysicalRAM *ram,
                       MMIXKernelLoadInfo *info, Error **errp);

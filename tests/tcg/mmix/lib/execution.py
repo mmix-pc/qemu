@@ -136,11 +136,14 @@ def run_process_failure(qemu, workdir, test):
     image = workdir / f"{test.name}.bin"
 
     image.write_bytes(test.program)
+    qemu_args = tuple(
+        str(image) if arg == "$IMAGE" else arg for arg in test.qemu_args
+    )
 
     result = run_kernel(
         qemu,
         image,
-        qemu_args=test.qemu_args,
+        qemu_args=qemu_args,
         check=False,
         timeout=10,
         capture_output=True,

@@ -520,6 +520,19 @@ static void mmix_apply_elf_load_info(MMIXKernelLoadInfo *info, uint64_t entry)
     info->boot_cpu_id = 0;
 }
 
+ssize_t mmix_commit_elf_kernel(const char *filename, Error **errp)
+{
+    ssize_t size;
+
+    size = load_elf(filename, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                    ELFDATA2MSB, EM_MMIX, 0, 0);
+    if (size < 0) {
+        error_setg(errp, "could not load MMIX ELF kernel '%s': %s", filename,
+                   load_elf_strerror(size));
+    }
+    return size;
+}
+
 ssize_t mmix_load_elf(const char *filename,
                       const MMIXPhysicalRAM *ram,
                       MMIXKernelLoadInfo *info, Error **errp)

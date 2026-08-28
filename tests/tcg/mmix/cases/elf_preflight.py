@@ -4,6 +4,7 @@
 
 from .common import (
     MASK64,
+    MMIXELFTest,
     MMIXProcessFailure,
     PT_INTERP,
     PT_LOAD,
@@ -13,12 +14,6 @@ from .common import (
     elf64_patch_phdr_field,
     elf64_phdr,
     halt,
-)
-
-
-PREFLIGHT_COMPLETE = (
-    "MMIX ELF -kernel preflight succeeded; loading awaits direct-entry "
-    "startup implementation"
 )
 
 
@@ -76,32 +71,37 @@ OVERLAPPING_SEGMENTS = elf64_segments(
 )
 
 
-ELF_PREFLIGHT_TESTS = [
-    MMIXProcessFailure(
+ELF_PREFLIGHT_VALID_TESTS = [
+    MMIXELFTest(
         "elf-preflight-simple",
         SIMPLE,
-        (),
-        (PREFLIGHT_COMPLETE,),
+        pc=0,
+        regs={},
     ),
-    MMIXProcessFailure(
+    MMIXELFTest(
         "elf-preflight-segments-share-reservation-page",
         TWO_SEGMENTS_ONE_PAGE,
-        (),
-        (PREFLIGHT_COMPLETE,),
+        pc=0x2000,
+        regs={},
     ),
-    MMIXProcessFailure(
+    MMIXELFTest(
         "elf-preflight-ram-endpoint",
         elf64_image(128 * 1024 * 1024 - 4, halt(),
                     entry=128 * 1024 * 1024 - 4),
-        ("-m", "128M"),
-        (PREFLIGHT_COMPLETE,),
+        pc=128 * 1024 * 1024 - 4,
+        regs={},
+        qemu_args=("-m", "128M"),
     ),
-    MMIXProcessFailure(
+    MMIXELFTest(
         "elf-preflight-above-4g",
         elf64_image(0x100000000, halt(), entry=0x100000000),
-        ("-m", "8G"),
-        (PREFLIGHT_COMPLETE,),
+        pc=0x100000000,
+        regs={},
+        qemu_args=("-m", "8G"),
     ),
+]
+
+ELF_PREFLIGHT_FAILURE_TESTS = [
     MMIXProcessFailure(
         "elf-preflight-invalid-header-size",
         elf64_patch_ehdr_field(SIMPLE, "header_size", 63),
