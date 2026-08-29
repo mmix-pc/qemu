@@ -30,6 +30,8 @@
 #include "intc.h"
 #include "ipi.h"
 #include "kernel-loader.h"
+#include "mmo-hosted-plan.h"
+#include "mmo-loader.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
 #include "ram-reservation.h"
@@ -61,6 +63,10 @@ struct MMIXVirtMachineState {
     uint64_t argument_base;
     uint64_t argument_count;
     MMIXELFStartupABI elf_startup_abi;
+    bool elf_startup_abi_explicit;
+    MMIXMMOPlan *mmo_plan;
+    MMIXMMOHostedPlan *mmo_hosted_plan;
+    MMIXSparseMemory *mmo_memory;
     CPUState *cpus[MMIX_VIRT_MAX_CPUS];
     uint64_t initial_stacks[MMIX_VIRT_MAX_CPUS];
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
@@ -69,6 +75,31 @@ struct MMIXVirtMachineState {
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
+
+static bool mmix_virt_hosted_read(void *opaque, uint64_t address,
+                                  void *buffer, size_t size,
+                                  size_t alignment, Error **errp)
+{
+    MMIXVirtMachineState *vms = opaque;
+
+    return mmix_sparse_memory_read(vms->mmo_memory, address, buffer, size,
+                                   alignment, errp);
+}
+
+static bool mmix_virt_hosted_write(void *opaque, uint64_t address,
+                                   const void *buffer, size_t size,
+                                   size_t alignment, Error **errp)
+{
+    MMIXVirtMachineState *vms = opaque;
+
+    return mmix_sparse_memory_write(vms->mmo_memory, address, buffer, size,
+                                    alignment, errp);
+}
+
+static const MMIXHostedMemoryOps mmix_virt_hosted_memory_ops = {
+    .read = mmix_virt_hosted_read,
+    .write = mmix_virt_hosted_write,
+};
 
 static void mmix_virt_cpu_irq(void *opaque, int irq, int level)
 {
@@ -387,10 +418,14 @@ static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
 
     cpu->cpu_index = cpu_index;
     object_property_set_uint(cpuobj, "initial-stack",
+                             vms->mmo_memory ? MMIX_HOSTED_STACK_BASE :
                              vms->initial_stacks[cpu_index], &error_fatal);
     object_property_add_child(OBJECT(machine), name, cpuobj);
     qdev_realize_and_unref(DEVICE(cpuobj), NULL, &error_fatal);
     vms->cpus[cpu_index] = cpu;
+    if (vms->mmo_memory) {
+        mmix_cpu_set_hosted_memory(cpu, &mmix_virt_hosted_memory_ops, vms);
+    }
     return cpu;
 }
 
@@ -409,6 +444,28 @@ static void mmix_virt_apply_global_registers(
          reg < info->global_base + info->global_count; reg++) {
         mmix_cpu_write_reg(env, reg, info->globals[reg]);
     }
+}
+
+static void mmix_virt_apply_mmo_startup(MMIXVirtMachineState *vms,
+                                        CPUState *cs)
+{
+    CPUMMIXState *env = &MMIX_CPU(cs)->env;
+
+    env->sregs[MMIX_SREG_RL] = 0;
+    env->sregs[MMIX_SREG_RO] = MMIX_HOSTED_STACK_BASE;
+    env->sregs[MMIX_SREG_RS] = MMIX_HOSTED_STACK_BASE;
+    env->sregs[MMIX_SREG_RK] = UINT64_MAX;
+    env->sregs[MMIX_SREG_RQ] = 0;
+    env->sregs[MMIX_SREG_RT] = MMIX_INITIAL_RT;
+    env->sregs[MMIX_SREG_RTT] = MMIX_INITIAL_RTT;
+    env->sregs[MMIX_SREG_RV] = MMIX_INITIAL_RV;
+    env->flat_translation = false;
+    mmix_cpu_write_reg(env, 0,
+                       mmix_mmo_hosted_plan_argument_count(
+                           vms->mmo_hosted_plan));
+    mmix_cpu_write_reg(env, 1,
+                       mmix_mmo_hosted_plan_argv(vms->mmo_hosted_plan));
+    mmix_cpu_update_interrupt(env);
 }
 
 static void mmix_virt_reset(MachineState *machine, ResetType type)
@@ -441,6 +498,9 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         g_assert(result == MEMTX_OK);
         cpu_reset(vms->cpus[i]);
         mmix_virt_apply_global_registers(vms->cpus[i], info);
+        if (vms->mmo_memory) {
+            mmix_virt_apply_mmo_startup(vms, vms->cpus[i]);
+        }
         if (i == (info ? info->boot_cpu_id : 0) && vms->argument_data) {
             CPUMMIXState *env = &MMIX_CPU(vms->cpus[i])->env;
 
@@ -470,10 +530,58 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
     }
 
     switch (type) {
-    case MMIX_KERNEL_IMAGE_MMO:
-        error_setg(errp, "MMIX MMO -kernel loading is unavailable until "
-                   "sparse memory support is implemented");
-        return false;
+    case MMIX_KERNEL_IMAGE_MMO: {
+        MMIXMMOHostedOptions options;
+        MMIXMMOPlan *mmo_plan = NULL;
+        MMIXMMOHostedPlan *hosted_plan = NULL;
+        MMIXSparseMemory *memory = NULL;
+        g_auto(GStrv) explicit_arguments = NULL;
+        uint64_t explicit_argument_count = 0;
+        uint64_t explicit_argument_size = 0;
+        bool has_explicit_arguments = mmix_virt_has_semihosting_args();
+
+        if (has_explicit_arguments &&
+            !mmix_virt_copy_arguments(&explicit_arguments,
+                                      &explicit_argument_count,
+                                      &explicit_argument_size, errp)) {
+            return false;
+        }
+        options = (MMIXMMOHostedOptions) {
+            .kernel_filename = machine->kernel_filename,
+            .append = machine->kernel_cmdline,
+            .explicit_arguments =
+                (const char *const *)explicit_arguments,
+            .explicit_argument_count = explicit_argument_count,
+            .sparse_budget = machine->ram_size,
+            .cpu_count = machine->smp.cpus,
+            .has_explicit_arguments = has_explicit_arguments,
+            .semihosting_enabled = semihosting_enabled(false),
+            .has_initrd = machine->initrd_filename != NULL,
+            .has_explicit_elf_startup_abi =
+                vms->elf_startup_abi_explicit,
+            .has_firmware = machine->firmware != NULL,
+            .linux_handoff = false,
+        };
+        if (!mmix_mmo_plan_parse(machine->kernel_filename, &mmo_plan,
+                                 errp) ||
+            !mmix_mmo_hosted_plan_build(mmo_plan, &options, &hosted_plan,
+                                        errp) ||
+            !mmix_mmo_hosted_plan_commit(mmo_plan, hosted_plan, &memory,
+                                         errp)) {
+            mmix_sparse_memory_free(memory);
+            mmix_mmo_hosted_plan_free(hosted_plan);
+            mmix_mmo_plan_free(mmo_plan);
+            return false;
+        }
+        *info = *mmix_mmo_plan_load_info(mmo_plan);
+        mmix_sparse_memory_free(vms->mmo_memory);
+        mmix_mmo_hosted_plan_free(vms->mmo_hosted_plan);
+        mmix_mmo_plan_free(vms->mmo_plan);
+        vms->mmo_plan = mmo_plan;
+        vms->mmo_hosted_plan = hosted_plan;
+        vms->mmo_memory = memory;
+        return true;
+    }
     case MMIX_KERNEL_IMAGE_ELF:
         if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_BARE) {
             if (machine->smp.cpus != 1) {
@@ -683,6 +791,8 @@ static void mmix_virt_init(MachineState *machine)
                 return;
             }
             break;
+        case MMIX_KERNEL_IMAGE_MMO:
+            break;
         default:
             g_assert_not_reached();
         }
@@ -791,7 +901,9 @@ static void mmix_virt_set_elf_startup_abi(Object *obj, const char *value,
         error_setg(errp, "Invalid MMIX ELF startup ABI '%s'", value);
         error_append_hint(errp, "Valid values are bare, argc-argv, and "
                           "linux.\n");
+        return;
     }
+    vms->elf_startup_abi_explicit = true;
 }
 
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)
@@ -831,6 +943,9 @@ static void mmix_virt_instance_finalize(Object *obj)
 
     mmix_boot_plan_free(vms->boot_plan);
     g_clear_pointer(&vms->argument_data, g_bytes_unref);
+    mmix_sparse_memory_free(vms->mmo_memory);
+    mmix_mmo_hosted_plan_free(vms->mmo_hosted_plan);
+    mmix_mmo_plan_free(vms->mmo_plan);
 }
 
 static const TypeInfo mmix_virt_machine_typeinfo = {

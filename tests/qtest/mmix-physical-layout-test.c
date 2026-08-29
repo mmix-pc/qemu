@@ -792,7 +792,7 @@ int main(int argc, char **argv)
         },
         {
             "image.mmo", mmo_image, sizeof(mmo_image),
-            "MMIX MMO -kernel loading is unavailable",
+            "missing MMIX .mmo lop_post",
         },
         {
             "truncated.elf", truncated_elf, sizeof(truncated_elf),

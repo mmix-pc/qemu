@@ -17,6 +17,7 @@
 #include "exec/cpu-common.h"
 #include "exec/cpu-interrupt.h"
 #include "exec/mmu-access-type.h"
+#include "hosted-memory.h"
 
 #ifdef CONFIG_USER_ONLY
 #error "MMIX does not support user mode emulation"
@@ -260,6 +261,8 @@ struct ArchCPU {
     GArray *data_translation_cache;
     /* Internal restart state for nested architectural dynamic traps. */
     GArray *trap_restart_stack;
+    const MMIXHostedMemoryOps *hosted_memory_ops;
+    void *hosted_memory_opaque;
 };
 
 struct MMIXCPUClass {
@@ -286,6 +289,11 @@ bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);
 void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 void mmix_cpu_set_ipi(CPUState *cs, int level);
+void mmix_cpu_set_hosted_memory(CPUState *cs,
+                                const MMIXHostedMemoryOps *ops,
+                                void *opaque);
+bool mmix_cpu_hosted_memory_enabled(CPUMMIXState *env);
+uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
 bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,

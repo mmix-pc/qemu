@@ -835,6 +835,21 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
     hwaddr vpage = addr & TARGET_PAGE_MASK;
     hwaddr ppage;
 
+    if (mmix_cpu_hosted_memory_enabled(env) &&
+        access_type == MMU_INST_FETCH) {
+        /*
+         * TCG probes its code TLB before the target translator fetches an
+         * instruction.  Point that probe at an unassigned physical page so
+         * TCG creates a one-shot TB without introducing physical backing for
+         * hosted logical memory.  The target fetch below remains authoritative.
+         */
+        mmix_cpu_hosted_fetch(env, addr);
+        ppage = MMIX_PHYS_MASK & TARGET_PAGE_MASK;
+        tlb_set_page(cs, vpage, ppage, PAGE_EXEC, mmu_idx,
+                     TARGET_PAGE_SIZE);
+        return true;
+    }
+
     if (!mmix_translate_address(env, addr, access_type, false, false,
                                 &translation)) {
         if (probe) {
