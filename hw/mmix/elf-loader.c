@@ -272,12 +272,18 @@ static bool mmix_preflight_elf_segments(
     return true;
 }
 
+static bool mmix_preflight_elf_registers(const char *filename,
+                                         const Elf64_Ehdr *ehdr,
+                                         MMIXKernelLoadInfo *info,
+                                         Error **errp);
+
 bool mmix_preflight_elf_kernel(const char *filename,
                                const MMIXPhysicalRAM *ram,
                                MMIXKernelLoadInfo *info,
                                GArray **image_ranges, Error **errp)
 {
     g_autoptr(GArray) ranges = NULL;
+    MMIXKernelLoadInfo load_info;
     Elf64_Ehdr ehdr;
 
     g_return_val_if_fail(image_ranges != NULL, false);
@@ -286,11 +292,16 @@ bool mmix_preflight_elf_kernel(const char *filename,
         return false;
     }
 
-    *info = (MMIXKernelLoadInfo) {
+    load_info = (MMIXKernelLoadInfo) {
         .entry = be64_to_cpu(ehdr.e_entry),
         .image_type = MMIX_KERNEL_IMAGE_ELF,
         .boot_cpu_id = 0,
     };
+    if (!mmix_preflight_elf_registers(filename, &ehdr, &load_info, errp)) {
+        return false;
+    }
+
+    *info = load_info;
     g_clear_pointer(image_ranges, g_array_unref);
     *image_ranges = g_steal_pointer(&ranges);
     return true;
@@ -344,6 +355,11 @@ static bool mmix_elf_decode_registers(const char *filename,
                    mmix_elf_reg_contents_name, filename);
         return false;
     }
+    if (size == 0) {
+        error_setg(errp, "empty %s section in '%s'",
+                   mmix_elf_reg_contents_name, filename);
+        return false;
+    }
     if (address % MMIX_OCTA_SIZE || size % MMIX_OCTA_SIZE) {
         error_setg(errp, "unaligned %s section in '%s'",
                    mmix_elf_reg_contents_name, filename);
@@ -376,9 +392,10 @@ static bool mmix_elf_decode_registers(const char *filename,
     return true;
 }
 
-static bool mmix_load_elf_registers(const char *filename,
-                                    const Elf64_Ehdr *ehdr,
-                                    MMIXKernelLoadInfo *info, Error **errp)
+static bool mmix_preflight_elf_registers(const char *filename,
+                                         const Elf64_Ehdr *ehdr,
+                                         MMIXKernelLoadInfo *info,
+                                         Error **errp)
 {
     g_autoptr(GMappedFile) mapped = NULL;
     g_autoptr(GError) gerr = NULL;
@@ -538,7 +555,6 @@ ssize_t mmix_load_elf(const char *filename,
                       MMIXKernelLoadInfo *info, Error **errp)
 {
     g_autoptr(GArray) image_ranges = NULL;
-    Elf64_Ehdr ehdr;
     uint64_t entry;
     uint64_t lowaddr;
     uint64_t highaddr;
@@ -546,12 +562,6 @@ ssize_t mmix_load_elf(const char *filename,
 
     if (!mmix_preflight_elf_kernel(filename, ram, info, &image_ranges,
                                    errp)) {
-        return -1;
-    }
-    if (!mmix_validate_elf_header(filename, &ehdr, errp)) {
-        return -1;
-    }
-    if (!mmix_load_elf_registers(filename, &ehdr, info, errp)) {
         return -1;
     }
     if (!mmix_load_elf_segments(filename, &entry, &lowaddr, &highaddr,

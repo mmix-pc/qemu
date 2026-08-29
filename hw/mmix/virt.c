@@ -240,9 +240,28 @@ static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
     return cpu;
 }
 
+static void mmix_virt_apply_global_registers(
+    CPUState *cs, const MMIXKernelLoadInfo *info)
+{
+    CPUMMIXState *env = &MMIX_CPU(cs)->env;
+    unsigned int reg;
+
+    if (!info || !info->has_global_registers) {
+        return;
+    }
+
+    env->sregs[MMIX_SREG_RG] = info->global_base;
+    for (reg = info->global_base;
+         reg < info->global_base + info->global_count; reg++) {
+        mmix_cpu_write_reg(env, reg, info->globals[reg]);
+    }
+}
+
 static void mmix_virt_reset(MachineState *machine, ResetType type)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
+    const MMIXKernelLoadInfo *info =
+        mmix_boot_plan_image_info(vms->boot_plan);
     unsigned int i;
 
     qemu_devices_reset(type);
@@ -257,12 +276,10 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
 
         g_assert(result == MEMTX_OK);
         cpu_reset(vms->cpus[i]);
+        mmix_virt_apply_global_registers(vms->cpus[i], info);
     }
 
-    if (mmix_boot_plan_image_info(vms->boot_plan)) {
-        const MMIXKernelLoadInfo *info =
-            mmix_boot_plan_image_info(vms->boot_plan);
-
+    if (info) {
         cpu_set_pc(vms->cpus[info->boot_cpu_id], info->entry);
     }
 }
