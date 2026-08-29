@@ -13,6 +13,11 @@ typedef struct MMIXSparsePage {
     uint8_t data[MMIX_SPARSE_PAGE_SIZE];
 } MMIXSparsePage;
 
+typedef struct MMIXSparsePendingPage {
+    uint64_t *key;
+    MMIXSparsePage *page;
+} MMIXSparsePendingPage;
+
 struct MMIXSparseMemory {
     GTree *pages;
     uint64_t budget;
@@ -45,7 +50,11 @@ MMIXSparseMemory *mmix_sparse_memory_new(uint64_t budget, Error **errp)
         return NULL;
     }
 
-    memory = g_new0(MMIXSparseMemory, 1);
+    memory = g_try_new0(MMIXSparseMemory, 1);
+    if (!memory) {
+        error_setg(errp, "could not allocate MMIX sparse-memory state");
+        return NULL;
+    }
     memory->pages = mmix_sparse_page_tree_new();
     memory->budget = budget;
     return memory;
@@ -183,6 +192,70 @@ static uint64_t mmix_sparse_memory_missing_pages(
     }
 }
 
+static void mmix_sparse_pending_pages_free(MMIXSparsePendingPage *pages,
+                                           uint64_t count)
+{
+    uint64_t i;
+
+    for (i = 0; i < count; i++) {
+        g_free(pages[i].key);
+        g_free(pages[i].page);
+    }
+    g_free(pages);
+}
+
+static bool mmix_sparse_memory_allocate_pages(MMIXSparseMemory *memory,
+                                              uint64_t first_page,
+                                              uint64_t last_page,
+                                              uint64_t missing,
+                                              Error **errp)
+{
+    MMIXSparsePendingPage *pending;
+    uint64_t page_number;
+    uint64_t index = 0;
+
+    if (!missing) {
+        return true;
+    }
+    pending = g_try_new0(MMIXSparsePendingPage, missing);
+    if (!pending) {
+        error_setg(errp,
+                   "could not allocate metadata for %" PRIu64
+                   " MMIX sparse-memory pages", missing);
+        return false;
+    }
+
+    for (page_number = first_page; ; page_number++) {
+        if (!mmix_sparse_memory_lookup(memory, page_number)) {
+            pending[index].key = g_try_new(uint64_t, 1);
+            pending[index].page = g_try_new0(MMIXSparsePage, 1);
+            if (!pending[index].key || !pending[index].page) {
+                error_setg(errp,
+                           "could not allocate MMIX sparse-memory page "
+                           "0x%" PRIx64, page_number);
+                mmix_sparse_pending_pages_free(pending, missing);
+                return false;
+            }
+            *pending[index].key = page_number;
+            index++;
+        }
+        if (page_number == last_page) {
+            break;
+        }
+    }
+    g_assert(index == missing);
+
+    for (index = 0; index < missing; index++) {
+        g_tree_insert(memory->pages, pending[index].key,
+                      pending[index].page);
+        pending[index].key = NULL;
+        pending[index].page = NULL;
+    }
+    memory->materialized_pages += missing;
+    mmix_sparse_pending_pages_free(pending, missing);
+    return true;
+}
+
 bool mmix_sparse_memory_write(MMIXSparseMemory *memory, uint64_t address,
                               const void *buffer, size_t size,
                               size_t alignment, Error **errp)
@@ -193,7 +266,6 @@ bool mmix_sparse_memory_write(MMIXSparseMemory *memory, uint64_t address,
     uint64_t missing;
     uint64_t available;
     uint64_t page_count;
-    uint64_t page_number;
     size_t remaining = size;
 
     g_assert(memory);
@@ -227,18 +299,9 @@ bool mmix_sparse_memory_write(MMIXSparseMemory *memory, uint64_t address,
         return false;
     }
 
-    for (page_number = first_page; ; page_number++) {
-        if (!mmix_sparse_memory_lookup(memory, page_number)) {
-            uint64_t *key = g_new(uint64_t, 1);
-            MMIXSparsePage *page = g_new0(MMIXSparsePage, 1);
-
-            *key = page_number;
-            g_tree_insert(memory->pages, key, page);
-            memory->materialized_pages++;
-        }
-        if (page_number == last_page) {
-            break;
-        }
+    if (!mmix_sparse_memory_allocate_pages(memory, first_page, last_page,
+                                           missing, errp)) {
+        return false;
     }
 
     while (remaining) {

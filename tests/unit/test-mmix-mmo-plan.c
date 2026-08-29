@@ -720,6 +720,194 @@ static void test_hosted_failure_preserves_plan(void)
     g_byte_array_unref(image);
 }
 
+static uint32_t sparse_read_tetra(MMIXSparseMemory *memory,
+                                  uint64_t address)
+{
+    uint8_t data[4];
+
+    g_assert_true(mmix_sparse_memory_read(memory, address, data,
+                                          sizeof(data), sizeof(data),
+                                          &error_abort));
+    return ldl_be_p(data);
+}
+
+static uint64_t sparse_read_octa(MMIXSparseMemory *memory,
+                                 uint64_t address)
+{
+    uint8_t data[8];
+
+    g_assert_true(mmix_sparse_memory_read(memory, address, data,
+                                          sizeof(data), sizeof(data),
+                                          &error_abort));
+    return ldq_be_p(data);
+}
+
+static GByteArray *hosted_commit_image(void)
+{
+    const uint64_t data = MMIX_SPARSE_DATA_BASE +
+                          4 * MMIX_SPARSE_PAGE_SIZE;
+    const uint64_t pool = MMIX_SPARSE_POOL_BASE + 0x100;
+    const uint64_t stack = MMIX_SPARSE_STACK_BASE + (UINT64_C(1) << 40);
+    GByteArray *image = g_byte_array_new();
+
+    image_begin(image, 0);
+    image_append_tetra(image, 0x01020304);
+    image_append_lop(image, LOP_FIXR, 0, 1);
+    image_append_lop(image, LOP_FIXRX, 0, 16);
+    image_append_tetra(image, 1);
+    image_append_address_lop(image, LOP_LOC, data);
+    image_append_tetra(image, 0x11223344);
+    image_append_address_lop(image, LOP_LOC, data);
+    image_append_tetra(image, 0x01010101);
+    image_append_address_lop(image, LOP_LOC, pool);
+    image_append_tetra(image, 0xaabbccdd);
+    image_append_tetra(image, 0x55667788);
+    image_append_address_lop(image, LOP_LOC,
+                             MMIX_SPARSE_DATA_BASE + 0x200);
+    image_append_address_lop(image, LOP_FIXO, pool);
+    image_append_address_lop(image, LOP_FIXO, pool);
+    image_append_address_lop(image, LOP_LOC, stack);
+    image_append_tetra(image, 0xdeadbeef);
+    image_append_post(image, 255, 0, 0);
+    image_append_symbol_tail(image, NULL, 0);
+    return image;
+}
+
+static void test_hosted_commit_sparse_memory(void)
+{
+    const uint64_t data_address = MMIX_SPARSE_DATA_BASE +
+                                  4 * MMIX_SPARSE_PAGE_SIZE;
+    const uint64_t pool_address = MMIX_SPARSE_POOL_BASE + 0x100;
+    const uint64_t stack_address = MMIX_SPARSE_STACK_BASE +
+                                   (UINT64_C(1) << 40);
+    GByteArray *image = hosted_commit_image();
+    MMIXMMOHostedOptions options = hosted_options();
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXSparseMemory *memory = NULL;
+    MMIXMMOPlan *mmo = NULL;
+    const uint8_t *argument_data;
+    g_autofree uint8_t *loaded_arguments = NULL;
+    size_t argument_size;
+    uint8_t hole[16];
+
+    options.sparse_budget = 4 * MMIX_SPARSE_PAGE_SIZE;
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_build(mmo, &options, &hosted,
+                                             &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_commit(mmo, hosted, &memory,
+                                              &error_abort));
+
+    g_assert_cmphex(sparse_read_tetra(memory, 0), ==, 0x01020304);
+    g_assert_cmphex(sparse_read_tetra(memory, data_address), ==,
+                    0x10233245);
+    g_assert_cmphex(sparse_read_octa(memory, pool_address), ==,
+                    UINT64_C(0xaabbccdd55667788));
+    g_assert_cmphex(sparse_read_tetra(memory, stack_address), ==,
+                    0xdeadbeef);
+    memset(hole, 0xff, sizeof(hole));
+    g_assert_true(mmix_sparse_memory_read(
+        memory, MMIX_SPARSE_DATA_BASE + 8 * MMIX_SPARSE_PAGE_SIZE,
+        hole, sizeof(hole), 1, &error_abort));
+    g_assert_cmpmem(hole, sizeof(hole),
+                    (const uint8_t[sizeof(hole)]) { 0 }, sizeof(hole));
+
+    argument_data = mmix_mmo_hosted_plan_argument_data(hosted,
+                                                        &argument_size);
+    loaded_arguments = g_malloc(argument_size);
+    g_assert_true(mmix_sparse_memory_read(
+        memory, MMIX_SPARSE_POOL_BASE, loaded_arguments, argument_size,
+        sizeof(uint64_t), &error_abort));
+    g_assert_cmpmem(loaded_arguments, argument_size,
+                    argument_data, argument_size);
+    g_assert_cmpuint(mmix_sparse_memory_materialized_pages(memory), ==, 4);
+
+    mmix_sparse_memory_free(memory);
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
+static void test_hosted_commit_failure_preserves_store(void)
+{
+    const uint8_t marker[] = { 0x5a, 0xa5 };
+    GByteArray *small_image = minimal_image(0);
+    GByteArray *large_image = hosted_commit_image();
+    MMIXMMOHostedOptions options = hosted_options();
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXSparseMemory *memory;
+    MMIXSparseMemory *original;
+    MMIXMMOPlan *small_mmo = NULL;
+    MMIXMMOPlan *large_mmo = NULL;
+    uint8_t output[sizeof(marker)] = { 0 };
+    Error *err = NULL;
+
+    options.sparse_budget = 2 * MMIX_SPARSE_PAGE_SIZE;
+    g_assert_true(parse_image(small_image, &small_mmo, &error_abort));
+    g_assert_true(parse_image(large_image, &large_mmo, &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_build(
+        small_mmo, &options, &hosted, &error_abort));
+
+    memory = mmix_sparse_memory_new(MMIX_SPARSE_PAGE_SIZE, &error_abort);
+    g_assert_true(mmix_sparse_memory_write(memory, 0x100, marker,
+                                           sizeof(marker), 1,
+                                           &error_abort));
+    original = memory;
+    g_assert_false(mmix_mmo_hosted_plan_commit(large_mmo, hosted,
+                                               &memory, &err));
+    g_assert_true(memory == original);
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err), "only 0 available"));
+    error_free(err);
+    g_assert_true(mmix_sparse_memory_read(memory, 0x100, output,
+                                          sizeof(output), 1,
+                                          &error_abort));
+    g_assert_cmpmem(output, sizeof(output), marker, sizeof(marker));
+    g_assert_cmpuint(mmix_sparse_memory_materialized_pages(memory), ==, 1);
+
+    mmix_sparse_memory_free(memory);
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(large_mmo);
+    mmix_mmo_plan_free(small_mmo);
+    g_byte_array_unref(large_image);
+    g_byte_array_unref(small_image);
+}
+
+static void test_hosted_commit_machine_budgets(void)
+{
+    static const uint64_t budgets[] = {
+        128 * MiB,
+        512 * MiB,
+        4 * GiB + 128 * MiB,
+    };
+    GByteArray *image = hosted_commit_image();
+    MMIXMMOHostedOptions options = hosted_options();
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXSparseMemory *memory = NULL;
+    MMIXMMOPlan *mmo = NULL;
+    size_t i;
+
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    for (i = 0; i < ARRAY_SIZE(budgets); i++) {
+        options.sparse_budget = budgets[i];
+        g_assert_true(mmix_mmo_hosted_plan_build(
+            mmo, &options, &hosted, &error_abort));
+        g_assert_true(mmix_mmo_hosted_plan_commit(
+            mmo, hosted, &memory, &error_abort));
+        g_assert_cmphex(mmix_sparse_memory_budget(memory), ==, budgets[i]);
+        g_assert_cmpuint(mmix_sparse_memory_materialized_pages(memory), ==,
+                         4);
+        g_assert_cmphex(sparse_read_tetra(
+                            memory, MMIX_SPARSE_STACK_BASE +
+                                    (UINT64_C(1) << 40)),
+                        ==, 0xdeadbeef);
+    }
+
+    mmix_sparse_memory_free(memory);
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -746,6 +934,12 @@ int main(int argc, char **argv)
                     test_hosted_collision_and_budget);
     g_test_add_func("/mmix/mmo-hosted/failure-preserves-plan",
                     test_hosted_failure_preserves_plan);
+    g_test_add_func("/mmix/mmo-hosted/commit-sparse-memory",
+                    test_hosted_commit_sparse_memory);
+    g_test_add_func("/mmix/mmo-hosted/commit-failure-preserves-store",
+                    test_hosted_commit_failure_preserves_store);
+    g_test_add_func("/mmix/mmo-hosted/commit-machine-budgets",
+                    test_hosted_commit_machine_budgets);
 
     return g_test_run();
 }

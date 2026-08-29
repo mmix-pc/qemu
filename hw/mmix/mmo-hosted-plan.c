@@ -22,6 +22,7 @@ struct MMIXMMOHostedPlan {
     uint64_t argument_count;
     uint64_t argument_end;
     uint64_t materialized_pages;
+    uint64_t sparse_budget;
 };
 
 static bool mmix_mmo_hosted_validate_options(
@@ -310,9 +311,107 @@ bool mmix_mmo_hosted_plan_build(const MMIXMMOPlan *mmo,
     candidate->argument_count = arguments->len;
     candidate->argument_end = argument_end;
     candidate->materialized_pages = materialized_pages;
+    candidate->sparse_budget = options->sparse_budget;
     mmix_mmo_hosted_plan_free(*plan);
     *plan = candidate;
     return true;
+}
+
+static const char *mmix_mmo_write_kind_name(MMIXMMOWriteKind kind)
+{
+    switch (kind) {
+    case MMIX_MMO_WRITE_DATA:
+        return "data";
+    case MMIX_MMO_WRITE_FIXO:
+        return "lop_fixo";
+    case MMIX_MMO_WRITE_FIXR:
+        return "lop_fixr";
+    case MMIX_MMO_WRITE_FIXRX:
+        return "lop_fixrx";
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static bool mmix_mmo_hosted_xor_tetra(MMIXSparseMemory *memory,
+                                      const MMIXMMOWrite *write,
+                                      Error **errp)
+{
+    uint8_t data[sizeof(write->value)];
+    uint32_t value;
+    Error *local_err = NULL;
+
+    if (!mmix_sparse_memory_read(memory, write->address, data, sizeof(data),
+                                 sizeof(data), &local_err)) {
+        goto fail;
+    }
+    value = ldl_be_p(data) ^ write->value;
+    stl_be_p(data, value);
+    if (!mmix_sparse_memory_write(memory, write->address, data, sizeof(data),
+                                  sizeof(data), &local_err)) {
+        goto fail;
+    }
+    return true;
+
+fail:
+    error_setg(errp,
+               "could not apply MMIX .mmo %s write at 0x%016" PRIx64
+               " from tetra %" PRIu64 ": %s",
+               mmix_mmo_write_kind_name(write->kind), write->address,
+               write->source_tetra, error_get_pretty(local_err));
+    error_free(local_err);
+    return false;
+}
+
+bool mmix_mmo_hosted_plan_commit(const MMIXMMOPlan *mmo,
+                                 const MMIXMMOHostedPlan *plan,
+                                 MMIXSparseMemory **memory, Error **errp)
+{
+    MMIXSparseMemory *candidate;
+    const uint8_t *argument_data;
+    size_t argument_size;
+    size_t i;
+
+    g_return_val_if_fail(mmo != NULL, false);
+    g_return_val_if_fail(plan != NULL, false);
+    g_return_val_if_fail(memory != NULL, false);
+
+    candidate = mmix_sparse_memory_new(plan->sparse_budget, errp);
+    if (!candidate) {
+        return false;
+    }
+    for (i = 0; i < mmix_mmo_plan_write_count(mmo); i++) {
+        if (!mmix_mmo_hosted_xor_tetra(
+                candidate, mmix_mmo_plan_write(mmo, i), errp)) {
+            goto fail;
+        }
+    }
+
+    argument_data = mmix_mmo_hosted_plan_argument_data(plan,
+                                                        &argument_size);
+    if (!mmix_sparse_memory_write(candidate, MMIX_SPARSE_POOL_BASE,
+                                  argument_data, argument_size,
+                                  MMIX_MMO_ARGUMENT_ALIGN, errp)) {
+        error_prepend(errp, "could not install MMIX MMO Pool arguments: ");
+        goto fail;
+    }
+    if (mmix_sparse_memory_materialized_pages(candidate) !=
+        plan->materialized_pages) {
+        error_setg(errp,
+                   "MMIX MMO commit materialized %" PRIu64
+                   " pages instead of the planned %" PRIu64,
+                   mmix_sparse_memory_materialized_pages(candidate),
+                   plan->materialized_pages);
+        goto fail;
+    }
+
+    mmix_sparse_memory_free(*memory);
+    *memory = candidate;
+    return true;
+
+fail:
+    mmix_sparse_memory_free(candidate);
+    return false;
 }
 
 void mmix_mmo_hosted_plan_free(MMIXMMOHostedPlan *plan)

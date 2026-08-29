@@ -9,6 +9,7 @@
 
 #include "qapi/error.h"
 #include "mmo-loader.h"
+#include "sparse-memory.h"
 
 typedef struct MMIXMMOHostedOptions {
     const char *kernel_filename;
@@ -32,6 +33,11 @@ bool mmix_mmo_hosted_plan_build(const MMIXMMOPlan *mmo,
                                 const MMIXMMOHostedOptions *options,
                                 MMIXMMOHostedPlan **plan, Error **errp);
 void mmix_mmo_hosted_plan_free(MMIXMMOHostedPlan *plan);
+
+/* A failed commit leaves the caller's current sparse store unchanged. */
+bool mmix_mmo_hosted_plan_commit(const MMIXMMOPlan *mmo,
+                                 const MMIXMMOHostedPlan *plan,
+                                 MMIXSparseMemory **memory, Error **errp);
 
 uint64_t mmix_mmo_hosted_plan_argument_count(
     const MMIXMMOHostedPlan *plan);
