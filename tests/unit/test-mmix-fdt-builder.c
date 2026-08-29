@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/mmix/fdt-builder.h"
+#include "hw/mmix/fdt-validator.h"
 #include "hw/mmix/physical-layout.h"
 #include "hw/mmix/virt.h"
 #include "qapi/error.h"
@@ -34,7 +35,9 @@ static GBytes *build_configured_fdt(const MMIXFDTConfig *config)
     GBytes *blob = NULL;
     Error *err = NULL;
 
-    g_assert_true(mmix_fdt_build(config, &blob, &err));
+    if (!mmix_fdt_build(config, &blob, &err)) {
+        g_error("could not build test FDT: %s", error_get_pretty(err));
+    }
     g_assert_null(err);
     return blob;
 }
@@ -162,6 +165,8 @@ static void assert_foundation(const void *fdt, size_t size,
     assert_u32(fdt, "/", "#address-cells", 2);
     assert_u32(fdt, "/", "#size-cells", 2);
     node_offset(fdt, "/aliases");
+    assert_u32(fdt, "/chosen", "#address-cells", 2);
+    assert_u32(fdt, "/chosen", "#size-cells", 2);
     assert_string(fdt, "/chosen", "bootargs", command_line);
     assert_string(fdt, "/memory@0", "device_type", "memory");
     reg = fdt_getprop(fdt, node_offset(fdt, "/memory@0"), "reg", &length);
@@ -639,6 +644,84 @@ static void test_missing_result_pointer(void)
     error_free(err);
 }
 
+static void *mutable_fdt(GBytes *blob)
+{
+    gsize size;
+    const void *source = g_bytes_get_data(blob, &size);
+    void *fdt = g_malloc0(MMIX_FDT_MAX_SIZE);
+
+    g_assert_cmpint(fdt_open_into(source, fdt, MMIX_FDT_MAX_SIZE), ==, 0);
+    return fdt;
+}
+
+static void assert_invalid_fdt(void *fdt, const char *diagnostic)
+{
+    Error *err = NULL;
+
+    g_assert_cmpint(fdt_pack(fdt), ==, 0);
+    g_assert_false(mmix_fdt_validate(fdt, fdt_totalsize(fdt), &err));
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err), diagnostic));
+    error_free(err);
+}
+
+static void test_invalid_serialized_fdt(void)
+{
+    g_autoptr(GBytes) blob = build_fdt(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autofree void *duplicate = mutable_fdt(blob);
+    g_autofree void *dangling = mutable_fdt(blob);
+    g_autofree void *invalid_cells = mutable_fdt(blob);
+    g_autofree void *truncated_reg = mutable_fdt(blob);
+    g_autofree void *overlap = mutable_fdt(blob);
+    fdt32_t value;
+    int node;
+
+    value = cpu_to_fdt32(2);
+    node = node_offset(duplicate, "/cpus/cpu@0");
+    g_assert_cmpint(fdt_setprop(duplicate, node, "phandle", &value,
+                               sizeof(value)), ==, 0);
+    g_assert_cmpint(fdt_setprop(duplicate, node, "linux,phandle", &value,
+                               sizeof(value)), ==, 0);
+    assert_invalid_fdt(duplicate, "phandle 2 is duplicated");
+
+    value = cpu_to_fdt32(0xdead);
+    node = node_offset(dangling, "/soc/timer@1000020000000");
+    g_assert_cmpint(fdt_setprop(dangling, node, "interrupt-parent", &value,
+                               sizeof(value)), ==, 0);
+    assert_invalid_fdt(dangling, "interrupt parent is missing");
+
+    value = cpu_to_fdt32(1);
+    g_assert_cmpint(fdt_setprop(invalid_cells, 0, "#address-cells", &value,
+                               sizeof(value)), ==, 0);
+    assert_invalid_fdt(invalid_cells,
+                       "property '/#address-cells' is invalid");
+
+    node = node_offset(truncated_reg, "/memory@0");
+    g_assert_cmpint(fdt_setprop(truncated_reg, node, "reg", &value,
+                               sizeof(value)), ==, 0);
+    assert_invalid_fdt(truncated_reg, "truncated reg cells");
+
+    g_assert_cmpint(fdt_add_mem_rsv(overlap, 0x4000000, 0x2000), ==, 0);
+    g_assert_cmpint(fdt_add_mem_rsv(overlap, 0x4001000, 0x2000), ==, 0);
+    assert_invalid_fdt(overlap, "reservations 0 and 1 overlap");
+}
+
+static void test_oversized_serialized_fdt(void)
+{
+    g_autoptr(GBytes) blob = build_fdt(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autofree void *fdt = g_malloc0(MMIX_FDT_MAX_SIZE + 1);
+    Error *err = NULL;
+    gsize size;
+    const void *source = g_bytes_get_data(blob, &size);
+
+    memcpy(fdt, source, size);
+    fdt_set_totalsize(fdt, MMIX_FDT_MAX_SIZE + 1);
+    g_assert_false(mmix_fdt_validate(fdt, MMIX_FDT_MAX_SIZE + 1, &err));
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err), "exceeds 2097152 bytes"));
+    error_free(err);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -660,5 +743,9 @@ int main(int argc, char **argv)
                     test_invalid_framebuffer_preserves_result);
     g_test_add_func("/mmix/fdt-builder/missing-result-pointer",
                     test_missing_result_pointer);
+    g_test_add_func("/mmix/fdt-builder/invalid-serialized-fdt",
+                    test_invalid_serialized_fdt);
+    g_test_add_func("/mmix/fdt-builder/oversized-serialized-fdt",
+                    test_oversized_serialized_fdt);
     return g_test_run();
 }

@@ -62,6 +62,7 @@ if config_all_devices.has_key('CONFIG_MMIX_VIRT')
     'test-mmix-fdt-builder': [
       fdt,
       meson.project_source_root() / 'hw/mmix/fdt-builder.c',
+      meson.project_source_root() / 'hw/mmix/fdt-validator.c',
       meson.project_source_root() / 'hw/mmix/physical-layout.c'
     ],
     'test-mmix-mmo-plan': [

@@ -27,6 +27,7 @@
 #include "target/mmix/cpu-qom.h"
 #include "boot-plan.h"
 #include "elf-loader.h"
+#include "fdt-builder.h"
 #include "framebuffer.h"
 #include "intc.h"
 #include "ipi.h"
@@ -62,6 +63,7 @@ struct MMIXVirtMachineState {
     MMIXPhysicalRAM ram;
     MMIXBootPlan *boot_plan;
     GBytes *argument_data;
+    GBytes *fdt;
     uint64_t argument_base;
     uint64_t argument_count;
     MMIXELFStartupABI elf_startup_abi;
@@ -458,6 +460,45 @@ static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
     return cpu;
 }
 
+static bool mmix_virt_prepare_dump_fdt(MMIXVirtMachineState *vms,
+                                       Error **errp)
+{
+    MachineState *machine = MACHINE(vms);
+    MMIXPhysRange stacks[MMIX_VIRT_MAX_CPUS];
+    MMIXFDTConfig config = {
+        .ram_size = machine->ram_size,
+        .command_line = machine->kernel_cmdline ?: "",
+        .cpu_count = machine->smp.cpus,
+        .cpu_stacks = stacks,
+        .has_framebuffer = true,
+        .framebuffer = {
+            .start = vms->framebuffer_base,
+            .end = vms->framebuffer_base + vms->framebuffer_size,
+        },
+    };
+    unsigned int i;
+
+    if (!machine->dumpdtb) {
+        return true;
+    }
+    if (vms->mmo_memory) {
+        error_setg(errp, "MMIX virt cannot dump an FDT for hosted MMO "
+                   "execution");
+        return false;
+    }
+    for (i = 0; i < machine->smp.cpus; i++) {
+        stacks[i] = (MMIXPhysRange) {
+            .start = vms->initial_stacks[i],
+            .end = vms->initial_stacks[i] + MMIX_VIRT_INITIAL_STACK_SIZE,
+        };
+    }
+    if (!mmix_fdt_build(&config, &vms->fdt, errp)) {
+        return false;
+    }
+    machine->fdt = (void *)g_bytes_get_data(vms->fdt, NULL);
+    return true;
+}
+
 static void mmix_virt_apply_global_registers(
     CPUState *cs, const MMIXKernelLoadInfo *info)
 {
@@ -804,6 +845,11 @@ static void mmix_virt_init(MachineState *machine)
     const MMIXLinuxBootInfo *linux_info_ptr = NULL;
     unsigned int i;
 
+    if (machine->dtb) {
+        error_setg(&error_fatal,
+                   "MMIX virt does not accept a user-supplied DTB");
+        return;
+    }
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
         !mmix_virt_build_ram(vms, &error_fatal)) {
         return;
@@ -822,7 +868,8 @@ static void mmix_virt_init(MachineState *machine)
     }
     if (!mmix_virt_plan_ram(vms, image_info_ptr, image_ranges, arguments,
                             argument_count, argument_size, linux_info_ptr,
-                            &error_fatal)) {
+                            &error_fatal) ||
+        !mmix_virt_prepare_dump_fdt(vms, &error_fatal)) {
         return;
     }
     if (linux_info_ptr) {
@@ -1011,6 +1058,7 @@ static void mmix_virt_instance_finalize(Object *obj)
 
     mmix_boot_plan_free(vms->boot_plan);
     g_clear_pointer(&vms->argument_data, g_bytes_unref);
+    g_clear_pointer(&vms->fdt, g_bytes_unref);
     mmix_sparse_memory_free(vms->mmo_memory);
     mmix_mmo_hosted_plan_free(vms->mmo_hosted_plan);
     mmix_mmo_plan_free(vms->mmo_plan);

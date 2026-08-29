@@ -9,6 +9,7 @@
 #include "qemu/bswap.h"
 #include <libfdt.h>
 #include "fdt-builder.h"
+#include "fdt-validator.h"
 #include "physical-layout.h"
 #include "virt.h"
 
@@ -640,6 +641,8 @@ static bool mmix_fdt_add_foundation(void *fdt,
     }
     chosen = fdt_path_offset(fdt, "/chosen");
     if (mmix_fdt_error(chosen, "find chosen node", errp) ||
+        !mmix_fdt_set_u32(fdt, chosen, "#address-cells", 2, errp) ||
+        !mmix_fdt_set_u32(fdt, chosen, "#size-cells", 2, errp) ||
         !mmix_fdt_set_string(fdt, chosen, "bootargs",
                              config->command_line, errp)) {
         return false;
@@ -703,6 +706,9 @@ bool mmix_fdt_build(const MMIXFDTConfig *config, GBytes **result,
         return false;
     }
     size = fdt_totalsize(fdt);
+    if (!mmix_fdt_validate(fdt, size, errp)) {
+        return false;
+    }
     blob = g_bytes_new_take(g_steal_pointer(&fdt), size);
     g_clear_pointer(result, g_bytes_unref);
     *result = blob;

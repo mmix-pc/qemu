@@ -3,6 +3,7 @@ mmix_ss.add(when: 'CONFIG_MMIX_VIRT', if_true: files(
   'boot-plan.c',
   'elf-loader.c',
   'fdt-builder.c',
+  'fdt-validator.c',
   'framebuffer.c',
   'intc.c',
   'ipi.c',
