@@ -41,6 +41,7 @@ void mmix_boot_plan_free(MMIXBootPlan *plan)
     g_free(plan->image_filename);
     g_free((char *)plan->linux_info.command_line);
     g_free((char *)plan->linux_info.initrd_filename);
+    g_clear_pointer(&plan->linux_info.initrd, g_bytes_unref);
     g_clear_pointer(&plan->linux_info.fdt, g_bytes_unref);
     g_free(plan);
 }
@@ -94,7 +95,11 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
     }
     if (linux_info &&
         (linux_info->has_initrd != (linux_info->initrd_filename != NULL) ||
-         (linux_info->has_initrd && linux_info->initrd_size == 0))) {
+         linux_info->has_initrd != (linux_info->initrd != NULL) ||
+         (linux_info->has_initrd &&
+          (linux_info->initrd_size == 0 ||
+           linux_info->initrd_size !=
+               g_bytes_get_size(linux_info->initrd))))) {
         error_setg(errp, "MMIX Linux initrd information is inconsistent");
         return false;
     }
@@ -119,6 +124,8 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
             g_strdup(linux_info->command_line);
         result->linux_info.initrd_filename =
             g_strdup(linux_info->initrd_filename);
+        result->linux_info.initrd = linux_info->initrd ?
+            g_bytes_ref(linux_info->initrd) : NULL;
         result->linux_info.fdt = linux_info->fdt ?
             g_bytes_ref(linux_info->fdt) : NULL;
     }

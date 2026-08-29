@@ -295,6 +295,8 @@ static void test_linux_boot_information(void)
 {
     g_autofree char *command_line = g_strdup("console=ttyS0");
     g_autofree char *initrd_filename = g_strdup("initrd.img");
+    g_autoptr(GBytes) initrd_data = g_bytes_new_take(
+        g_malloc0(16 * MiB), 16 * MiB);
     g_autoptr(GBytes) fdt = g_bytes_new_static("fdt", 3);
     MMIXRAMReservationRequest requests[] = {
         framebuffer_request(),
@@ -311,6 +313,7 @@ static void test_linux_boot_information(void)
     MMIXLinuxBootInfo linux_info = {
         .command_line = command_line,
         .initrd_filename = initrd_filename,
+        .initrd = initrd_data,
         .initrd_size = 16 * MiB,
         .initrd_request_index = 2,
         .fdt = fdt,
@@ -336,6 +339,7 @@ static void test_linux_boot_information(void)
     g_assert_cmpstr(stored->initrd_filename, ==, "initrd.img");
     g_assert_cmpuint(stored->cpu_count, ==, 1);
     g_assert_cmpuint(stored->initrd_size, ==, 16 * MiB);
+    g_assert_true(g_bytes_equal(stored->initrd, initrd_data));
     initrd = mmix_boot_plan_reservation(plan, 2);
     fdt_reservation = mmix_boot_plan_reservation(plan, 4);
     g_assert_cmphex(stored->initrd_base, ==, initrd->content.start);

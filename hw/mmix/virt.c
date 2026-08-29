@@ -25,6 +25,7 @@
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
+#include "boot-payload.h"
 #include "boot-plan.h"
 #include "elf-loader.h"
 #include "fdt-builder.h"
@@ -62,6 +63,7 @@ struct MMIXVirtMachineState {
     MachineState parent_obj;
     MMIXPhysicalRAM ram;
     MMIXBootPlan *boot_plan;
+    MMIXBootPayload *boot_payload;
     GBytes *argument_data;
     GBytes *fdt;
     uint64_t argument_base;
@@ -285,6 +287,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                                char *const *arguments, uint64_t argument_count,
                                uint64_t argument_size,
                                const MMIXLinuxBootInfo *linux_info,
+                               GBytes *elf_source,
                                Error **errp)
 {
     MachineState *machine = MACHINE(vms);
@@ -323,6 +326,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     g_autoptr(GBytes) finalized_fdt = NULL;
     MMIXBootPlan *boot_plan = NULL;
     MMIXBootPlan *preliminary_plan = NULL;
+    MMIXBootPayload *boot_payload = NULL;
     MMIXLinuxBootInfo planned_linux;
     unsigned int i;
 
@@ -498,8 +502,48 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
         }
     }
 
+    if (linux_info) {
+        const MMIXLinuxBootInfo *stored_linux =
+            mmix_boot_plan_linux_info(boot_plan);
+
+        boot_payload = mmix_boot_payload_new(machine->ram_size);
+        if (!mmix_elf_add_boot_payload(elf_source,
+                                       machine->kernel_filename,
+                                       boot_payload, errp)) {
+            goto fail;
+        }
+        if (stored_linux->has_initrd &&
+            !mmix_boot_payload_add(boot_payload, "Linux initrd",
+                                   stored_linux->initrd_base,
+                                   stored_linux->initrd,
+                                   stored_linux->initrd_size, errp)) {
+            goto fail;
+        }
+        if (!mmix_boot_payload_add(boot_payload, "Linux FDT",
+                                   stored_linux->fdt_base,
+                                   stored_linux->fdt,
+                                   g_bytes_get_size(stored_linux->fdt),
+                                   errp)) {
+            goto fail;
+        }
+        for (i = 0; i < stack_count; i++) {
+            const MMIXRAMReservation *stack = mmix_boot_plan_reservation(
+                boot_plan, MMIX_RAM_REQUEST_STACK_BASE + i);
+            g_autofree char *name =
+                g_strdup_printf("CPU %u bootstrap stack", i);
+
+            if (!mmix_boot_payload_add_zero(
+                    boot_payload, name, stack->content.start,
+                    mmix_phys_range_size(&stack->content), errp)) {
+                goto fail;
+            }
+        }
+    }
+
     mmix_boot_plan_free(vms->boot_plan);
     vms->boot_plan = boot_plan;
+    mmix_boot_payload_free(vms->boot_payload);
+    vms->boot_payload = boot_payload;
     g_clear_pointer(&vms->argument_data, g_bytes_unref);
     vms->argument_data = g_steal_pointer(&argument_data);
     vms->argument_count = argument_count;
@@ -525,6 +569,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     return true;
 
 fail:
+    mmix_boot_payload_free(boot_payload);
     mmix_boot_plan_free(boot_plan);
     mmix_boot_plan_free(preliminary_plan);
     return false;
@@ -711,6 +756,8 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                                      uint64_t *argument_count,
                                      uint64_t *argument_size,
                                      MMIXLinuxBootInfo *linux_info,
+                                     GBytes **elf_source,
+                                     GBytes **initrd_source,
                                      Error **errp)
 {
     MachineState *machine = MACHINE(vms);
@@ -815,7 +862,10 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
             }
         } else {
             const char *command_line = machine->kernel_cmdline ?: "";
+            g_autofree char *initrd_contents = NULL;
+            g_autoptr(GError) gerr = NULL;
             int64_t initrd_size = 0;
+            gsize initrd_read_size = 0;
 
             if (machine->smp.max_cpus != machine->smp.cpus) {
                 error_setg(errp, "MMIX Linux direct boot requires maxcpus "
@@ -851,10 +901,28 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                                machine->initrd_filename);
                     return false;
                 }
+                if (!g_file_get_contents(machine->initrd_filename,
+                                         &initrd_contents,
+                                         &initrd_read_size, &gerr)) {
+                    error_setg(errp, "could not read MMIX Linux initrd '%s': "
+                               "%s", machine->initrd_filename,
+                               gerr->message);
+                    return false;
+                }
+                if (initrd_read_size != initrd_size) {
+                    error_setg(errp, "MMIX Linux initrd '%s' changed during "
+                               "preflight", machine->initrd_filename);
+                    return false;
+                }
+            }
+            if (initrd_contents) {
+                *initrd_source = g_bytes_new_take(
+                    g_steal_pointer(&initrd_contents), initrd_read_size);
             }
             *linux_info = (MMIXLinuxBootInfo) {
                 .command_line = command_line,
                 .initrd_filename = machine->initrd_filename,
+                .initrd = *initrd_source,
                 .initrd_size = initrd_size,
                 .cpu_count = machine->smp.cpus,
                 .has_initrd = machine->initrd_filename != NULL,
@@ -866,6 +934,11 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                        "-initrd", vms->elf_startup_abi ==
                        MMIX_ELF_STARTUP_ABI_BARE ? "bare" : "argc-argv");
             return false;
+        }
+        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_LINUX) {
+            return mmix_prepare_elf_kernel(machine->kernel_filename,
+                                           &vms->ram, info, image_ranges,
+                                           elf_source, errp);
         }
         return mmix_preflight_elf_kernel(machine->kernel_filename, &vms->ram,
                                          info, image_ranges, errp);
@@ -933,6 +1006,8 @@ static void mmix_virt_init(MachineState *machine)
     uint64_t argument_count = 0;
     uint64_t argument_size = 0;
     MMIXLinuxBootInfo linux_info = { 0 };
+    g_autoptr(GBytes) elf_source = NULL;
+    g_autoptr(GBytes) initrd_source = NULL;
     const MMIXLinuxBootInfo *linux_info_ptr = NULL;
     unsigned int i;
 
@@ -949,6 +1024,7 @@ static void mmix_virt_init(MachineState *machine)
         if (!mmix_virt_prepare_kernel(vms, &image_info, &image_ranges,
                                       &arguments, &argument_count,
                                       &argument_size, &linux_info,
+                                      &elf_source, &initrd_source,
                                       &error_fatal)) {
             return;
         }
@@ -959,13 +1035,21 @@ static void mmix_virt_init(MachineState *machine)
     }
     if (!mmix_virt_plan_ram(vms, image_info_ptr, image_ranges, arguments,
                             argument_count, argument_size, linux_info_ptr,
+                            elf_source,
                             &error_fatal) ||
         !mmix_virt_prepare_dump_fdt(vms, &error_fatal)) {
         return;
     }
     if (linux_info_ptr) {
-        error_setg(&error_fatal, "MMIX Linux direct boot preflight completed; "
-                   "execution requires FDT support");
+        memory_region_add_subregion(get_system_memory(), vms->ram.start,
+                                    machine->ram);
+        if (!mmix_boot_payload_commit(
+                vms->boot_payload, memory_region_get_ram_ptr(machine->ram),
+                machine->ram_size, &error_fatal)) {
+            return;
+        }
+        error_setg(&error_fatal, "MMIX Linux direct boot payload committed; "
+                   "execution requires Linux entry support");
         return;
     }
 
@@ -1148,6 +1232,7 @@ static void mmix_virt_instance_finalize(Object *obj)
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
 
     mmix_boot_plan_free(vms->boot_plan);
+    mmix_boot_payload_free(vms->boot_payload);
     g_clear_pointer(&vms->argument_data, g_bytes_unref);
     g_clear_pointer(&vms->fdt, g_bytes_unref);
     mmix_sparse_memory_free(vms->mmo_memory);

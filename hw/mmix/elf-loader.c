@@ -55,22 +55,34 @@ bool mmix_kernel_is_elf(const char *filename, Error **errp)
     return true;
 }
 
-static bool mmix_validate_elf_header(const char *filename, Elf64_Ehdr *ehdr,
-                                     Error **errp)
+static GBytes *mmix_elf_read_source(const char *filename, Error **errp)
 {
-    int64_t file_size = get_image_size(filename, errp);
+    g_autofree char *contents = NULL;
+    g_autoptr(GError) gerr = NULL;
+    gsize size;
 
-    if (file_size < 0) {
-        return false;
+    if (!g_file_get_contents(filename, &contents, &size, &gerr)) {
+        error_setg(errp, "could not read MMIX ELF kernel '%s': %s",
+                   filename, gerr->message);
+        return NULL;
     }
+    return g_bytes_new_take(g_steal_pointer(&contents), size);
+}
+
+static bool mmix_validate_elf_header(const char *filename,
+                                     const uint8_t *data, gsize file_size,
+                                     Elf64_Ehdr *ehdr, Error **errp)
+{
     if (file_size < sizeof(*ehdr)) {
         error_setg(errp, "truncated MMIX ELF header in '%s'", filename);
         return false;
     }
-    if (!load_elf_hdr(filename, ehdr, NULL, errp)) {
+    memcpy(ehdr, data, sizeof(*ehdr));
+
+    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+        error_setg(errp, "invalid MMIX ELF magic in '%s'", filename);
         return false;
     }
-
     if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
         error_setg(errp, "unsupported MMIX ELF class %u in '%s'",
                    ehdr->e_ident[EI_CLASS], filename);
@@ -129,12 +141,9 @@ static bool mmix_elf_ranges_overlap(const MMIXKernelImageRange *left,
 
 static bool mmix_preflight_elf_segments(
     const char *filename, const Elf64_Ehdr *ehdr,
+    const uint8_t *data, gsize file_size,
     const MMIXPhysicalRAM *ram, GArray **image_ranges, Error **errp)
 {
-    g_autoptr(GMappedFile) mapped = NULL;
-    g_autoptr(GError) gerr = NULL;
-    const uint8_t *data;
-    gsize file_size;
     uint64_t table_offset = be64_to_cpu(ehdr->e_phoff);
     uint16_t entry_size = be16_to_cpu(ehdr->e_phentsize);
     uint16_t entry_count = be16_to_cpu(ehdr->e_phnum);
@@ -156,14 +165,6 @@ static bool mmix_preflight_elf_segments(
         return false;
     }
 
-    mapped = g_mapped_file_new(filename, false, &gerr);
-    if (!mapped) {
-        error_setg(errp, "could not read MMIX ELF program headers in '%s': %s",
-                   filename, gerr->message);
-        return false;
-    }
-    data = (const uint8_t *)g_mapped_file_get_contents(mapped);
-    file_size = g_mapped_file_get_length(mapped);
     if (!mmix_elf_file_range(file_size, table_offset,
                              (uint64_t)entry_count * entry_size)) {
         error_setg(errp, "truncated MMIX ELF program header table in '%s'",
@@ -274,21 +275,25 @@ static bool mmix_preflight_elf_segments(
 
 static bool mmix_preflight_elf_registers(const char *filename,
                                          const Elf64_Ehdr *ehdr,
+                                         const uint8_t *data, gsize file_size,
                                          MMIXKernelLoadInfo *info,
                                          Error **errp);
 
-bool mmix_preflight_elf_kernel(const char *filename,
-                               const MMIXPhysicalRAM *ram,
-                               MMIXKernelLoadInfo *info,
-                               GArray **image_ranges, Error **errp)
+static bool mmix_preflight_elf_source(const char *filename, GBytes *source,
+                                      const MMIXPhysicalRAM *ram,
+                                      MMIXKernelLoadInfo *info,
+                                      GArray **image_ranges, Error **errp)
 {
     g_autoptr(GArray) ranges = NULL;
+    const uint8_t *data;
+    gsize file_size;
     MMIXKernelLoadInfo load_info;
     Elf64_Ehdr ehdr;
 
-    g_return_val_if_fail(image_ranges != NULL, false);
-    if (!mmix_validate_elf_header(filename, &ehdr, errp) ||
-        !mmix_preflight_elf_segments(filename, &ehdr, ram, &ranges, errp)) {
+    data = g_bytes_get_data(source, &file_size);
+    if (!mmix_validate_elf_header(filename, data, file_size, &ehdr, errp) ||
+        !mmix_preflight_elf_segments(filename, &ehdr, data, file_size, ram,
+                                     &ranges, errp)) {
         return false;
     }
 
@@ -297,13 +302,100 @@ bool mmix_preflight_elf_kernel(const char *filename,
         .image_type = MMIX_KERNEL_IMAGE_ELF,
         .boot_cpu_id = 0,
     };
-    if (!mmix_preflight_elf_registers(filename, &ehdr, &load_info, errp)) {
+    if (!mmix_preflight_elf_registers(filename, &ehdr, data, file_size,
+                                      &load_info, errp)) {
         return false;
     }
 
     *info = load_info;
     g_clear_pointer(image_ranges, g_array_unref);
     *image_ranges = g_steal_pointer(&ranges);
+    return true;
+}
+
+bool mmix_preflight_elf_kernel(const char *filename,
+                               const MMIXPhysicalRAM *ram,
+                               MMIXKernelLoadInfo *info,
+                               GArray **image_ranges, Error **errp)
+{
+    g_autoptr(GBytes) source = mmix_elf_read_source(filename, errp);
+
+    g_return_val_if_fail(image_ranges != NULL, false);
+    return source && mmix_preflight_elf_source(
+        filename, source, ram, info, image_ranges, errp);
+}
+
+bool mmix_prepare_elf_kernel(const char *filename,
+                             const MMIXPhysicalRAM *ram,
+                             MMIXKernelLoadInfo *info,
+                             GArray **image_ranges, GBytes **source,
+                             Error **errp)
+{
+    g_autoptr(GBytes) result = NULL;
+
+    g_return_val_if_fail(source != NULL, false);
+
+    result = mmix_elf_read_source(filename, errp);
+    if (!result || !mmix_preflight_elf_source(
+            filename, result, ram, info, image_ranges, errp)) {
+        return false;
+    }
+
+    g_clear_pointer(source, g_bytes_unref);
+    *source = g_steal_pointer(&result);
+    return true;
+}
+
+bool mmix_elf_add_boot_payload(GBytes *source, const char *filename,
+                               MMIXBootPayload *payload, Error **errp)
+{
+    const uint8_t *data;
+    gsize file_size;
+    Elf64_Ehdr ehdr;
+    uint64_t table_offset;
+    uint16_t entry_size;
+    uint16_t entry_count;
+    unsigned int i;
+
+    g_return_val_if_fail(source != NULL, false);
+    data = g_bytes_get_data(source, &file_size);
+    if (file_size < sizeof(ehdr)) {
+        error_setg(errp, "frozen MMIX ELF kernel '%s' is truncated",
+                   filename);
+        return false;
+    }
+    memcpy(&ehdr, data, sizeof(ehdr));
+    table_offset = be64_to_cpu(ehdr.e_phoff);
+    entry_size = be16_to_cpu(ehdr.e_phentsize);
+    entry_count = be16_to_cpu(ehdr.e_phnum);
+
+    for (i = 0; i < entry_count; i++) {
+        g_autofree char *name = NULL;
+        g_autoptr(GBytes) segment = NULL;
+        Elf64_Phdr phdr;
+        uint64_t offset;
+        uint64_t file_part;
+        uint64_t memory_size;
+        uint64_t address;
+
+        mmix_elf_read_phdr(data, table_offset, entry_size, i, &phdr);
+        if (be32_to_cpu(phdr.p_type) != PT_LOAD) {
+            continue;
+        }
+        memory_size = be64_to_cpu(phdr.p_memsz);
+        if (memory_size == 0) {
+            continue;
+        }
+        offset = be64_to_cpu(phdr.p_offset);
+        file_part = be64_to_cpu(phdr.p_filesz);
+        address = be64_to_cpu(phdr.p_paddr);
+        segment = g_bytes_new_from_bytes(source, offset, file_part);
+        name = g_strdup_printf("ELF PT_LOAD segment %u", i);
+        if (!mmix_boot_payload_add(payload, name, address, segment,
+                                   memory_size, errp)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -394,14 +486,11 @@ static bool mmix_elf_decode_registers(const char *filename,
 
 static bool mmix_preflight_elf_registers(const char *filename,
                                          const Elf64_Ehdr *ehdr,
+                                         const uint8_t *data, gsize file_size,
                                          MMIXKernelLoadInfo *info,
                                          Error **errp)
 {
-    g_autoptr(GMappedFile) mapped = NULL;
-    g_autoptr(GError) gerr = NULL;
-    const uint8_t *data;
     const uint8_t *names;
-    gsize file_size;
     uint64_t table_offset = be64_to_cpu(ehdr->e_shoff);
     uint16_t entry_size = be16_to_cpu(ehdr->e_shentsize);
     uint16_t section_count = be16_to_cpu(ehdr->e_shnum);
@@ -445,14 +534,6 @@ static bool mmix_preflight_elf_registers(const char *filename,
         return false;
     }
 
-    mapped = g_mapped_file_new(filename, false, &gerr);
-    if (!mapped) {
-        error_setg(errp, "could not read MMIX ELF sections in '%s': %s",
-                   filename, gerr->message);
-        return false;
-    }
-    data = (const uint8_t *)g_mapped_file_get_contents(mapped);
-    file_size = g_mapped_file_get_length(mapped);
     if (!mmix_elf_file_range(file_size, table_offset,
                              (uint64_t)section_count * entry_size)) {
         error_setg(errp, "truncated MMIX ELF section table in '%s'", filename);

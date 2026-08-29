@@ -6,7 +6,9 @@ from .common import MMIXProcessFailure, elf64_image, halt
 
 
 LINUX_MACHINE = ("-machine", "elf-startup-abi=linux")
-FDT_REQUIRED = ("preflight completed; execution requires FDT support",)
+LINUX_ENTRY_REQUIRED = (
+    "payload committed; execution requires Linux entry support",
+)
 
 
 LINUX_PREFLIGHT_TESTS = [
@@ -14,37 +16,37 @@ LINUX_PREFLIGHT_TESTS = [
         "elf-linux-one-cpu",
         elf64_image(0, halt()),
         LINUX_MACHINE,
-        FDT_REQUIRED,
+        LINUX_ENTRY_REQUIRED,
     ),
     MMIXProcessFailure(
         "elf-linux-64-cpus",
         elf64_image(0, halt()),
         ("-smp", "64", *LINUX_MACHINE),
-        FDT_REQUIRED,
+        LINUX_ENTRY_REQUIRED,
     ),
     MMIXProcessFailure(
         "elf-linux-above-4g",
         elf64_image(0x100000000, halt(), entry=0x100000000),
         ("-m", "8G", *LINUX_MACHINE),
-        FDT_REQUIRED,
+        LINUX_ENTRY_REQUIRED,
     ),
     MMIXProcessFailure(
         "elf-linux-command-line-limit",
         elf64_image(0, halt()),
         (*LINUX_MACHINE, "-append", "x" * 4095),
-        FDT_REQUIRED,
+        LINUX_ENTRY_REQUIRED,
     ),
     MMIXProcessFailure(
         "elf-linux-initrd",
         elf64_image(0, halt()),
         (*LINUX_MACHINE, "-initrd", "$IMAGE"),
-        FDT_REQUIRED,
+        LINUX_ENTRY_REQUIRED,
     ),
     MMIXProcessFailure(
         "elf-linux-semihosting",
         elf64_image(0, halt()),
         (*LINUX_MACHINE, "-semihosting"),
-        FDT_REQUIRED,
+        LINUX_ENTRY_REQUIRED,
     ),
 ]
 

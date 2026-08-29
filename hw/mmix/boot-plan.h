@@ -16,6 +16,7 @@ typedef struct MMIXBootPlan MMIXBootPlan;
 typedef struct MMIXLinuxBootInfo {
     const char *command_line;
     const char *initrd_filename;
+    GBytes *initrd;
     uint64_t initrd_size;
     uint64_t initrd_base;
     size_t initrd_request_index;

@@ -54,6 +54,9 @@ tests = {
 
 if config_all_devices.has_key('CONFIG_MMIX_VIRT')
   tests += {
+    'test-mmix-boot-payload': [
+      meson.project_source_root() / 'hw/mmix/boot-payload.c'
+    ],
     'test-mmix-boot-plan': [
       meson.project_source_root() / 'hw/mmix/boot-plan.c',
       meson.project_source_root() / 'hw/mmix/physical-layout.c',

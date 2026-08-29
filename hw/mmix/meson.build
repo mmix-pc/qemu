@@ -1,5 +1,6 @@
 mmix_ss = ss.source_set()
 mmix_ss.add(when: 'CONFIG_MMIX_VIRT', if_true: files(
+  'boot-payload.c',
   'boot-plan.c',
   'elf-loader.c',
   'fdt-builder.c',
