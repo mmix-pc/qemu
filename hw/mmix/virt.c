@@ -32,6 +32,7 @@
 #include "ipi.h"
 #include "kernel-loader.h"
 #include "mmo-hosted-plan.h"
+#include "mmo-hosted-vmstate.h"
 #include "mmo-loader.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
@@ -792,6 +793,7 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *ipi;
     DeviceState *timer;
     DeviceState *framebuffer;
+    DeviceState *hosted_state;
     MMIXKernelLoadInfo image_info;
     const MMIXKernelLoadInfo *image_info_ptr = NULL;
     g_autoptr(GArray) image_ranges = NULL;
@@ -859,6 +861,14 @@ static void mmix_virt_init(MachineState *machine)
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
     }
+
+    hosted_state = qdev_new(TYPE_MMIX_MMO_HOSTED_STATE);
+    object_property_add_child(OBJECT(machine), "hosted-memory-state",
+                              OBJECT(hosted_state));
+    mmix_mmo_hosted_state_configure(
+        MMIX_MMO_HOSTED_STATE(hosted_state), &vms->mmo_memory,
+        vms->cpus, machine->smp.cpus, machine->ram_size);
+    qdev_realize_and_unref(hosted_state, NULL, &error_fatal);
 
     intc = qdev_new(TYPE_MMIX_INTC);
     object_property_add_child(OBJECT(machine), "intc", OBJECT(intc));

@@ -5,16 +5,38 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "exec/cputlb.h"
 #include "machine.h"
 
-static int mmix_cpu_pre_save(void *opaque)
+static bool mmix_cpu_pre_save(void *opaque, Error **errp)
 {
     MMIXCPU *cpu = opaque;
+    CPUMMIXState *env = &cpu->env;
+    unsigned int handle;
 
-    /* A nested trap cannot be reconstructed without its restart stack. */
-    return cpu->trap_restart_stack->len == 0 ? 0 : -EINVAL;
+    if (cpu->trap_restart_stack->len != 0) {
+        error_setg(errp,
+                   "MMIX nested trap restart state cannot be migrated");
+        return false;
+    }
+    if (env->semihosting_bounce_active ||
+        env->semihosting_pending_open_handle ||
+        env->semihosting_pending_io_length) {
+        error_setg(errp,
+                   "MMIX semihosting operation is active during migration");
+        return false;
+    }
+    for (handle = 0; handle < MMIX_SEMIHOSTING_HANDLES; handle++) {
+        if (env->semihosting_file_guestfds[handle]) {
+            error_setg(errp,
+                       "MMIX semihosting file handle %u is open during "
+                       "migration", handle);
+            return false;
+        }
+    }
+    return true;
 }
 
 static int mmix_cpu_post_load(void *opaque, int version_id)
@@ -39,7 +61,7 @@ const VMStateDescription vmstate_mmix_cpu = {
     .name = "cpu",
     .version_id = 1,
     .minimum_version_id = 1,
-    .pre_save = mmix_cpu_pre_save,
+    .pre_save_errp = mmix_cpu_pre_save,
     .post_load = mmix_cpu_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT64_ARRAY(env.regs, MMIXCPU, MMIX_REGS),

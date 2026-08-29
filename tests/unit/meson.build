@@ -64,6 +64,12 @@ if config_all_devices.has_key('CONFIG_MMIX_VIRT')
       meson.project_source_root() / 'hw/mmix/mmo-loader.c',
       meson.project_source_root() / 'hw/mmix/sparse-memory.c'
     ],
+    'test-mmix-mmo-hosted-state': [
+      migration,
+      io,
+      meson.project_source_root() / 'hw/mmix/mmo-hosted-state.c',
+      meson.project_source_root() / 'hw/mmix/sparse-memory.c'
+    ],
     'test-mmix-physical-layout': [
       meson.project_source_root() / 'hw/mmix/physical-layout.c'
     ],

@@ -228,6 +228,28 @@ def mmo_hosted_debug_image(*, fill_budget=False):
     return _hosted_image(items)
 
 
+def mmo_hosted_open_file_debug_image(pathname):
+    open_args = MMIX_DATA_SEGMENT_BASE + 0x200
+    pathname_address = MMIX_POOL_SEGMENT_BASE + 0x300
+    handle = MMIX_SEMIHOSTING_FIRST_FILE_HANDLE
+    program = [
+        *set_octa(R255, open_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN, handle),
+        jump(JMP, 0),
+    ]
+
+    return _hosted_image(
+        [
+            *program,
+            mmo_loc(open_args),
+            struct.pack(">QQ", pathname_address,
+                        MMIX_SEMIHOSTING_TEXT_WRITE),
+            mmo_loc(pathname_address),
+            _padded_bytes(str(pathname).encode("utf-8") + b"\0"),
+        ]
+    )
+
+
 MMO_HOSTED_TESTS = [
     MMIXMMOTest(
         "mmo-hosted-startup",

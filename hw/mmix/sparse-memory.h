@@ -32,6 +32,9 @@ typedef enum MMIXSparseSegment {
 } MMIXSparseSegment;
 
 typedef struct MMIXSparseMemory MMIXSparseMemory;
+typedef bool (*MMIXSparseMemoryPageFn)(uint64_t address,
+                                       const uint8_t *data,
+                                       void *opaque, Error **errp);
 
 MMIXSparseMemory *mmix_sparse_memory_new(uint64_t budget, Error **errp);
 void mmix_sparse_memory_free(MMIXSparseMemory *memory);
@@ -59,5 +62,8 @@ uint64_t mmix_sparse_memory_materialized_bytes(
     const MMIXSparseMemory *memory);
 uint64_t mmix_sparse_memory_materialized_pages(
     const MMIXSparseMemory *memory);
+bool mmix_sparse_memory_foreach_page(const MMIXSparseMemory *memory,
+                                     MMIXSparseMemoryPageFn callback,
+                                     void *opaque, Error **errp);
 
 #endif

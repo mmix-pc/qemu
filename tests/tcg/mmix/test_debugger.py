@@ -17,7 +17,10 @@ from cases.common import (
     MMIX_STACK_SEGMENT_BASE,
 )
 from cases.elf_bare import BARE_ELF_TESTS, BARE_ENTRY, BARE_PROGRAM
-from cases.mmo_hosted import mmo_hosted_debug_image
+from cases.mmo_hosted import (
+    mmo_hosted_debug_image,
+    mmo_hosted_open_file_debug_image,
+)
 from cases.raw_loader import RAW_DIRECT_ISA_TESTS, RAW_ENTRY
 from lib.gdb_remote import GDBRemote
 from lib.mmix_asm import halt
@@ -286,6 +289,142 @@ def test_mmo_hosted_cold_reset(qemu, workdir):
             qtest_connection.close()
         if qtest_path.exists():
             qtest_path.unlink()
+
+
+def test_mmo_hosted_snapshot(qemu, workdir):
+    name = "mmo-hosted-snapshot"
+    snapshot_path = workdir / f"{name}.qcow2"
+    qemu_img = qemu.with_name("qemu-img")
+    data_address = MMIX_DATA_SEGMENT_BASE + 0x100
+    stack_address = MMIX_STACK_SEGMENT_BASE + 0x6000
+    hole_address = MMIX_POOL_SEGMENT_BASE + 0x8000
+    saved_data = bytes.fromhex("1020304050607080")
+    saved_stack = bytes.fromhex("8877665544332211")
+
+    if snapshot_path.exists():
+        snapshot_path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot_path, "1M"),
+        check=True,
+        timeout=10,
+    )
+    qemu_args = (
+        "-qmp",
+        "stdio",
+        "-drive",
+        f"file={snapshot_path},format=qcow2,if=none",
+    )
+    try:
+        with _gdb_session(
+            qemu,
+            workdir,
+            name,
+            mmo_hosted_debug_image(),
+            qemu_args=qemu_args,
+        ) as (remote, process, log_path):
+            greeting = _read_qmp_message(process)
+            assert "QMP" in greeting
+            _qmp_command(process, "qmp_capabilities")
+
+            stop = remote.send_packet("s")
+            assert stop.startswith((b"S", b"T"))
+            remote.write_memory(0, halt())
+            remote.write_memory(data_address, saved_data)
+            remote.write_memory(stack_address, saved_stack)
+            remote.write_register(0, 0x55)
+            remote.write_register(MMIX_GDB_RO, stack_address)
+            remote.write_register(MMIX_GDB_RS, stack_address + 8)
+            remote.write_register(MMIX_GDB_RL, 7)
+            remote.write_register(MMIX_GDB_PC, 0)
+            assert remote.read_memory(hole_address, 8) == bytes(8)
+
+            result = _qmp_command(
+                process,
+                "human-monitor-command",
+                {"command-line": "savevm hosted-state"},
+            )
+            assert not result, result
+
+            remote.write_memory(0, bytes.fromhex("f0ffffff"))
+            remote.write_memory(data_address, bytes(8))
+            remote.write_memory(stack_address, bytes(8))
+            remote.write_memory(hole_address, bytes.fromhex("a5" * 8))
+            remote.write_register(0, 0xaa)
+            remote.write_register(MMIX_GDB_RO, MMIX_STACK_SEGMENT_BASE)
+            remote.write_register(MMIX_GDB_RS, MMIX_STACK_SEGMENT_BASE)
+            remote.write_register(MMIX_GDB_RL, 2)
+
+            result = _qmp_command(
+                process,
+                "human-monitor-command",
+                {"command-line": "loadvm hosted-state"},
+            )
+            assert not result, result
+            assert remote.read_memory(0, 4) == halt()
+            assert remote.read_memory(data_address, 8) == saved_data
+            assert remote.read_memory(stack_address, 8) == saved_stack
+            assert remote.read_memory(hole_address, 8) == bytes(8)
+            assert remote.read_register(0) == 0x55
+            assert remote.read_register(MMIX_GDB_RO) == stack_address
+            assert remote.read_register(MMIX_GDB_RS) == stack_address + 8
+            assert remote.read_register(MMIX_GDB_RL) == 7
+            assert remote.read_register(MMIX_GDB_PC) == 0
+
+            remote.continue_execution()
+            assert process.wait(timeout=5) == 0
+            assert read_log(log_path).pc == 0
+    finally:
+        if snapshot_path.exists():
+            snapshot_path.unlink()
+
+
+def test_mmo_hosted_snapshot_rejects_open_file(qemu, workdir):
+    name = "mmo-hosted-snapshot-open-file"
+    snapshot_path = workdir / f"{name}.qcow2"
+    host_path = workdir / f"{name}.txt"
+    qemu_img = qemu.with_name("qemu-img")
+
+    if snapshot_path.exists():
+        snapshot_path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot_path, "1M"),
+        check=True,
+        timeout=10,
+    )
+    qemu_args = (
+        "-qmp",
+        "stdio",
+        "-semihosting",
+        "-drive",
+        f"file={snapshot_path},format=qcow2,if=none",
+    )
+    try:
+        with _gdb_session(
+            qemu,
+            workdir,
+            name,
+            mmo_hosted_open_file_debug_image(host_path),
+            qemu_args=qemu_args,
+        ) as (remote, process, _log):
+            greeting = _read_qmp_message(process)
+            assert "QMP" in greeting
+            _qmp_command(process, "qmp_capabilities")
+
+            for _ in range(5):
+                stop = remote.send_packet("s")
+                assert stop.startswith((b"S", b"T"))
+            assert remote.read_register(MMIX_GDB_PC) == 0x14
+
+            result = _qmp_command(
+                process,
+                "human-monitor-command",
+                {"command-line": "savevm hosted-open-file"},
+            )
+            assert "file handle 3 is open" in result
+    finally:
+        for path in (snapshot_path, host_path):
+            if path.exists():
+                path.unlink()
 
 
 @pytest.mark.parametrize(

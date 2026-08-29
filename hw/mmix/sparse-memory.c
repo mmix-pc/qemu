@@ -365,3 +365,41 @@ uint64_t mmix_sparse_memory_materialized_pages(
     g_assert(memory);
     return memory->materialized_pages;
 }
+
+typedef struct MMIXSparseForeachContext {
+    MMIXSparseMemoryPageFn callback;
+    void *opaque;
+    Error **errp;
+    bool success;
+} MMIXSparseForeachContext;
+
+static gboolean mmix_sparse_memory_visit_page(gpointer key, gpointer value,
+                                               gpointer opaque)
+{
+    MMIXSparseForeachContext *context = opaque;
+    uint64_t page_number = *(uint64_t *)key;
+    MMIXSparsePage *page = value;
+
+    context->success = context->callback(
+        page_number * MMIX_SPARSE_PAGE_SIZE, page->data,
+        context->opaque, context->errp);
+    return !context->success;
+}
+
+bool mmix_sparse_memory_foreach_page(const MMIXSparseMemory *memory,
+                                     MMIXSparseMemoryPageFn callback,
+                                     void *opaque, Error **errp)
+{
+    MMIXSparseForeachContext context = {
+        .callback = callback,
+        .opaque = opaque,
+        .errp = errp,
+        .success = true,
+    };
+
+    g_return_val_if_fail(memory != NULL, false);
+    g_return_val_if_fail(callback != NULL, false);
+
+    g_tree_foreach(memory->pages, mmix_sparse_memory_visit_page, &context);
+    return context.success;
+}
