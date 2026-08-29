@@ -2,14 +2,14 @@
 
 This directory contains pytest-based softmmu tests for the MMIX target.
 
-The tests run `qemu-system-mmix` with small raw instruction images or `.mmo`
-images and check CPU state, loader failures, serial output, and semihosting
-console output. Some fixtures are generated from MMIXAL sources when `mmixal`
-is available.
+The tests run `qemu-system-mmix` with raw instruction images, ELF images, or
+hosted `.mmo` objects and check CPU state, loader failures, serial output, and
+semihosting console output. Some fixtures are generated from MMIXAL sources
+when `mmixal` is available.
 
-Semihosted runtime tests use separate pytest entry points and pass
-`-semihosting` explicitly. Other raw-image, serial, and loader tests do not
-enable semihosting by default.
+Semihosted runtime tests wrap synthetic programs as hosted MMO objects, use
+separate pytest entry points, and pass `-semihosting` explicitly. Other
+raw-image, serial, and loader tests do not enable semihosting by default.
 
 Tests that need deterministic semihosting `StdIn` should use the stdio chardev
 helper in `lib.qemu` and pass input bytes through the test case. This keeps
@@ -27,11 +27,13 @@ Required binary:
 
 - `qemu-system-mmix`
 
-Optional binary:
+Optional MMIXWare binaries:
 
 - `mmixal`
+- `mmix`
 
 Tests that need `mmixal` are skipped when it is not found in `PATH`.
+MMIXWare output-comparison tests are skipped when `mmix` is not found.
 
 ## Running
 

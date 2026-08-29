@@ -2,9 +2,12 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import dataclasses
+
 import pytest
 
 from cases.common import case_id
+from cases.mmo_failures import MMO_FORMAT_FAILURE_TESTS
 from cases.mmo_hosted import (
     MMO_HOSTED_FAILURE_TESTS,
     MMO_HOSTED_SEMIHOSTING_CONSOLE_TESTS,
@@ -25,8 +28,23 @@ def test_mmo_hosted(qemu, workdir, test):
     run_mmo_test(qemu, workdir, test)
 
 
+@pytest.mark.parametrize("ram_size", ("128M", "512M", "8G"))
+def test_mmo_hosted_ram_budget(qemu, workdir, ram_size):
+    test = dataclasses.replace(
+        MMO_HOSTED_TESTS[0],
+        name=f"mmo-hosted-ram-{ram_size.lower()}",
+        qemu_args=("-m", ram_size),
+    )
+    run_mmo_test(qemu, workdir, test)
+
+
 @pytest.mark.parametrize("test", MMO_HOSTED_FAILURE_TESTS, ids=case_id)
 def test_mmo_hosted_failure(qemu, workdir, test):
+    run_loader_failure(qemu, workdir, test)
+
+
+@pytest.mark.parametrize("test", MMO_FORMAT_FAILURE_TESTS, ids=case_id)
+def test_mmo_format_failure(qemu, workdir, test):
     run_loader_failure(qemu, workdir, test)
 
 

@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import dataclasses
 import json
 import re
 import select
@@ -21,7 +22,7 @@ from lib.asserts import (
     assert_regs,
     assert_serial_output,
 )
-from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE
+from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE, mmo_hosted_text_image
 from lib.qemu import (
     QEMU_SEMIHOSTING_ARGS,
     QEMU_SEMIHOSTING_STDIN_ARGS,
@@ -34,6 +35,14 @@ from lib.qemu import (
 
 
 QEMU_SEMIHOSTING_CONSOLE_CHARDEV = "mmix-semihosting-console"
+
+
+def _as_hosted_mmo(test):
+    if test.program.startswith(bytes((MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE))):
+        return test
+    return dataclasses.replace(
+        test, program=mmo_hosted_text_image(test.program)
+    )
 
 
 def _test_stdin_data(test, stdin_data):
@@ -93,11 +102,13 @@ def run_one_with_loader(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
 
 
 def run_semihosting_one(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     qemu_args = _semihosting_config_args(test)
     run_one(qemu, workdir, test, qemu_args=qemu_args)
 
 
 def run_semihosting_stdin_one(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     qemu_args = (
         test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_STDIN_ARGS
     )
@@ -128,8 +139,12 @@ def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
 
 
 def run_semihosting_expected_failure(qemu, workdir, test):
-    run_expected_failure(qemu, workdir, test,
+    run_expected_failure(qemu, workdir, _as_hosted_mmo(test),
                          qemu_args=QEMU_SEMIHOSTING_ARGS)
+
+
+def run_semihosting_disabled_expected_failure(qemu, workdir, test):
+    run_expected_failure(qemu, workdir, _as_hosted_mmo(test))
 
 
 def run_process_failure(qemu, workdir, test):
@@ -200,6 +215,7 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
 
 
 def run_semihosting_console_test(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
                                             MMIX_MMO_LOP_PRE)))
     suffix = ".mmo" if is_mmo else ".bin"
@@ -238,6 +254,7 @@ def run_semihosting_console_test(qemu, workdir, test):
 
 
 def run_semihosting_stdin_console_test(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
                                             MMIX_MMO_LOP_PRE)))
     suffix = ".mmo" if is_mmo else ".bin"

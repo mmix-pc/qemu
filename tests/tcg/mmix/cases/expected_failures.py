@@ -28,10 +28,6 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
         "semihosting-fputs-stdout-disabled",
         b"".join(
             [
-                wyde(SETL, R10, 0x100),
-                insn(PUT, SR_TT, 0, R10),
-                *set_octa(R11, RQ_PROGRAM_B),
-                insn(PUT, SR_K, 0, R11),
                 *set_octa(R255, 0x40),
                 insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
                      MMIX_SEMIHOSTING_STDOUT),
@@ -116,7 +112,7 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
                      MMIX_SEMIHOSTING_STDOUT),
             ]
         ),
-        (f"MMIX hosted Fputs invalid string address "
+        (f"MMIX hosted Fputs invalid sparse string address "
          f"0x{MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS:016x}",
          "MMIX emulator failure"),
     ),

@@ -40,3 +40,11 @@ def mmixal():
     if path is None:
         pytest.skip("mmixal not found")
     return path
+
+
+@pytest.fixture(scope="session")
+def mmixware_simulator():
+    path = shutil.which("mmix")
+    if path is None:
+        pytest.skip("MMIXWare mmix simulator not found")
+    return path

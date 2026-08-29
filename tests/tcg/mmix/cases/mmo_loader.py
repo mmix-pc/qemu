@@ -6,18 +6,6 @@ from .common import *
 
 MMO_LOADER_TESTS = [
     MMIXMMOTest(
-        "mmo-elf-startup-abi-ignored",
-        mmo_image(
-            [
-                wyde(SETL, R1, 0x42),
-                halt(),
-            ]
-        ),
-        pc=0x04,
-        regs={R1: 0x42},
-        qemu_args=("-machine", "elf-startup-abi=argc-argv"),
-    ),
-    MMIXMMOTest(
         "mmo-straight-line-load",
         mmo_image(
             [
@@ -66,34 +54,32 @@ MMO_LOADER_TESTS = [
         regs={R1: 0x33},
     ),
     MMIXMMOTest(
-        "mmo-direct-high-ram-load",
+        "mmo-distant-text-load",
         mmo_image(
             [
-                *set_octa(R1, 0x20000000),
+                *set_octa(R1, 0x100000000),
                 insn(LDOU, R2, R1, R0),
                 halt(),
-                mmo_loc(0x20000000),
+                mmo_loc(0x100000000),
                 struct.pack(">Q", 0x0123456789abcdef),
             ]
         ),
         pc=0x14,
         regs={R2: 0x0123456789abcdef},
-        qemu_args=("-m", "512M"),
     ),
     MMIXMMOTest(
-        "mmo-direct-high-ram-last-octa-load",
+        "mmo-text-segment-last-octa-load",
         mmo_image(
             [
-                *set_octa(R1, 0x2ffffff8),
+                *set_octa(R1, MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 insn(LDOU, R2, R1, R0),
                 halt(),
-                mmo_loc(0x2ffffff8),
+                mmo_loc(MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 struct.pack(">Q", 0xfedcba9876543210),
             ]
         ),
         pc=0x14,
         regs={R2: 0xfedcba9876543210},
-        qemu_args=("-m", "512M"),
     ),
     MMIXMMOTest(
         "mmo-skip-sparse-load",
@@ -175,10 +161,11 @@ MMO_LOADER_TESTS = [
         mmo_image(
             [
                 *set_octa(R1, MMIX_DATA_SEGMENT_BASE +
-                          MMIX_DATA_SEGMENT_SIZE - 8),
+                          MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 insn(LDOU, R2, R1, R0),
                 halt(),
-                mmo_loc(MMIX_DATA_SEGMENT_BASE + MMIX_DATA_SEGMENT_SIZE - 8),
+                mmo_loc(MMIX_DATA_SEGMENT_BASE +
+                        MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 struct.pack(">Q", 0x99aabbccddeeff00),
             ]
         ),
@@ -218,10 +205,11 @@ MMO_LOADER_TESTS = [
         mmo_image(
             [
                 *set_octa(R1, MMIX_POOL_SEGMENT_BASE +
-                          MMIX_POOL_SEGMENT_SIZE - 8),
+                          MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 insn(LDOU, R2, R1, R0),
                 halt(),
-                mmo_loc(MMIX_POOL_SEGMENT_BASE + MMIX_POOL_SEGMENT_SIZE - 8),
+                mmo_loc(MMIX_POOL_SEGMENT_BASE +
+                        MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 struct.pack(">Q", 0xfedcba9876543210),
             ]
         ),
@@ -247,10 +235,11 @@ MMO_LOADER_TESTS = [
         mmo_image(
             [
                 *set_octa(R1, MMIX_STACK_SEGMENT_BASE +
-                          MMIX_STACK_SEGMENT_SIZE - 8),
+                          MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 insn(LDOU, R2, R1, R0),
                 halt(),
-                mmo_loc(MMIX_STACK_SEGMENT_BASE + MMIX_STACK_SEGMENT_SIZE - 8),
+                mmo_loc(MMIX_STACK_SEGMENT_BASE +
+                        MMIX_LOGICAL_SEGMENT_SIZE - 8),
                 struct.pack(">Q", 0x8899aabbccddeeff),
             ]
         ),
@@ -348,7 +337,7 @@ MMO_LOADER_TESTS = [
             [
                 jump(JMP, 3),
                 mmo_loc(0x0c),
-                branch(PBZ, R0, 0),  # target, fixed later
+                branch(PBZ, R10, 0),  # target, fixed later
                 mmo_loc(0x04),
                 mmo_fixrx(16, 0x0100fffe),
                 wyde(SETL, R3, 0x66),  # target
@@ -391,4 +380,19 @@ MMO_LOADER_TESTS = [
         pc=0x4c,
         regs={R1: 254, R3: 0x40, R254: 0x123456789ABCDEF0},
     ),
+]
+
+
+_COMPLETE_MMO_RECORD_TESTS = {
+    "mmo-spec-before-postamble",
+    "mmo-fixrx-jmp-backward",
+    "mmo-post-entry-globals",
+}
+
+MMO_LOADER_TESTS = [
+    test if test.name in _COMPLETE_MMO_RECORD_TESTS else dataclasses.replace(
+        test,
+        image=test.image + mmo_post(R255, {R255: 0}) + mmo_stab_end(),
+    )
+    for test in MMO_LOADER_TESTS
 ]

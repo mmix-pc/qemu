@@ -42,8 +42,8 @@ from cases.semihosting import (
 )
 from cases.serial import SEMIHOSTING_CONSOLE_TESTS
 from lib.execution import (
-    run_expected_failure,
     run_process_failure,
+    run_semihosting_disabled_expected_failure,
     run_semihosting_expected_failure,
     run_semihosting_one,
     run_semihosting_console_test,
@@ -416,7 +416,7 @@ def test_semihosting_expected_failure(qemu, workdir, test):
 @pytest.mark.parametrize("test", SEMIHOSTING_DISABLED_FAILURE_TESTS,
                          ids=case_id)
 def test_semihosting_disabled_expected_failure(qemu, workdir, test):
-    run_expected_failure(qemu, workdir, test)
+    run_semihosting_disabled_expected_failure(qemu, workdir, test)
 
 
 @pytest.mark.parametrize("test", SEMIHOSTING_PROCESS_FAILURE_TESTS,

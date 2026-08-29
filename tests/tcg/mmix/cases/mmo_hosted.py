@@ -6,8 +6,9 @@ from .common import *
 
 
 def _hosted_image(items, *, global_base=R255, globals_=None):
-    globals_ = {R255: 0} if globals_ is None else globals_
-    return mmo_image([*items, mmo_post(global_base, globals_), mmo_stab_end()])
+    return mmo_hosted_image(
+        items, global_base=global_base, globals_=globals_
+    )
 
 
 def _hosted_stack_spill_fill_image(depth):

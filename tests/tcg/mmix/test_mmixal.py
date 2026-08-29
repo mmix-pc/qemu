@@ -2,13 +2,14 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import subprocess
+
 import pytest
 
 from cases.common import case_id
 from cases.mmixal import (
     MMIXAL_MMO_TESTS,
     MMIXAL_SEMIHOSTING_CONSOLE_TESTS,
-    MMIXAL_SERIAL_TESTS,
     mmixal_file_read_case,
     mmixal_file_write_case,
 )
@@ -16,13 +17,7 @@ from lib.execution import (
     run_mmo_test,
     run_semihosting_console_test,
     run_semihosting_stdin_console_test,
-    run_serial_test,
 )
-
-
-@pytest.mark.parametrize("test_case", MMIXAL_SERIAL_TESTS, ids=case_id)
-def test_mmixal_serial(qemu, mmixal, workdir, test_case):
-    run_serial_test(qemu, workdir, test_case.build(mmixal, workdir))
 
 
 @pytest.mark.parametrize("test_case", MMIXAL_SEMIHOSTING_CONSOLE_TESTS,
@@ -67,3 +62,24 @@ def test_mmixal_semihosting_file_write(qemu, mmixal, workdir):
 @pytest.mark.parametrize("test_case", MMIXAL_MMO_TESTS, ids=case_id)
 def test_mmixal_mmo(qemu, mmixal, workdir, test_case):
     run_mmo_test(qemu, workdir, test_case.build(mmixal, workdir))
+
+
+def test_mmixware_prime_table_output(mmixal, mmixware_simulator, workdir):
+    test_case = next(
+        case for case in MMIXAL_SEMIHOSTING_CONSOLE_TESTS
+        if case.name == "mmixal-mmo-prime-table"
+    )
+    test = test_case.build(mmixal, workdir)
+    object_path = workdir / "mmixware-prime-table.mmo"
+
+    try:
+        object_path.write_bytes(test.program)
+        completed = subprocess.run(
+            (mmixware_simulator, object_path),
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+    finally:
+        object_path.unlink(missing_ok=True)
+    assert completed.stdout == test.output
