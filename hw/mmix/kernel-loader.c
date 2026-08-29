@@ -104,7 +104,9 @@ ssize_t mmix_load_kernel(const char *filename,
 
     switch (type) {
     case MMIX_KERNEL_IMAGE_MMO:
-        return mmix_load_mmo(filename, ram, info, errp);
+        error_setg(errp, "MMIX MMO kernel commit requires hosted sparse "
+                   "memory integration");
+        return -1;
     case MMIX_KERNEL_IMAGE_ELF:
         return mmix_load_elf(filename, ram, info, errp);
     case MMIX_KERNEL_IMAGE_RAW: {
