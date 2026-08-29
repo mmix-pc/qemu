@@ -27,6 +27,41 @@ static bool mmix_fdt_error(int ret, const char *operation, Error **errp)
     return true;
 }
 
+static bool mmix_fdt_context_range(uint64_t base, uint64_t stride,
+                                   unsigned int count, const char *device,
+                                   MMIXPhysRange *range, Error **errp)
+{
+    uint64_t size;
+
+    if (stride == 0 || count > UINT64_MAX / stride) {
+        error_setg(errp, "MMIX FDT %s context extent overflows", device);
+        return false;
+    }
+    size = count * stride;
+    if (!mmix_phys_range_init(range, base, size)) {
+        error_setg(errp, "MMIX FDT %s context range overflows", device);
+        return false;
+    }
+    return true;
+}
+
+static bool mmix_fdt_validate_context_ranges(const MMIXFDTConfig *config,
+                                             Error **errp)
+{
+    MMIXPhysRange range;
+
+    return mmix_fdt_context_range(MMIX_VIRT_TIMER_CONTEXT_BASE,
+                                  MMIX_VIRT_TIMER_CONTEXT_STRIDE,
+                                  config->cpu_count, "timer", &range, errp) &&
+           mmix_fdt_context_range(MMIX_VIRT_IPI_CONTEXT_BASE,
+                                  MMIX_VIRT_IPI_CONTEXT_STRIDE,
+                                  config->cpu_count, "IPI", &range, errp) &&
+           mmix_fdt_context_range(MMIX_VIRT_INTC_CONTEXT_BASE,
+                                  MMIX_VIRT_INTC_CONTEXT_STRIDE,
+                                  config->cpu_count, "interrupt controller",
+                                  &range, errp);
+}
+
 static bool mmix_fdt_validate_config(const MMIXFDTConfig *config,
                                      Error **errp)
 {
@@ -100,7 +135,7 @@ static bool mmix_fdt_validate_config(const MMIXFDTConfig *config,
             }
         }
     }
-    return true;
+    return mmix_fdt_validate_context_ranges(config, errp);
 }
 
 static bool mmix_fdt_set_u32(void *fdt, int node, const char *name,
@@ -137,6 +172,37 @@ static bool mmix_fdt_set_u64_range(void *fdt, int node, const char *name,
                            name, errp);
 }
 
+static bool mmix_fdt_set_u64_ranges(void *fdt, int node, const char *name,
+                                    const MMIXPhysRange *ranges, size_t count,
+                                    Error **errp)
+{
+    g_autofree fdt64_t *cells = g_new(fdt64_t, 2 * count);
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        cells[2 * i] = cpu_to_be64(ranges[i].start);
+        cells[2 * i + 1] = cpu_to_be64(mmix_phys_range_size(&ranges[i]));
+    }
+    return !mmix_fdt_error(fdt_setprop(fdt, node, name, cells,
+                                       2 * count * sizeof(*cells)),
+                           name, errp);
+}
+
+static bool mmix_fdt_set_u32_array(void *fdt, int node, const char *name,
+                                   const uint32_t *values, size_t count,
+                                   Error **errp)
+{
+    g_autofree fdt32_t *cells = g_new(fdt32_t, count);
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        cells[i] = cpu_to_be32(values[i]);
+    }
+    return !mmix_fdt_error(fdt_setprop(fdt, node, name, cells,
+                                       count * sizeof(*cells)),
+                           name, errp);
+}
+
 static bool mmix_fdt_set_phandle(void *fdt, int node, uint32_t phandle,
                                  Error **errp)
 {
@@ -164,6 +230,17 @@ static uint32_t mmix_fdt_stack_phandle(const MMIXFDTConfig *config,
                                        unsigned int cpu)
 {
     return MMIX_FDT_CPU_PHANDLE_BASE + config->cpu_count + cpu;
+}
+
+static uint32_t mmix_fdt_framebuffer_phandle(const MMIXFDTConfig *config)
+{
+    return MMIX_FDT_CPU_PHANDLE_BASE + 2 * config->cpu_count;
+}
+
+static uint32_t mmix_fdt_intc_phandle(const MMIXFDTConfig *config)
+{
+    return mmix_fdt_framebuffer_phandle(config) +
+           (config->has_framebuffer ? 1 : 0);
 }
 
 static bool mmix_fdt_add_cpu_nodes(void *fdt,
@@ -223,8 +300,7 @@ static bool mmix_fdt_add_reserved_memory(void *fdt,
         g_autofree char *name = g_strdup_printf(
             "framebuffer@%" PRIx64, config->framebuffer.start);
         int node = mmix_fdt_add_node(fdt, reserved, name, errp);
-        uint32_t phandle = MMIX_FDT_CPU_PHANDLE_BASE +
-                           2 * config->cpu_count;
+        uint32_t phandle = mmix_fdt_framebuffer_phandle(config);
 
         if (node < 0 ||
             !mmix_fdt_set_string(fdt, node, "compatible",
@@ -257,6 +333,137 @@ static bool mmix_fdt_add_reserved_memory(void *fdt,
         }
     }
     return true;
+}
+
+static bool mmix_fdt_add_intc_node(void *fdt,
+                                   const MMIXFDTConfig *config,
+                                   Error **errp)
+{
+    MMIXPhysRange ranges[] = {
+        {
+            .start = MMIX_VIRT_INTC_BASE,
+            .end = MMIX_VIRT_INTC_BASE + MMIX_VIRT_INTC_GLOBAL_SIZE,
+        },
+        { 0 },
+    };
+    g_autofree char *name = g_strdup_printf(
+        "interrupt-controller@%" PRIx64, MMIX_VIRT_INTC_BASE);
+    int node;
+
+    if (!mmix_fdt_context_range(MMIX_VIRT_INTC_CONTEXT_BASE,
+                                MMIX_VIRT_INTC_CONTEXT_STRIDE,
+                                config->cpu_count, "interrupt controller",
+                                &ranges[1], errp)) {
+        return false;
+    }
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"), name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "qemu,mmix-intc", errp) &&
+           mmix_fdt_set_empty(fdt, node, "interrupt-controller", errp) &&
+           mmix_fdt_set_u32(fdt, node, "#interrupt-cells", 1, errp) &&
+           mmix_fdt_set_u64_ranges(fdt, node, "reg", ranges,
+                                   G_N_ELEMENTS(ranges), errp) &&
+           /* Namespace capacity; active wiring comes from device nodes. */
+           mmix_fdt_set_u32(fdt, node, "qemu,source-count",
+                            MMIX_VIRT_INTC_IRQ_COUNT, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,context-count",
+                            config->cpu_count, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,context-stride",
+                            MMIX_VIRT_INTC_CONTEXT_STRIDE, errp) &&
+           mmix_fdt_set_phandle(fdt, node,
+                                mmix_fdt_intc_phandle(config), errp);
+}
+
+static bool mmix_fdt_add_ipi_node(void *fdt,
+                                  const MMIXFDTConfig *config,
+                                  Error **errp)
+{
+    MMIXPhysRange ranges[] = {
+        {
+            .start = MMIX_VIRT_IPI_BASE,
+            .end = MMIX_VIRT_IPI_BASE + MMIX_VIRT_IPI_GLOBAL_SLOT_SIZE,
+        },
+        { 0 },
+    };
+    g_autofree char *name = g_strdup_printf(
+        "ipi@%" PRIx64, MMIX_VIRT_IPI_BASE);
+    int node;
+
+    if (!mmix_fdt_context_range(MMIX_VIRT_IPI_CONTEXT_BASE,
+                                MMIX_VIRT_IPI_CONTEXT_STRIDE,
+                                config->cpu_count, "IPI", &ranges[1], errp)) {
+        return false;
+    }
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"), name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "qemu,mmix-ipi", errp) &&
+           mmix_fdt_set_u64_ranges(fdt, node, "reg", ranges,
+                                   G_N_ELEMENTS(ranges), errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,context-count",
+                            config->cpu_count, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,context-stride",
+                            MMIX_VIRT_IPI_CONTEXT_STRIDE, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,request-bit", 9, errp);
+}
+
+static bool mmix_fdt_add_timer_node(void *fdt,
+                                    const MMIXFDTConfig *config,
+                                    Error **errp)
+{
+    MMIXPhysRange ranges[] = {
+        {
+            .start = MMIX_VIRT_TIMER_BASE,
+            .end = MMIX_VIRT_TIMER_BASE + MMIX_VIRT_TIMER_GLOBAL_SLOT_SIZE,
+        },
+        { 0 },
+    };
+    g_autofree uint32_t *interrupts = g_new(uint32_t, config->cpu_count);
+    g_autofree uint32_t *affinity = g_new(uint32_t, config->cpu_count);
+    g_autofree char *name = g_strdup_printf(
+        "timer@%" PRIx64, MMIX_VIRT_TIMER_BASE);
+    unsigned int i;
+    int node;
+
+    if (!mmix_fdt_context_range(MMIX_VIRT_TIMER_CONTEXT_BASE,
+                                MMIX_VIRT_TIMER_CONTEXT_STRIDE,
+                                config->cpu_count, "timer", &ranges[1],
+                                errp)) {
+        return false;
+    }
+    for (i = 0; i < config->cpu_count; i++) {
+        interrupts[i] = MMIX_VIRT_TIMER_IRQ_BASE + i;
+        affinity[i] = mmix_fdt_cpu_phandle(i);
+    }
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"), name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "qemu,mmix-timer", errp) &&
+           mmix_fdt_set_u64_ranges(fdt, node, "reg", ranges,
+                                   G_N_ELEMENTS(ranges), errp) &&
+           mmix_fdt_set_u32_array(fdt, node, "interrupts", interrupts,
+                                  config->cpu_count, errp) &&
+           mmix_fdt_set_u32_array(fdt, node, "interrupt-affinity", affinity,
+                                  config->cpu_count, errp) &&
+           mmix_fdt_set_u32(fdt, node, "interrupt-parent",
+                            mmix_fdt_intc_phandle(config), errp) &&
+           mmix_fdt_set_u32(fdt, node, "clock-frequency",
+                            MMIX_VIRT_TIMER_CLOCK_FREQUENCY, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,context-count",
+                            config->cpu_count, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,context-stride",
+                            MMIX_VIRT_TIMER_CONTEXT_STRIDE, errp);
+}
+
+static bool mmix_fdt_add_interrupt_topology(void *fdt,
+                                            const MMIXFDTConfig *config,
+                                            Error **errp)
+{
+    /* Reverse address order preserves ascending /soc node order. */
+    return mmix_fdt_add_intc_node(fdt, config, errp) &&
+           mmix_fdt_add_ipi_node(fdt, config, errp) &&
+           mmix_fdt_add_timer_node(fdt, config, errp);
 }
 
 static bool mmix_fdt_add_foundation(void *fdt,
@@ -325,7 +532,8 @@ static bool mmix_fdt_add_foundation(void *fdt,
         !mmix_fdt_set_u32(fdt, soc, "#size-cells", 2, errp) ||
         !mmix_fdt_set_empty(fdt, soc, "ranges", errp) ||
         !mmix_fdt_add_cpu_nodes(fdt, config, errp) ||
-        !mmix_fdt_add_reserved_memory(fdt, config, errp)) {
+        !mmix_fdt_add_reserved_memory(fdt, config, errp) ||
+        !mmix_fdt_add_interrupt_topology(fdt, config, errp)) {
         return false;
     }
     return true;

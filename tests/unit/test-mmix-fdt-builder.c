@@ -110,6 +110,39 @@ static void assert_range(const void *fdt, const char *path,
                     mmix_phys_range_size(expected));
 }
 
+static void assert_ranges(const void *fdt, const char *path,
+                          const MMIXPhysRange *expected, size_t count)
+{
+    const fdt64_t *reg;
+    int length;
+    size_t i;
+
+    reg = fdt_getprop(fdt, node_offset(fdt, path), "reg", &length);
+    g_assert_nonnull(reg);
+    g_assert_cmpint(length, ==, 2 * count * sizeof(*reg));
+    for (i = 0; i < count; i++) {
+        g_assert_cmphex(be64_to_cpu(reg[2 * i]), ==, expected[i].start);
+        g_assert_cmphex(be64_to_cpu(reg[2 * i + 1]), ==,
+                        mmix_phys_range_size(&expected[i]));
+    }
+}
+
+static void assert_u32_array(const void *fdt, const char *path,
+                             const char *name, const uint32_t *expected,
+                             size_t count)
+{
+    const fdt32_t *actual;
+    int length;
+    size_t i;
+
+    actual = fdt_getprop(fdt, node_offset(fdt, path), name, &length);
+    g_assert_nonnull(actual);
+    g_assert_cmpint(length, ==, count * sizeof(*actual));
+    for (i = 0; i < count; i++) {
+        g_assert_cmpuint(be32_to_cpu(actual[i]), ==, expected[i]);
+    }
+}
+
 static void assert_foundation(const void *fdt, size_t size,
                               uint64_t ram_size, const char *command_line)
 {
@@ -176,6 +209,97 @@ static void assert_cpu_stack_pair(const void *fdt, unsigned int cpu_id,
     assert_absent(fdt, stack_path, "reusable");
 }
 
+static void assert_interrupt_topology(const void *fdt,
+                                      unsigned int cpu_count,
+                                      bool has_framebuffer)
+{
+    const char *intc_path = "/soc/interrupt-controller@1000030000000";
+    const char *ipi_path = "/soc/ipi@1000024000000";
+    const char *timer_path = "/soc/timer@1000020000000";
+    const MMIXPhysRange intc_ranges[] = {
+        {
+            .start = MMIX_VIRT_INTC_BASE,
+            .end = MMIX_VIRT_INTC_BASE + MMIX_VIRT_INTC_GLOBAL_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_INTC_CONTEXT_BASE,
+            .end = MMIX_VIRT_INTC_CONTEXT_BASE +
+                   cpu_count * MMIX_VIRT_INTC_CONTEXT_STRIDE,
+        },
+    };
+    const MMIXPhysRange ipi_ranges[] = {
+        {
+            .start = MMIX_VIRT_IPI_BASE,
+            .end = MMIX_VIRT_IPI_BASE + MMIX_VIRT_IPI_GLOBAL_SLOT_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_IPI_CONTEXT_BASE,
+            .end = MMIX_VIRT_IPI_CONTEXT_BASE +
+                   cpu_count * MMIX_VIRT_IPI_CONTEXT_STRIDE,
+        },
+    };
+    const MMIXPhysRange timer_ranges[] = {
+        {
+            .start = MMIX_VIRT_TIMER_BASE,
+            .end = MMIX_VIRT_TIMER_BASE + MMIX_VIRT_TIMER_GLOBAL_SLOT_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_TIMER_CONTEXT_BASE,
+            .end = MMIX_VIRT_TIMER_CONTEXT_BASE +
+                   cpu_count * MMIX_VIRT_TIMER_CONTEXT_STRIDE,
+        },
+    };
+    g_autofree uint32_t *interrupts = g_new(uint32_t, cpu_count);
+    g_autofree uint32_t *affinity = g_new(uint32_t, cpu_count);
+    uint32_t intc_phandle = 1 + 2 * cpu_count + has_framebuffer;
+    unsigned int i;
+
+    assert_string(fdt, intc_path, "compatible", "qemu,mmix-intc");
+    assert_empty(fdt, intc_path, "interrupt-controller");
+    assert_u32(fdt, intc_path, "#interrupt-cells", 1);
+    assert_ranges(fdt, intc_path, intc_ranges, G_N_ELEMENTS(intc_ranges));
+    assert_u32(fdt, intc_path, "qemu,source-count",
+               MMIX_VIRT_INTC_IRQ_COUNT);
+    assert_u32(fdt, intc_path, "qemu,context-count", cpu_count);
+    assert_u32(fdt, intc_path, "qemu,context-stride",
+               MMIX_VIRT_INTC_CONTEXT_STRIDE);
+    assert_u32(fdt, intc_path, "phandle", intc_phandle);
+    assert_u32(fdt, intc_path, "linux,phandle", intc_phandle);
+    g_assert_cmpint(fdt_node_offset_by_phandle(fdt, intc_phandle), ==,
+                    node_offset(fdt, intc_path));
+
+    assert_string(fdt, ipi_path, "compatible", "qemu,mmix-ipi");
+    assert_ranges(fdt, ipi_path, ipi_ranges, G_N_ELEMENTS(ipi_ranges));
+    assert_u32(fdt, ipi_path, "qemu,context-count", cpu_count);
+    assert_u32(fdt, ipi_path, "qemu,context-stride",
+               MMIX_VIRT_IPI_CONTEXT_STRIDE);
+    assert_u32(fdt, ipi_path, "qemu,request-bit", 9);
+    assert_absent(fdt, ipi_path, "interrupt-parent");
+    assert_absent(fdt, ipi_path, "interrupts");
+    assert_absent(fdt, ipi_path, "interrupt-affinity");
+
+    for (i = 0; i < cpu_count; i++) {
+        g_autofree char *cpu_path = g_strdup_printf("/cpus/cpu@%x", i);
+
+        interrupts[i] = MMIX_VIRT_TIMER_IRQ_BASE + i;
+        affinity[i] = 1 + i;
+        g_assert_cmpint(fdt_node_offset_by_phandle(fdt, affinity[i]), ==,
+                        node_offset(fdt, cpu_path));
+    }
+    assert_string(fdt, timer_path, "compatible", "qemu,mmix-timer");
+    assert_ranges(fdt, timer_path, timer_ranges,
+                  G_N_ELEMENTS(timer_ranges));
+    assert_u32_array(fdt, timer_path, "interrupts", interrupts, cpu_count);
+    assert_u32_array(fdt, timer_path, "interrupt-affinity", affinity,
+                     cpu_count);
+    assert_u32(fdt, timer_path, "interrupt-parent", intc_phandle);
+    assert_u32(fdt, timer_path, "clock-frequency",
+               MMIX_VIRT_TIMER_CLOCK_FREQUENCY);
+    assert_u32(fdt, timer_path, "qemu,context-count", cpu_count);
+    assert_u32(fdt, timer_path, "qemu,context-stride",
+               MMIX_VIRT_TIMER_CONTEXT_STRIDE);
+}
+
 static void test_default_foundation(void)
 {
     g_autoptr(GBytes) blob = build_fdt(MMIX_VIRT_RAM_DEFAULT_SIZE, "");
@@ -183,6 +307,7 @@ static void test_default_foundation(void)
     const void *fdt = g_bytes_get_data(blob, &size);
 
     assert_foundation(fdt, size, MMIX_VIRT_RAM_DEFAULT_SIZE, "");
+    assert_interrupt_topology(fdt, 1, false);
 }
 
 static void test_large_ram_and_command_line(void)
@@ -229,6 +354,7 @@ static void test_single_cpu_with_framebuffer(void)
     assert_u32(fdt, framebuffer_path, "linux,phandle", 3);
     g_assert_cmpint(fdt_node_offset_by_phandle(fdt, 3), ==,
                     node_offset(fdt, framebuffer_path));
+    assert_interrupt_topology(fdt, 1, true);
 }
 
 static void test_maximum_cpu_topology(void)
@@ -260,6 +386,7 @@ static void test_maximum_cpu_topology(void)
         node = fdt_next_subnode(fdt, node);
     }
     g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
+    assert_interrupt_topology(fdt, G_N_ELEMENTS(stacks), false);
 }
 
 static void assert_invalid_config(const MMIXFDTConfig *config,
