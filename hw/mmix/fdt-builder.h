@@ -8,6 +8,7 @@
 #define HW_MMIX_FDT_BUILDER_H
 
 #include "qapi/error.h"
+#include "physical-layout.h"
 
 enum {
     MMIX_FDT_COMMAND_LINE_MAX = 4095,
@@ -17,6 +18,12 @@ enum {
 typedef struct MMIXFDTConfig {
     uint64_t ram_size;
     const char *command_line;
+    unsigned int cpu_count;
+    /* One range per CPU, indexed by the contiguous CPU ID. */
+    const MMIXPhysRange *cpu_stacks;
+    bool has_framebuffer;
+    /* Page-rounded backing reservation, not just the visible pixel bytes. */
+    MMIXPhysRange framebuffer;
 } MMIXFDTConfig;
 
 /* A failed build leaves an existing result unchanged. */

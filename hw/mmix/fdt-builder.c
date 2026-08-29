@@ -10,6 +10,11 @@
 #include <libfdt.h>
 #include "fdt-builder.h"
 #include "physical-layout.h"
+#include "virt.h"
+
+enum {
+    MMIX_FDT_CPU_PHANDLE_BASE = 1,
+};
 
 static bool mmix_fdt_error(int ret, const char *operation, Error **errp)
 {
@@ -25,6 +30,9 @@ static bool mmix_fdt_error(int ret, const char *operation, Error **errp)
 static bool mmix_fdt_validate_config(const MMIXFDTConfig *config,
                                      Error **errp)
 {
+    unsigned int i;
+    unsigned int j;
+
     if (!config) {
         error_setg(errp, "MMIX FDT configuration is missing");
         return false;
@@ -44,6 +52,53 @@ static bool mmix_fdt_validate_config(const MMIXFDTConfig *config,
         error_setg(errp, "MMIX FDT command line exceeds %u bytes",
                    MMIX_FDT_COMMAND_LINE_MAX);
         return false;
+    }
+    if (config->cpu_count == 0 || config->cpu_count > MMIX_VIRT_MAX_CPUS) {
+        error_setg(errp, "MMIX FDT CPU count %u is invalid",
+                   config->cpu_count);
+        return false;
+    }
+    if (!config->cpu_stacks) {
+        error_setg(errp, "MMIX FDT CPU stack reservations are missing");
+        return false;
+    }
+    for (i = 0; i < config->cpu_count; i++) {
+        const MMIXPhysRange *stack = &config->cpu_stacks[i];
+
+        if (!mmix_phys_range_valid(stack) ||
+            mmix_phys_range_size(stack) != MMIX_VIRT_INITIAL_STACK_SIZE ||
+            stack->start % MMIX_VIRT_INITIAL_STACK_ALIGN != 0 ||
+            stack->end > config->ram_size) {
+            error_setg(errp, "MMIX FDT CPU %u stack reservation is invalid",
+                       i);
+            return false;
+        }
+        for (j = 0; j < i; j++) {
+            if (mmix_phys_ranges_overlap(stack, &config->cpu_stacks[j])) {
+                error_setg(errp, "MMIX FDT CPU stack reservations %u and %u "
+                           "overlap", j, i);
+                return false;
+            }
+        }
+    }
+    if (config->has_framebuffer) {
+        const MMIXPhysRange *framebuffer = &config->framebuffer;
+
+        if (!mmix_phys_range_valid(framebuffer) ||
+            mmix_phys_range_size(framebuffer) != MMIX_VIRT_FRAMEBUFFER_SIZE ||
+            framebuffer->start % MMIX_VIRT_FRAMEBUFFER_ALIGN != 0 ||
+            framebuffer->end > config->ram_size) {
+            error_setg(errp, "MMIX FDT framebuffer reservation is invalid");
+            return false;
+        }
+        for (i = 0; i < config->cpu_count; i++) {
+            if (mmix_phys_ranges_overlap(framebuffer,
+                                         &config->cpu_stacks[i])) {
+                error_setg(errp, "MMIX FDT framebuffer reservation overlaps "
+                           "CPU %u stack reservation", i);
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -70,6 +125,25 @@ static bool mmix_fdt_set_empty(void *fdt, int node, const char *name,
                            name, errp);
 }
 
+static bool mmix_fdt_set_u64_range(void *fdt, int node, const char *name,
+                                   const MMIXPhysRange *range, Error **errp)
+{
+    const fdt64_t reg[] = {
+        cpu_to_be64(range->start),
+        cpu_to_be64(mmix_phys_range_size(range)),
+    };
+
+    return !mmix_fdt_error(fdt_setprop(fdt, node, name, reg, sizeof(reg)),
+                           name, errp);
+}
+
+static bool mmix_fdt_set_phandle(void *fdt, int node, uint32_t phandle,
+                                 Error **errp)
+{
+    return mmix_fdt_set_u32(fdt, node, "phandle", phandle, errp) &&
+           mmix_fdt_set_u32(fdt, node, "linux,phandle", phandle, errp);
+}
+
 static int mmix_fdt_add_node(void *fdt, int parent, const char *name,
                              Error **errp)
 {
@@ -79,6 +153,110 @@ static int mmix_fdt_add_node(void *fdt, int parent, const char *name,
         return -1;
     }
     return node;
+}
+
+static uint32_t mmix_fdt_cpu_phandle(unsigned int cpu)
+{
+    return MMIX_FDT_CPU_PHANDLE_BASE + cpu;
+}
+
+static uint32_t mmix_fdt_stack_phandle(const MMIXFDTConfig *config,
+                                       unsigned int cpu)
+{
+    return MMIX_FDT_CPU_PHANDLE_BASE + config->cpu_count + cpu;
+}
+
+static bool mmix_fdt_add_cpu_nodes(void *fdt,
+                                   const MMIXFDTConfig *config,
+                                   Error **errp)
+{
+    int root = fdt_path_offset(fdt, "/");
+    int cpus;
+    int i;
+
+    if (mmix_fdt_error(root, "find root node", errp)) {
+        return false;
+    }
+    cpus = mmix_fdt_add_node(fdt, root, "cpus", errp);
+    if (cpus < 0 ||
+        !mmix_fdt_set_u32(fdt, cpus, "#address-cells", 1, errp) ||
+        !mmix_fdt_set_u32(fdt, cpus, "#size-cells", 0, errp)) {
+        return false;
+    }
+
+    /* libfdt prepends subnodes, so reverse insertion preserves CPU order. */
+    for (i = config->cpu_count - 1; i >= 0; i--) {
+        g_autofree char *name = g_strdup_printf("cpu@%x", i);
+        int cpu = mmix_fdt_add_node(fdt,
+                                    fdt_path_offset(fdt, "/cpus"),
+                                    name, errp);
+
+        if (cpu < 0 ||
+            !mmix_fdt_set_string(fdt, cpu, "device_type", "cpu", errp) ||
+            !mmix_fdt_set_string(fdt, cpu, "compatible",
+                                 "qemu,mmix-cpu", errp) ||
+            !mmix_fdt_set_u32(fdt, cpu, "reg", i, errp) ||
+            !mmix_fdt_set_string(fdt, cpu, "status", "okay", errp) ||
+            !mmix_fdt_set_string(fdt, cpu, "enable-method",
+                                 "qemu,mmix-immediate-entry", errp) ||
+            !mmix_fdt_set_u32(fdt, cpu, "qemu,initial-register-stack",
+                              mmix_fdt_stack_phandle(config, i), errp) ||
+            !mmix_fdt_set_phandle(fdt, cpu,
+                                  mmix_fdt_cpu_phandle(i), errp)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool mmix_fdt_add_reserved_memory(void *fdt,
+                                         const MMIXFDTConfig *config,
+                                         Error **errp)
+{
+    int reserved = fdt_path_offset(fdt, "/reserved-memory");
+    int i;
+
+    if (mmix_fdt_error(reserved, "find reserved-memory node", errp)) {
+        return false;
+    }
+    if (config->has_framebuffer) {
+        g_autofree char *name = g_strdup_printf(
+            "framebuffer@%" PRIx64, config->framebuffer.start);
+        int node = mmix_fdt_add_node(fdt, reserved, name, errp);
+        uint32_t phandle = MMIX_FDT_CPU_PHANDLE_BASE +
+                           2 * config->cpu_count;
+
+        if (node < 0 ||
+            !mmix_fdt_set_string(fdt, node, "compatible",
+                                 "qemu,mmix-framebuffer-memory", errp) ||
+            !mmix_fdt_set_u64_range(fdt, node, "reg",
+                                    &config->framebuffer, errp) ||
+            !mmix_fdt_set_empty(fdt, node, "no-map", errp) ||
+            !mmix_fdt_set_phandle(fdt, node, phandle, errp)) {
+            return false;
+        }
+    }
+
+    /* Reverse insertion preserves ascending CPU order in the final blob. */
+    for (i = config->cpu_count - 1; i >= 0; i--) {
+        const MMIXPhysRange *range = &config->cpu_stacks[i];
+        g_autofree char *name = g_strdup_printf(
+            "register-stack@%" PRIx64, range->start);
+        int node = mmix_fdt_add_node(
+            fdt, fdt_path_offset(fdt, "/reserved-memory"), name, errp);
+
+        if (node < 0 ||
+            !mmix_fdt_set_string(fdt, node, "compatible",
+                                 "qemu,mmix-register-stack", errp) ||
+            !mmix_fdt_set_u64_range(fdt, node, "reg", range, errp) ||
+            !mmix_fdt_set_u32(fdt, node, "qemu,cpu",
+                              mmix_fdt_cpu_phandle(i), errp) ||
+            !mmix_fdt_set_phandle(fdt, node,
+                                  mmix_fdt_stack_phandle(config, i), errp)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool mmix_fdt_add_foundation(void *fdt,
@@ -145,7 +323,9 @@ static bool mmix_fdt_add_foundation(void *fdt,
         !mmix_fdt_set_string(fdt, soc, "compatible", "simple-bus", errp) ||
         !mmix_fdt_set_u32(fdt, soc, "#address-cells", 2, errp) ||
         !mmix_fdt_set_u32(fdt, soc, "#size-cells", 2, errp) ||
-        !mmix_fdt_set_empty(fdt, soc, "ranges", errp)) {
+        !mmix_fdt_set_empty(fdt, soc, "ranges", errp) ||
+        !mmix_fdt_add_cpu_nodes(fdt, config, errp) ||
+        !mmix_fdt_add_reserved_memory(fdt, config, errp)) {
         return false;
     }
     return true;

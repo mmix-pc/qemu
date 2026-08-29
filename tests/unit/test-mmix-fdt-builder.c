@@ -7,23 +7,43 @@
 #include "qemu/osdep.h"
 #include "hw/mmix/fdt-builder.h"
 #include "hw/mmix/physical-layout.h"
+#include "hw/mmix/virt.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
 #include "qemu/units.h"
 #include <libfdt.h>
 
-static GBytes *build_fdt(uint64_t ram_size, const char *command_line)
+static const MMIXPhysRange default_stack = {
+    .start = 0x10000,
+    .end = 0x18000,
+};
+
+static MMIXFDTConfig default_config(uint64_t ram_size,
+                                    const char *command_line)
 {
-    MMIXFDTConfig config = {
+    return (MMIXFDTConfig) {
         .ram_size = ram_size,
         .command_line = command_line,
+        .cpu_count = 1,
+        .cpu_stacks = &default_stack,
     };
+}
+
+static GBytes *build_configured_fdt(const MMIXFDTConfig *config)
+{
     GBytes *blob = NULL;
     Error *err = NULL;
 
-    g_assert_true(mmix_fdt_build(&config, &blob, &err));
+    g_assert_true(mmix_fdt_build(config, &blob, &err));
     g_assert_null(err);
     return blob;
+}
+
+static GBytes *build_fdt(uint64_t ram_size, const char *command_line)
+{
+    MMIXFDTConfig config = default_config(ram_size, command_line);
+
+    return build_configured_fdt(&config);
 }
 
 static int node_offset(const void *fdt, const char *path)
@@ -68,6 +88,28 @@ static void assert_empty(const void *fdt, const char *path, const char *name)
     g_assert_cmpint(length, ==, 0);
 }
 
+static void assert_absent(const void *fdt, const char *path, const char *name)
+{
+    int length;
+
+    g_assert_null(fdt_getprop(fdt, node_offset(fdt, path), name, &length));
+    g_assert_cmpint(length, ==, -FDT_ERR_NOTFOUND);
+}
+
+static void assert_range(const void *fdt, const char *path,
+                         const MMIXPhysRange *expected)
+{
+    const fdt64_t *reg;
+    int length;
+
+    reg = fdt_getprop(fdt, node_offset(fdt, path), "reg", &length);
+    g_assert_nonnull(reg);
+    g_assert_cmpint(length, ==, 2 * sizeof(*reg));
+    g_assert_cmphex(be64_to_cpu(reg[0]), ==, expected->start);
+    g_assert_cmphex(be64_to_cpu(reg[1]), ==,
+                    mmix_phys_range_size(expected));
+}
+
 static void assert_foundation(const void *fdt, size_t size,
                               uint64_t ram_size, const char *command_line)
 {
@@ -92,10 +134,46 @@ static void assert_foundation(const void *fdt, size_t size,
     assert_u32(fdt, "/reserved-memory", "#address-cells", 2);
     assert_u32(fdt, "/reserved-memory", "#size-cells", 2);
     assert_empty(fdt, "/reserved-memory", "ranges");
+    assert_u32(fdt, "/cpus", "#address-cells", 1);
+    assert_u32(fdt, "/cpus", "#size-cells", 0);
     assert_string(fdt, "/soc", "compatible", "simple-bus");
     assert_u32(fdt, "/soc", "#address-cells", 2);
     assert_u32(fdt, "/soc", "#size-cells", 2);
     assert_empty(fdt, "/soc", "ranges");
+}
+
+static void assert_cpu_stack_pair(const void *fdt, unsigned int cpu_id,
+                                  const MMIXPhysRange *stack,
+                                  uint32_t cpu_phandle,
+                                  uint32_t stack_phandle)
+{
+    g_autofree char *cpu_path = g_strdup_printf("/cpus/cpu@%x", cpu_id);
+    g_autofree char *stack_path = g_strdup_printf(
+        "/reserved-memory/register-stack@%" PRIx64, stack->start);
+
+    assert_string(fdt, cpu_path, "device_type", "cpu");
+    assert_string(fdt, cpu_path, "compatible", "qemu,mmix-cpu");
+    assert_u32(fdt, cpu_path, "reg", cpu_id);
+    assert_string(fdt, cpu_path, "status", "okay");
+    assert_string(fdt, cpu_path, "enable-method",
+                  "qemu,mmix-immediate-entry");
+    assert_u32(fdt, cpu_path, "phandle", cpu_phandle);
+    assert_u32(fdt, cpu_path, "linux,phandle", cpu_phandle);
+    assert_u32(fdt, cpu_path, "qemu,initial-register-stack",
+               stack_phandle);
+    g_assert_cmpint(fdt_node_offset_by_phandle(fdt, cpu_phandle), ==,
+                    node_offset(fdt, cpu_path));
+
+    assert_string(fdt, stack_path, "compatible",
+                  "qemu,mmix-register-stack");
+    assert_range(fdt, stack_path, stack);
+    assert_u32(fdt, stack_path, "phandle", stack_phandle);
+    assert_u32(fdt, stack_path, "linux,phandle", stack_phandle);
+    assert_u32(fdt, stack_path, "qemu,cpu", cpu_phandle);
+    g_assert_cmpint(fdt_node_offset_by_phandle(fdt, stack_phandle), ==,
+                    node_offset(fdt, stack_path));
+    assert_absent(fdt, stack_path, "no-map");
+    assert_absent(fdt, stack_path, "reusable");
 }
 
 static void test_default_foundation(void)
@@ -125,6 +203,65 @@ static void test_deterministic_output(void)
     g_assert_true(g_bytes_equal(first, second));
 }
 
+static void test_single_cpu_with_framebuffer(void)
+{
+    const MMIXPhysRange framebuffer = {
+        .start = 0x400000,
+        .end = 0x400000 + MMIX_VIRT_FRAMEBUFFER_SIZE,
+    };
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autofree char *framebuffer_path = g_strdup_printf(
+        "/reserved-memory/framebuffer@%" PRIx64, framebuffer.start);
+    g_autoptr(GBytes) blob;
+    const void *fdt;
+
+    config.has_framebuffer = true;
+    config.framebuffer = framebuffer;
+    blob = build_configured_fdt(&config);
+    fdt = g_bytes_get_data(blob, NULL);
+
+    assert_cpu_stack_pair(fdt, 0, &default_stack, 1, 2);
+    assert_string(fdt, framebuffer_path, "compatible",
+                  "qemu,mmix-framebuffer-memory");
+    assert_range(fdt, framebuffer_path, &framebuffer);
+    assert_empty(fdt, framebuffer_path, "no-map");
+    assert_u32(fdt, framebuffer_path, "phandle", 3);
+    assert_u32(fdt, framebuffer_path, "linux,phandle", 3);
+    g_assert_cmpint(fdt_node_offset_by_phandle(fdt, 3), ==,
+                    node_offset(fdt, framebuffer_path));
+}
+
+static void test_maximum_cpu_topology(void)
+{
+    MMIXPhysRange stacks[MMIX_VIRT_MAX_CPUS];
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autoptr(GBytes) blob;
+    const void *fdt;
+    int node;
+    unsigned int i;
+
+    for (i = 0; i < G_N_ELEMENTS(stacks); i++) {
+        stacks[i].start = 0x100000 + i * MMIX_VIRT_INITIAL_STACK_SIZE;
+        stacks[i].end = stacks[i].start + MMIX_VIRT_INITIAL_STACK_SIZE;
+    }
+    config.cpu_count = G_N_ELEMENTS(stacks);
+    config.cpu_stacks = stacks;
+    blob = build_configured_fdt(&config);
+    fdt = g_bytes_get_data(blob, NULL);
+
+    node = fdt_first_subnode(fdt, node_offset(fdt, "/cpus"));
+    for (i = 0; i < G_N_ELEMENTS(stacks); i++) {
+        g_autofree char *name = g_strdup_printf("cpu@%x", i);
+
+        g_assert_cmpint(node, >=, 0);
+        g_assert_cmpstr(fdt_get_name(fdt, node, NULL), ==, name);
+        assert_cpu_stack_pair(fdt, i, &stacks[i], 1 + i,
+                              1 + G_N_ELEMENTS(stacks) + i);
+        node = fdt_next_subnode(fdt, node);
+    }
+    g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
+}
+
 static void assert_invalid_config(const MMIXFDTConfig *config,
                                   const char *diagnostic)
 {
@@ -142,27 +279,18 @@ static void assert_invalid_config(const MMIXFDTConfig *config,
 
 static void test_invalid_inputs_preserve_result(void)
 {
-    MMIXFDTConfig below_minimum = {
-        .ram_size = MMIX_VIRT_RAM_MIN_SIZE - MMIX_VIRT_RAM_ALIGN,
-        .command_line = "",
-    };
-    MMIXFDTConfig above_maximum = {
-        .ram_size = MMIX_VIRT_RAM_MAX_SIZE + MMIX_VIRT_RAM_ALIGN,
-        .command_line = "",
-    };
-    MMIXFDTConfig unaligned = {
-        .ram_size = MMIX_VIRT_RAM_MIN_SIZE + 1,
-        .command_line = "",
-    };
-    MMIXFDTConfig missing_command_line = {
-        .ram_size = MMIX_VIRT_RAM_MIN_SIZE,
-    };
+    MMIXFDTConfig below_minimum = default_config(
+        MMIX_VIRT_RAM_MIN_SIZE - MMIX_VIRT_RAM_ALIGN, "");
+    MMIXFDTConfig above_maximum = default_config(
+        MMIX_VIRT_RAM_MAX_SIZE + MMIX_VIRT_RAM_ALIGN, "");
+    MMIXFDTConfig unaligned = default_config(
+        MMIX_VIRT_RAM_MIN_SIZE + 1, "");
+    MMIXFDTConfig missing_command_line = default_config(
+        MMIX_VIRT_RAM_MIN_SIZE, NULL);
     g_autofree char *long_command_line =
         g_strnfill(MMIX_FDT_COMMAND_LINE_MAX + 1, 'x');
-    MMIXFDTConfig oversized_command_line = {
-        .ram_size = MMIX_VIRT_RAM_MIN_SIZE,
-        .command_line = long_command_line,
-    };
+    MMIXFDTConfig oversized_command_line = default_config(
+        MMIX_VIRT_RAM_MIN_SIZE, long_command_line);
 
     assert_invalid_config(NULL, "configuration is missing");
     assert_invalid_config(&below_minimum, "RAM size");
@@ -173,12 +301,75 @@ static void test_invalid_inputs_preserve_result(void)
                           "command line exceeds 4095 bytes");
 }
 
+static void test_invalid_topology_preserves_result(void)
+{
+    const MMIXPhysRange short_stack = {
+        .start = 0x10000,
+        .end = 0x12000,
+    };
+    const MMIXPhysRange unaligned_stack = {
+        .start = 0x10001,
+        .end = 0x18001,
+    };
+    const MMIXPhysRange outside_stack = {
+        .start = MMIX_VIRT_RAM_MIN_SIZE,
+        .end = MMIX_VIRT_RAM_MIN_SIZE + MMIX_VIRT_INITIAL_STACK_SIZE,
+    };
+    const MMIXPhysRange overlapping_stacks[] = {
+        default_stack,
+        default_stack,
+    };
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+
+    config.cpu_count = 0;
+    assert_invalid_config(&config, "CPU count 0 is invalid");
+    config.cpu_count = MMIX_VIRT_MAX_CPUS + 1;
+    assert_invalid_config(&config, "CPU count 65 is invalid");
+
+    config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+    config.cpu_stacks = NULL;
+    assert_invalid_config(&config, "stack reservations are missing");
+    config.cpu_stacks = &short_stack;
+    assert_invalid_config(&config, "CPU 0 stack reservation is invalid");
+    config.cpu_stacks = &unaligned_stack;
+    assert_invalid_config(&config, "CPU 0 stack reservation is invalid");
+    config.cpu_stacks = &outside_stack;
+    assert_invalid_config(&config, "CPU 0 stack reservation is invalid");
+
+    config.cpu_count = G_N_ELEMENTS(overlapping_stacks);
+    config.cpu_stacks = overlapping_stacks;
+    assert_invalid_config(&config, "stack reservations 0 and 1 overlap");
+}
+
+static void test_invalid_framebuffer_preserves_result(void)
+{
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+
+    config.has_framebuffer = true;
+    config.framebuffer = (MMIXPhysRange) {
+        .start = 0x10001,
+        .end = 0x10001 + MMIX_VIRT_FRAMEBUFFER_SIZE,
+    };
+    assert_invalid_config(&config, "framebuffer reservation is invalid");
+
+    config.framebuffer = (MMIXPhysRange) {
+        .start = MMIX_VIRT_RAM_MIN_SIZE - MMIX_VIRT_FRAMEBUFFER_SIZE +
+                 MMIX_VIRT_RAM_ALIGN,
+        .end = MMIX_VIRT_RAM_MIN_SIZE + MMIX_VIRT_RAM_ALIGN,
+    };
+    assert_invalid_config(&config, "framebuffer reservation is invalid");
+
+    config.framebuffer = (MMIXPhysRange) {
+        .start = default_stack.start,
+        .end = default_stack.start + MMIX_VIRT_FRAMEBUFFER_SIZE,
+    };
+    assert_invalid_config(&config,
+                          "framebuffer reservation overlaps CPU 0");
+}
+
 static void test_missing_result_pointer(void)
 {
-    MMIXFDTConfig config = {
-        .ram_size = MMIX_VIRT_RAM_MIN_SIZE,
-        .command_line = "",
-    };
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
     Error *err = NULL;
 
     g_assert_false(mmix_fdt_build(&config, NULL, &err));
@@ -197,8 +388,16 @@ int main(int argc, char **argv)
                     test_large_ram_and_command_line);
     g_test_add_func("/mmix/fdt-builder/deterministic-output",
                     test_deterministic_output);
+    g_test_add_func("/mmix/fdt-builder/single-cpu-framebuffer",
+                    test_single_cpu_with_framebuffer);
+    g_test_add_func("/mmix/fdt-builder/maximum-cpu-topology",
+                    test_maximum_cpu_topology);
     g_test_add_func("/mmix/fdt-builder/invalid-inputs-preserve-result",
                     test_invalid_inputs_preserve_result);
+    g_test_add_func("/mmix/fdt-builder/invalid-topology-preserve-result",
+                    test_invalid_topology_preserves_result);
+    g_test_add_func("/mmix/fdt-builder/invalid-framebuffer-preserve-result",
+                    test_invalid_framebuffer_preserves_result);
     g_test_add_func("/mmix/fdt-builder/missing-result-pointer",
                     test_missing_result_pointer);
     return g_test_run();
