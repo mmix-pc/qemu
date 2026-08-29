@@ -2,6 +2,7 @@ config MMIX_VIRT
     bool
     default y
     depends on MMIX
+    select DEVICE_TREE
     select SERIAL_MM
     select FRAMEBUFFER
     select VIRTIO_MMIO

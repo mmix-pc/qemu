@@ -59,6 +59,11 @@ if config_all_devices.has_key('CONFIG_MMIX_VIRT')
       meson.project_source_root() / 'hw/mmix/physical-layout.c',
       meson.project_source_root() / 'hw/mmix/ram-reservation.c'
     ],
+    'test-mmix-fdt-builder': [
+      fdt,
+      meson.project_source_root() / 'hw/mmix/fdt-builder.c',
+      meson.project_source_root() / 'hw/mmix/physical-layout.c'
+    ],
     'test-mmix-mmo-plan': [
       meson.project_source_root() / 'hw/mmix/mmo-hosted-plan.c',
       meson.project_source_root() / 'hw/mmix/mmo-loader.c',
