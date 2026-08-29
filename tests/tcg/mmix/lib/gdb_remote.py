@@ -82,6 +82,18 @@ class GDBRemote:
         if response != b"OK":
             raise RuntimeError(response.decode("ascii"))
 
+    def read_register(self, register):
+        response = self.send_packet(f"p{register:x}")
+        if response.startswith(b"E"):
+            raise RuntimeError(response.decode("ascii"))
+        return int.from_bytes(bytes.fromhex(response.decode("ascii")), "big")
+
+    def write_register(self, register, value):
+        data = value.to_bytes(8, "big")
+        response = self.send_packet(f"P{register:x}={data.hex()}")
+        if response != b"OK":
+            raise RuntimeError(response.decode("ascii"))
+
     def memory_error(self, address, length, *, data=None):
         if data is None:
             response = self.send_packet(f"m{address:x},{length:x}")

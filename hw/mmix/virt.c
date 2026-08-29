@@ -21,6 +21,7 @@
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
 #include "system/reset.h"
+#include "system/runstate.h"
 #include "system/system.h"
 #include "target/mmix/cpu.h"
 #include "target/mmix/cpu-qom.h"
@@ -288,7 +289,8 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
         MMIX_RAM_REQUEST_FRAMEBUFFER,
         MMIX_RAM_REQUEST_STACK_BASE,
     };
-    size_t argument_index = MMIX_RAM_REQUEST_STACK_BASE + machine->smp.cpus;
+    size_t stack_count = vms->mmo_memory ? 0 : machine->smp.cpus;
+    size_t argument_index = MMIX_RAM_REQUEST_STACK_BASE + stack_count;
     bool has_arguments = arguments != NULL;
     size_t initrd_index = argument_index + has_arguments;
     bool has_initrd = linux_info && linux_info->has_initrd;
@@ -297,7 +299,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     size_t request_count = image_index + image_range_count;
     g_autofree MMIXRAMReservationRequest *requests =
         g_new0(MMIXRAMReservationRequest, request_count);
-    g_auto(GStrv) stack_names = g_new0(char *, machine->smp.cpus + 1);
+    g_auto(GStrv) stack_names = g_new0(char *, stack_count + 1);
     g_auto(GStrv) image_names = g_new0(char *, image_range_count + 1);
     const MMIXRAMReservationRequest framebuffer_request = {
         .owner = "mmix-framebuffer",
@@ -317,7 +319,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     unsigned int i;
 
     requests[MMIX_RAM_REQUEST_FRAMEBUFFER] = framebuffer_request;
-    for (i = 0; i < machine->smp.cpus; i++) {
+    for (i = 0; i < stack_count; i++) {
         stack_names[i] = g_strdup_printf("initial-stack-%u", i);
         requests[MMIX_RAM_REQUEST_STACK_BASE + i] =
             (MMIXRAMReservationRequest) {
@@ -422,10 +424,14 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     vms->framebuffer_size =
         mmix_phys_range_size(&framebuffer->content);
     for (i = 0; i < machine->smp.cpus; i++) {
-        const MMIXRAMReservation *stack = mmix_boot_plan_reservation(
-            vms->boot_plan, MMIX_RAM_REQUEST_STACK_BASE + i);
+        if (vms->mmo_memory) {
+            vms->initial_stacks[i] = 0;
+        } else {
+            const MMIXRAMReservation *stack = mmix_boot_plan_reservation(
+                vms->boot_plan, MMIX_RAM_REQUEST_STACK_BASE + i);
 
-        vms->initial_stacks[i] = stack->content.start;
+            vms->initial_stacks[i] = stack->content.start;
+        }
     }
     return true;
 }
@@ -490,12 +496,40 @@ static void mmix_virt_apply_mmo_startup(MMIXVirtMachineState *vms,
     mmix_cpu_update_interrupt(env);
 }
 
+static bool mmix_virt_reconstruct_mmo_memory(MMIXVirtMachineState *vms,
+                                             Error **errp)
+{
+    MMIXSparseMemory *memory = NULL;
+
+    if (!vms->mmo_memory) {
+        return true;
+    }
+    if (!mmix_mmo_hosted_plan_commit(vms->mmo_plan,
+                                     vms->mmo_hosted_plan,
+                                     &memory, errp)) {
+        return false;
+    }
+
+    mmix_sparse_memory_free(vms->mmo_memory);
+    vms->mmo_memory = memory;
+    return true;
+}
+
 static void mmix_virt_reset(MachineState *machine, ResetType type)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     const MMIXKernelLoadInfo *info =
         mmix_boot_plan_image_info(vms->boot_plan);
+    Error *local_err = NULL;
     unsigned int i;
+
+    if (type != RESET_TYPE_SNAPSHOT_LOAD &&
+        !mmix_virt_reconstruct_mmo_memory(vms, &local_err)) {
+        error_reportf_err(local_err,
+                          "could not reconstruct MMIX MMO memory: ");
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_ERROR);
+        return;
+    }
 
     qemu_devices_reset(type);
     if (type == RESET_TYPE_SNAPSHOT_LOAD) {
@@ -513,11 +547,13 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     }
 
     for (i = 0; i < machine->smp.cpus; i++) {
-        MemTxResult result = address_space_set(
-            &address_space_memory, vms->initial_stacks[i], 0,
-            MMIX_VIRT_INITIAL_STACK_SIZE, MEMTXATTRS_UNSPECIFIED);
+        if (!vms->mmo_memory) {
+            MemTxResult result = address_space_set(
+                &address_space_memory, vms->initial_stacks[i], 0,
+                MMIX_VIRT_INITIAL_STACK_SIZE, MEMTXATTRS_UNSPECIFIED);
 
-        g_assert(result == MEMTX_OK);
+            g_assert(result == MEMTX_OK);
+        }
         cpu_reset(vms->cpus[i]);
         mmix_virt_apply_global_registers(vms->cpus[i], info);
         if (vms->mmo_memory) {

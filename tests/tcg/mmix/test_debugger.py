@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import contextlib
+import json
+import socket
 import subprocess
+import time
 
 import pytest
 
@@ -19,6 +22,13 @@ from cases.raw_loader import RAW_DIRECT_ISA_TESTS, RAW_ENTRY
 from lib.gdb_remote import GDBRemote
 from lib.mmix_asm import halt
 from lib.qemu import build_kernel_command, read_log
+
+
+MMIX_GDB_SPECIAL_REGISTER_BASE = 32
+MMIX_GDB_RO = MMIX_GDB_SPECIAL_REGISTER_BASE + 10
+MMIX_GDB_RS = MMIX_GDB_SPECIAL_REGISTER_BASE + 11
+MMIX_GDB_RL = MMIX_GDB_SPECIAL_REGISTER_BASE + 20
+MMIX_GDB_PC = MMIX_GDB_SPECIAL_REGISTER_BASE + 32
 
 
 @contextlib.contextmanager
@@ -46,8 +56,10 @@ def _gdb_session(qemu, workdir, name, image, *, suffix=".mmo", qemu_args=()):
             log=log_path,
             qemu_args=debug_args,
         ),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        bufsize=0,
     )
     remote = None
     try:
@@ -61,6 +73,61 @@ def _gdb_session(qemu, workdir, name, image, *, suffix=".mmo", qemu_args=()):
             process.wait(timeout=5)
         if socket_path.exists():
             socket_path.unlink()
+
+
+def _read_qmp_message(process, timeout=5):
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        line = process.stdout.readline()
+        if line:
+            return json.loads(line)
+        if process.poll() is not None:
+            raise AssertionError("QEMU exited while waiting for QMP")
+    raise TimeoutError("timed out waiting for QMP")
+
+
+def _qmp_command(process, command, arguments=None):
+    request = {"execute": command}
+
+    if arguments is not None:
+        request["arguments"] = arguments
+    process.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
+    process.stdin.flush()
+    while True:
+        response = _read_qmp_message(process)
+        if "event" in response:
+            continue
+        if "error" in response:
+            raise AssertionError(response["error"])
+        return response["return"]
+
+
+def _connect_unix(path, timeout=5):
+    deadline = time.monotonic() + timeout
+
+    while True:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            connection.connect(str(path))
+            connection.settimeout(timeout)
+            return connection
+        except (FileNotFoundError, ConnectionRefusedError):
+            connection.close()
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _qtest_command(stream, command):
+    stream.write(command.encode("ascii") + b"\n")
+    response = stream.readline()
+
+    if not response.startswith(b"OK"):
+        raise AssertionError(
+            f"QTest command {command!r} failed: {response!r}"
+        )
+    return response.split()
 
 
 def test_mmo_hosted_debug_memory(qemu, workdir):
@@ -131,6 +198,94 @@ def test_mmo_hosted_debug_text_invalidation(qemu, workdir):
 
         result = read_log(log_path)
         assert result.pc == 0
+
+
+def test_mmo_hosted_cold_reset(qemu, workdir):
+    name = "mmo-hosted-cold-reset"
+    qtest_path = workdir / f"{name}.qtest"
+    data_address = MMIX_DATA_SEGMENT_BASE + 0x100
+    runtime_address = MMIX_STACK_SEGMENT_BASE + 0x4000
+    physical_address = 0x10000000
+    mutation = bytes.fromhex("a1b2c3d4e5f60718")
+    physical_marker = 0x0123456789abcdef
+
+    if qtest_path.exists():
+        qtest_path.unlink()
+    qemu_args = (
+        "-qmp",
+        "stdio",
+        "-qtest",
+        f"unix:path={qtest_path},server=on,wait=off",
+        "-qtest-log",
+        "/dev/null",
+    )
+    qtest_connection = None
+    try:
+        with _gdb_session(
+            qemu,
+            workdir,
+            name,
+            mmo_hosted_debug_image(),
+            qemu_args=qemu_args,
+        ) as (remote, process, _log):
+            greeting = _read_qmp_message(process)
+            assert "QMP" in greeting
+            _qmp_command(process, "qmp_capabilities")
+
+            qtest_connection = _connect_unix(qtest_path)
+            qtest = qtest_connection.makefile("rwb", buffering=0)
+            _qtest_command(
+                qtest, f"writeq {physical_address:#x} {physical_marker:#x}"
+            )
+            assert int(
+                _qtest_command(qtest, f"readq {physical_address:#x}")[1],
+                0,
+            ) == physical_marker
+
+            initial_data = remote.read_memory(data_address, 8)
+            initial_arguments = remote.read_memory(
+                MMIX_POOL_SEGMENT_BASE, 32
+            )
+            initial_r0 = remote.read_register(0)
+            initial_r1 = remote.read_register(1)
+            initial_rl = remote.read_register(MMIX_GDB_RL)
+
+            for iteration in range(2):
+                remote.write_memory(data_address, mutation)
+                remote.write_memory(MMIX_POOL_SEGMENT_BASE, bytes(32))
+                remote.write_memory(runtime_address, mutation)
+                remote.write_register(0, 0x80 + iteration)
+                remote.write_register(MMIX_GDB_RO, runtime_address)
+                remote.write_register(MMIX_GDB_RS, runtime_address + 8)
+                remote.write_register(MMIX_GDB_RL, 7)
+                remote.write_register(MMIX_GDB_PC, data_address)
+
+                _qmp_command(process, "system_reset")
+
+                assert remote.read_memory(data_address, 8) == initial_data
+                assert remote.read_memory(
+                    MMIX_POOL_SEGMENT_BASE, 32
+                ) == initial_arguments
+                assert remote.read_memory(runtime_address, 8) == bytes(8)
+                assert remote.read_register(0) == initial_r0
+                assert remote.read_register(1) == initial_r1
+                assert remote.read_register(MMIX_GDB_RO) == (
+                    MMIX_STACK_SEGMENT_BASE
+                )
+                assert remote.read_register(MMIX_GDB_RS) == (
+                    MMIX_STACK_SEGMENT_BASE
+                )
+                assert remote.read_register(MMIX_GDB_RL) == initial_rl
+                assert remote.read_register(MMIX_GDB_PC) == 0
+                assert int(
+                    _qtest_command(qtest, f"readq {physical_address:#x}")[1],
+                    0,
+                ) == physical_marker
+    finally:
+        if qtest_connection is not None:
+            qtest_connection.close()
+        if qtest_path.exists():
+            qtest_path.unlink()
 
 
 @pytest.mark.parametrize(
