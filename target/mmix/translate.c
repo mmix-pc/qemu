@@ -1144,15 +1144,14 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 next_rp = tcg_temp_new_i64();
     TCGv_i64 success = tcg_temp_new_i64();
 
-    if (ctx->hosted_memory) {
-        gen_helper_mmix_hosted_unsupported(tcg_env,
-                                           tcg_constant_i32(ctx->insn));
-        return true;
-    }
-
     gen_effective_address(addr, a, immediate, 7);
     gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
-    tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_cmpxchg(old, tcg_env, addr, rp, new);
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    } else {
+        tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
+    }
 
     tcg_gen_movcond_i64(TCG_COND_EQ, next_rp, old, rp, rp, old);
     gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(ctx->insn),

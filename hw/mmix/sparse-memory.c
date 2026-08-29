@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qemu/bswap.h"
 #include "qemu/host-utils.h"
 #include "sparse-memory.h"
 
@@ -318,6 +319,31 @@ bool mmix_sparse_memory_write(MMIXSparseMemory *memory, uint64_t address,
         remaining -= chunk;
     }
     return true;
+}
+
+bool mmix_sparse_memory_compare_exchange_octa(MMIXSparseMemory *memory,
+                                              uint64_t address,
+                                              uint64_t expected,
+                                              uint64_t desired,
+                                              uint64_t *observed,
+                                              Error **errp)
+{
+    uint8_t data[sizeof(uint64_t)];
+
+    g_assert(observed);
+
+    if (!mmix_sparse_memory_read(memory, address, data, sizeof(data),
+                                 sizeof(data), errp)) {
+        return false;
+    }
+    *observed = ldq_be_p(data);
+    if (*observed != expected) {
+        return true;
+    }
+
+    stq_be_p(data, desired);
+    return mmix_sparse_memory_write(memory, address, data, sizeof(data),
+                                    sizeof(data), errp);
 }
 
 uint64_t mmix_sparse_memory_budget(const MMIXSparseMemory *memory)

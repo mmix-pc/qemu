@@ -294,6 +294,9 @@ void mmix_cpu_set_hosted_memory(CPUState *cs,
                                 void *opaque);
 bool mmix_cpu_hosted_memory_enabled(CPUMMIXState *env);
 uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address);
+uint64_t mmix_cpu_hosted_load_octa(CPUMMIXState *env, uint64_t address);
+void mmix_cpu_hosted_store_octa(CPUMMIXState *env, uint64_t address,
+                                uint64_t value);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
 bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,

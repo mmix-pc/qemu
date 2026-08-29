@@ -70,8 +70,8 @@ uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address)
     return ldl_be_p(data);
 }
 
-uint64_t helper_mmix_hosted_load(CPUMMIXState *env, uint64_t address,
-                                 uint32_t memop)
+static uint64_t mmix_cpu_hosted_load(CPUMMIXState *env, uint64_t address,
+                                     MemOp memop)
 {
     uint8_t data[sizeof(uint64_t)] = { 0 };
     size_t size = memop_size(memop);
@@ -89,7 +89,7 @@ uint64_t helper_mmix_hosted_load(CPUMMIXState *env, uint64_t address,
         value = lduw_be_p(data);
         break;
     case 4:
-        value = ldl_be_p(data);
+        value = (uint32_t)ldl_be_p(data);
         break;
     case 8:
         value = ldq_be_p(data);
@@ -103,8 +103,8 @@ uint64_t helper_mmix_hosted_load(CPUMMIXState *env, uint64_t address,
     return value;
 }
 
-void helper_mmix_hosted_store(CPUMMIXState *env, uint64_t address,
-                              uint64_t value, uint32_t memop)
+static void mmix_cpu_hosted_store(CPUMMIXState *env, uint64_t address,
+                                  uint64_t value, MemOp memop)
 {
     MMIXCPU *cpu = MMIX_CPU(env_cpu(env));
     uint8_t data[sizeof(uint64_t)];
@@ -136,11 +136,43 @@ void helper_mmix_hosted_store(CPUMMIXState *env, uint64_t address,
     }
 }
 
-G_NORETURN void helper_mmix_hosted_unsupported(CPUMMIXState *env,
-                                               uint32_t insn)
+uint64_t helper_mmix_hosted_load(CPUMMIXState *env, uint64_t address,
+                                 uint32_t memop)
 {
-    error_report("MMIX hosted execution does not yet support instruction "
-                 "0x%08x at 0x%016" PRIx64, insn, env->pc);
-    mmix_cpu_shutdown_with_log(env, "unsupported MMIX hosted memory access",
-                               EXIT_FAILURE);
+    return mmix_cpu_hosted_load(env, address, memop);
+}
+
+void helper_mmix_hosted_store(CPUMMIXState *env, uint64_t address,
+                              uint64_t value, uint32_t memop)
+{
+    mmix_cpu_hosted_store(env, address, value, memop);
+}
+
+uint64_t mmix_cpu_hosted_load_octa(CPUMMIXState *env, uint64_t address)
+{
+    return mmix_cpu_hosted_load(env, address, MO_BEUQ);
+}
+
+void mmix_cpu_hosted_store_octa(CPUMMIXState *env, uint64_t address,
+                                uint64_t value)
+{
+    mmix_cpu_hosted_store(env, address, value, MO_BEUQ);
+}
+
+uint64_t helper_mmix_hosted_cmpxchg(CPUMMIXState *env, uint64_t address,
+                                    uint64_t expected, uint64_t desired)
+{
+    MMIXCPU *cpu = MMIX_CPU(env_cpu(env));
+    uint64_t observed;
+    Error *err = NULL;
+
+    if (!cpu->hosted_memory_ops->compare_exchange_octa(
+            cpu->hosted_memory_opaque, address, expected, desired, &observed,
+            &err)) {
+        mmix_hosted_memory_failure(env, err);
+    }
+    if (address < MMIX_HOSTED_DATA_BASE && observed == expected) {
+        queue_tb_flush(env_cpu(env));
+    }
+    return observed;
 }

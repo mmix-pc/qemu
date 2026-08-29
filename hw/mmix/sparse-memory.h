@@ -47,6 +47,12 @@ bool mmix_sparse_memory_read(MMIXSparseMemory *memory, uint64_t address,
 bool mmix_sparse_memory_write(MMIXSparseMemory *memory, uint64_t address,
                               const void *buffer, size_t size,
                               size_t alignment, Error **errp);
+bool mmix_sparse_memory_compare_exchange_octa(MMIXSparseMemory *memory,
+                                              uint64_t address,
+                                              uint64_t expected,
+                                              uint64_t desired,
+                                              uint64_t *observed,
+                                              Error **errp);
 
 uint64_t mmix_sparse_memory_budget(const MMIXSparseMemory *memory);
 uint64_t mmix_sparse_memory_materialized_bytes(

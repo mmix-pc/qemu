@@ -214,6 +214,39 @@ static void test_exhaustion_is_atomic(void)
     mmix_sparse_memory_free(memory);
 }
 
+static void test_compare_exchange_octa(void)
+{
+    MMIXSparseMemory *memory =
+        mmix_sparse_memory_new(MMIX_SPARSE_PAGE_SIZE, &error_abort);
+    const uint64_t address = MMIX_SPARSE_DATA_BASE + 0x100;
+    uint64_t observed;
+    Error *err = NULL;
+
+    g_assert_true(mmix_sparse_memory_compare_exchange_octa(
+        memory, address, 1, 2, &observed, &error_abort));
+    g_assert_cmphex(observed, ==, 0);
+    g_assert_cmpuint(mmix_sparse_memory_materialized_pages(memory), ==, 0);
+
+    g_assert_true(mmix_sparse_memory_compare_exchange_octa(
+        memory, address, 0, UINT64_C(0x1122334455667788), &observed,
+        &error_abort));
+    g_assert_cmphex(observed, ==, 0);
+    g_assert_cmpuint(mmix_sparse_memory_materialized_pages(memory), ==, 1);
+
+    g_assert_true(mmix_sparse_memory_compare_exchange_octa(
+        memory, address, 0, 3, &observed, &error_abort));
+    g_assert_cmphex(observed, ==, UINT64_C(0x1122334455667788));
+
+    g_assert_false(mmix_sparse_memory_compare_exchange_octa(
+        memory, MMIX_SPARSE_STACK_BASE, 0, 4, &observed, &err));
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err), "only 0 available"));
+    error_free(err);
+    g_assert_cmpuint(mmix_sparse_memory_materialized_pages(memory), ==, 1);
+
+    mmix_sparse_memory_free(memory);
+}
+
 static void test_clear(void)
 {
     MMIXSparseMemory *memory =
@@ -252,6 +285,8 @@ int main(int argc, char **argv)
                     test_cross_page_and_overlap);
     g_test_add_func("/mmix/sparse-memory/exhaustion-is-atomic",
                     test_exhaustion_is_atomic);
+    g_test_add_func("/mmix/sparse-memory/compare-exchange-octa",
+                    test_compare_exchange_octa);
     g_test_add_func("/mmix/sparse-memory/clear", test_clear);
 
     return g_test_run();

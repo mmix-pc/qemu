@@ -96,9 +96,20 @@ static bool mmix_virt_hosted_write(void *opaque, uint64_t address,
                                     alignment, errp);
 }
 
+static bool mmix_virt_hosted_compare_exchange_octa(
+    void *opaque, uint64_t address, uint64_t expected, uint64_t desired,
+    uint64_t *observed, Error **errp)
+{
+    MMIXVirtMachineState *vms = opaque;
+
+    return mmix_sparse_memory_compare_exchange_octa(
+        vms->mmo_memory, address, expected, desired, observed, errp);
+}
+
 static const MMIXHostedMemoryOps mmix_virt_hosted_memory_ops = {
     .read = mmix_virt_hosted_read,
     .write = mmix_virt_hosted_write,
+    .compare_exchange_octa = mmix_virt_hosted_compare_exchange_octa,
 };
 
 static void mmix_virt_cpu_irq(void *opaque, int irq, int level)

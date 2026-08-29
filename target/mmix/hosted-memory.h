@@ -24,6 +24,9 @@ typedef struct MMIXHostedMemoryOps {
                  size_t alignment, Error **errp);
     bool (*write)(void *opaque, uint64_t address, const void *buffer,
                   size_t size, size_t alignment, Error **errp);
+    bool (*compare_exchange_octa)(void *opaque, uint64_t address,
+                                  uint64_t expected, uint64_t desired,
+                                  uint64_t *observed, Error **errp);
 } MMIXHostedMemoryOps;
 
 #endif
