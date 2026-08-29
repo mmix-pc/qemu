@@ -10,6 +10,7 @@
 #include "qemu/units.h"
 
 #define TEST_RAM_SIZE MMIX_VIRT_RAM_MIN_SIZE
+#define TEST_LARGE_RAM_SIZE (8 * GiB)
 
 static MMIXRAMReservationRequest fixed_request(
     const char *owner, const char *name, MMIXRAMOwnershipClass ownership_class,
@@ -73,6 +74,21 @@ static MMIXRAMReservationRequest stack_request(unsigned int cpu,
     };
 }
 
+static MMIXRAMReservationRequest initrd_request(uint64_t size)
+{
+    return (MMIXRAMReservationRequest) {
+        .owner = "mmix-kernel",
+        .name = "initrd",
+        .stable_id = 0,
+        .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+        .ownership_class = MMIX_RAM_OWNERSHIP_IMAGE,
+        .lifetime = MMIX_RAM_LIFETIME_UNTIL_CONSUMED,
+        .placement_class = MMIX_RAM_PLACEMENT_INITRD,
+        .size = size,
+        .alignment = 8 * KiB,
+    };
+}
+
 static void assert_range(const MMIXPhysRange *range, uint64_t start,
                          uint64_t end)
 {
@@ -111,7 +127,7 @@ static void test_image_metadata_and_reservations(void)
     MMIXBootPlan *plan = NULL;
 
     g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, "kernel.elf",
-                                       &image_info, requests,
+                                       &image_info, NULL, requests,
                                        ARRAY_SIZE(requests), &plan,
                                        &error_abort));
     g_clear_pointer(&owner, g_free);
@@ -156,10 +172,11 @@ static void test_no_image_plan(void)
     MMIXRAMReservationRequest request = framebuffer_request();
     MMIXBootPlan *plan = NULL;
 
-    g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, NULL, NULL, &request, 1,
-                                       &plan, &error_abort));
+    g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, NULL, NULL, NULL,
+                                       &request, 1, &plan, &error_abort));
     g_assert_null(mmix_boot_plan_image_filename(plan));
     g_assert_null(mmix_boot_plan_image_info(plan));
+    g_assert_null(mmix_boot_plan_linux_info(plan));
     g_assert_cmpuint(mmix_boot_plan_request_count(plan), ==, 1);
     mmix_boot_plan_free(plan);
 }
@@ -176,7 +193,8 @@ static void assert_failed_rebuild_preserves_plan(
                                             .image_type =
                                                 MMIX_KERNEL_IMAGE_ELF,
                                         },
-                                        requests, request_count, plan, &err));
+                                        NULL, requests, request_count, plan,
+                                        &err));
     g_assert_nonnull(err);
     g_assert_nonnull(strstr(error_get_pretty(err), diagnostic));
     g_assert_true(*plan == original);
@@ -217,7 +235,7 @@ static void test_failure_is_atomic(void)
     MMIXPhysRange initial_stack;
 
     g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, "good.elf",
-                                       &initial_info, initial,
+                                       &initial_info, NULL, initial,
                                        ARRAY_SIZE(initial), &plan,
                                        &error_abort));
     initial_stack = mmix_boot_plan_reservation(plan, 1)->content;
@@ -245,17 +263,63 @@ static void test_invalid_image_pair(void)
     Error *err = NULL;
 
     g_assert_false(mmix_boot_plan_build(TEST_RAM_SIZE, "kernel.elf", NULL,
-                                        NULL, 0, &plan, &err));
+                                        NULL, NULL, 0, &plan, &err));
     g_assert_nonnull(strstr(error_get_pretty(err),
                             "requires both image source"));
     error_free(err);
     err = NULL;
-    g_assert_false(mmix_boot_plan_build(TEST_RAM_SIZE, NULL, &info, NULL, 0,
-                                        &plan, &err));
+    g_assert_false(mmix_boot_plan_build(TEST_RAM_SIZE, NULL, &info, NULL,
+                                        NULL, 0, &plan, &err));
     g_assert_nonnull(strstr(error_get_pretty(err),
                             "requires both image source"));
     error_free(err);
     g_assert_null(plan);
+}
+
+static void test_linux_boot_information(void)
+{
+    g_autofree char *command_line = g_strdup("console=ttyS0");
+    g_autofree char *initrd_filename = g_strdup("initrd.img");
+    MMIXRAMReservationRequest requests[] = {
+        framebuffer_request(),
+        stack_request(0, "initial-stack-0"),
+        initrd_request(16 * MiB),
+        fixed_request("mmix-kernel", "load-segment-0",
+                      MMIX_RAM_OWNERSHIP_IMAGE, 4 * GiB, 8 * KiB),
+    };
+    MMIXKernelLoadInfo image_info = {
+        .entry = 4 * GiB,
+        .image_type = MMIX_KERNEL_IMAGE_ELF,
+    };
+    MMIXLinuxBootInfo linux_info = {
+        .command_line = command_line,
+        .initrd_filename = initrd_filename,
+        .initrd_size = 16 * MiB,
+        .initrd_request_index = 2,
+        .cpu_count = 1,
+        .has_initrd = true,
+    };
+    const MMIXLinuxBootInfo *stored;
+    const MMIXRAMReservation *initrd;
+    MMIXBootPlan *plan = NULL;
+
+    g_assert_true(mmix_boot_plan_build(TEST_LARGE_RAM_SIZE, "kernel.elf",
+                                       &image_info, &linux_info, requests,
+                                       ARRAY_SIZE(requests), &plan,
+                                       &error_abort));
+    g_clear_pointer(&command_line, g_free);
+    g_clear_pointer(&initrd_filename, g_free);
+
+    stored = mmix_boot_plan_linux_info(plan);
+    g_assert_nonnull(stored);
+    g_assert_cmpstr(stored->command_line, ==, "console=ttyS0");
+    g_assert_cmpstr(stored->initrd_filename, ==, "initrd.img");
+    g_assert_cmpuint(stored->cpu_count, ==, 1);
+    g_assert_cmpuint(stored->initrd_size, ==, 16 * MiB);
+    initrd = mmix_boot_plan_reservation(plan, 2);
+    g_assert_cmphex(stored->initrd_base, ==, initrd->content.start);
+    g_assert_cmphex(stored->initrd_base, >, 4 * GiB);
+    mmix_boot_plan_free(plan);
 }
 
 int main(int argc, char **argv)
@@ -268,5 +332,7 @@ int main(int argc, char **argv)
                     test_failure_is_atomic);
     g_test_add_func("/mmix/boot-plan/invalid-image-pair",
                     test_invalid_image_pair);
+    g_test_add_func("/mmix/boot-plan/linux-information",
+                    test_linux_boot_information);
     return g_test_run();
 }

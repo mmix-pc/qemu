@@ -15,6 +15,7 @@
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
 #include "hw/core/irq.h"
+#include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/virtio/virtio-mmio.h"
@@ -40,7 +41,12 @@
 typedef enum MMIXELFStartupABI {
     MMIX_ELF_STARTUP_ABI_BARE,
     MMIX_ELF_STARTUP_ABI_ARGC_ARGV,
+    MMIX_ELF_STARTUP_ABI_LINUX,
 } MMIXELFStartupABI;
+
+enum {
+    MMIX_LINUX_COMMAND_LINE_MAX = 4095,
+};
 
 OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
 
@@ -220,7 +226,9 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                                const MMIXKernelLoadInfo *image_info,
                                const GArray *image_ranges,
                                char *const *arguments, uint64_t argument_count,
-                               uint64_t argument_size, Error **errp)
+                               uint64_t argument_size,
+                               const MMIXLinuxBootInfo *linux_info,
+                               Error **errp)
 {
     MachineState *machine = MACHINE(vms);
     enum {
@@ -229,7 +237,9 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     };
     size_t argument_index = MMIX_RAM_REQUEST_STACK_BASE + machine->smp.cpus;
     bool has_arguments = arguments != NULL;
-    size_t image_index = argument_index + has_arguments;
+    size_t initrd_index = argument_index + has_arguments;
+    bool has_initrd = linux_info && linux_info->has_initrd;
+    size_t image_index = initrd_index + has_initrd;
     size_t image_range_count = image_ranges ? image_ranges->len : 0;
     size_t request_count = image_index + image_range_count;
     g_autofree MMIXRAMReservationRequest *requests =
@@ -250,6 +260,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     const MMIXRAMReservation *framebuffer;
     g_autoptr(GBytes) argument_data = NULL;
     MMIXBootPlan *boot_plan = NULL;
+    MMIXLinuxBootInfo planned_linux;
     unsigned int i;
 
     requests[MMIX_RAM_REQUEST_FRAMEBUFFER] = framebuffer_request;
@@ -302,10 +313,30 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
             .alignment = MMIX_VIRT_RAM_ALIGN,
         };
     }
+    if (has_initrd) {
+        requests[initrd_index] = (MMIXRAMReservationRequest) {
+            .owner = "mmix-kernel",
+            .name = "initrd",
+            .stable_id = 0,
+            .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+            .ownership_class = MMIX_RAM_OWNERSHIP_IMAGE,
+            .lifetime = MMIX_RAM_LIFETIME_UNTIL_CONSUMED,
+            .placement_class = MMIX_RAM_PLACEMENT_INITRD,
+            .size = linux_info->initrd_size,
+            .alignment = MMIX_VIRT_RAM_ALIGN,
+        };
+    }
+
+    if (linux_info) {
+        planned_linux = *linux_info;
+        planned_linux.initrd_request_index = initrd_index;
+    }
 
     if (!mmix_boot_plan_build(machine->ram_size,
                               image_info ? machine->kernel_filename : NULL,
-                              image_info, requests, request_count,
+                              image_info,
+                              linux_info ? &planned_linux : NULL,
+                              requests, request_count,
                               &boot_plan, errp)) {
         return false;
     }
@@ -427,7 +458,9 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                                      MMIXKernelLoadInfo *info,
                                      GArray **image_ranges, char ***arguments,
                                      uint64_t *argument_count,
-                                     uint64_t *argument_size, Error **errp)
+                                     uint64_t *argument_size,
+                                     MMIXLinuxBootInfo *linux_info,
+                                     Error **errp)
 {
     MachineState *machine = MACHINE(vms);
     MMIXKernelImageType type;
@@ -458,7 +491,8 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                            "accept -append");
                 return false;
             }
-        } else {
+        } else if (vms->elf_startup_abi ==
+                   MMIX_ELF_STARTUP_ABI_ARGC_ARGV) {
             if (!semihosting_enabled(false)) {
                 error_setg(errp, "MMIX ELF startup ABI 'argc-argv' requires "
                            "semihosting");
@@ -480,8 +514,55 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                                           argument_size, errp)) {
                 return false;
             }
+        } else {
+            const char *command_line = machine->kernel_cmdline ?: "";
+            int64_t initrd_size = 0;
+
+            if (machine->smp.max_cpus != machine->smp.cpus) {
+                error_setg(errp, "MMIX Linux direct boot requires maxcpus "
+                           "to equal the active CPU count");
+                return false;
+            }
+            if (machine->smp.drawers != 1 || machine->smp.books != 1 ||
+                machine->smp.sockets != 1 || machine->smp.dies != 1 ||
+                machine->smp.clusters != 1 || machine->smp.modules != 1 ||
+                machine->smp.cores != machine->smp.cpus ||
+                machine->smp.threads != 1) {
+                error_setg(errp, "MMIX Linux direct boot requires one "
+                           "socket with one single-threaded core per CPU");
+                return false;
+            }
+            if (mmix_virt_has_semihosting_args()) {
+                error_setg(errp, "MMIX Linux direct boot does not accept "
+                           "semihosting arguments");
+                return false;
+            }
+            if (strlen(command_line) > MMIX_LINUX_COMMAND_LINE_MAX) {
+                error_setg(errp, "MMIX Linux command line exceeds %u bytes",
+                           MMIX_LINUX_COMMAND_LINE_MAX);
+                return false;
+            }
+            if (machine->initrd_filename) {
+                initrd_size = get_image_size(machine->initrd_filename, errp);
+                if (initrd_size < 0) {
+                    return false;
+                }
+                if (initrd_size == 0) {
+                    error_setg(errp, "MMIX Linux initrd '%s' is empty",
+                               machine->initrd_filename);
+                    return false;
+                }
+            }
+            *linux_info = (MMIXLinuxBootInfo) {
+                .command_line = command_line,
+                .initrd_filename = machine->initrd_filename,
+                .initrd_size = initrd_size,
+                .cpu_count = machine->smp.cpus,
+                .has_initrd = machine->initrd_filename != NULL,
+            };
         }
-        if (machine->initrd_filename) {
+        if (vms->elf_startup_abi != MMIX_ELF_STARTUP_ABI_LINUX &&
+            machine->initrd_filename) {
             error_setg(errp, "MMIX ELF startup ABI '%s' does not accept "
                        "-initrd", vms->elf_startup_abi ==
                        MMIX_ELF_STARTUP_ABI_BARE ? "bare" : "argc-argv");
@@ -498,9 +579,11 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                        "CPU");
             return false;
         }
-        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_ARGC_ARGV) {
+        if (vms->elf_startup_abi != MMIX_ELF_STARTUP_ABI_BARE) {
             error_setg(errp, "MMIX raw -kernel loading does not support ELF "
-                       "startup ABI 'argc-argv'");
+                       "startup ABI '%s'", vms->elf_startup_abi ==
+                       MMIX_ELF_STARTUP_ABI_ARGC_ARGV ? "argc-argv" :
+                       "linux");
             return false;
         }
         if (mmix_virt_has_semihosting_args()) {
@@ -549,6 +632,8 @@ static void mmix_virt_init(MachineState *machine)
     g_auto(GStrv) arguments = NULL;
     uint64_t argument_count = 0;
     uint64_t argument_size = 0;
+    MMIXLinuxBootInfo linux_info = { 0 };
+    const MMIXLinuxBootInfo *linux_info_ptr = NULL;
     unsigned int i;
 
     if (!mmix_virt_validate_memory(machine, &error_fatal) ||
@@ -558,13 +643,23 @@ static void mmix_virt_init(MachineState *machine)
     if (machine->kernel_filename) {
         if (!mmix_virt_prepare_kernel(vms, &image_info, &image_ranges,
                                       &arguments, &argument_count,
-                                      &argument_size, &error_fatal)) {
+                                      &argument_size, &linux_info,
+                                      &error_fatal)) {
             return;
         }
         image_info_ptr = &image_info;
+        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_LINUX) {
+            linux_info_ptr = &linux_info;
+        }
     }
     if (!mmix_virt_plan_ram(vms, image_info_ptr, image_ranges, arguments,
-                            argument_count, argument_size, &error_fatal)) {
+                            argument_count, argument_size, linux_info_ptr,
+                            &error_fatal)) {
+        return;
+    }
+    if (linux_info_ptr) {
+        error_setg(&error_fatal, "MMIX Linux direct boot preflight completed; "
+                   "execution requires FDT support");
         return;
     }
 
@@ -674,6 +769,8 @@ static char *mmix_virt_get_elf_startup_abi(Object *obj, Error **errp)
         return g_strdup("bare");
     case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
         return g_strdup("argc-argv");
+    case MMIX_ELF_STARTUP_ABI_LINUX:
+        return g_strdup("linux");
     default:
         g_assert_not_reached();
     }
@@ -688,9 +785,12 @@ static void mmix_virt_set_elf_startup_abi(Object *obj, const char *value,
         vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BARE;
     } else if (!strcmp(value, "argc-argv")) {
         vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_ARGC_ARGV;
+    } else if (!strcmp(value, "linux")) {
+        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_LINUX;
     } else {
         error_setg(errp, "Invalid MMIX ELF startup ABI '%s'", value);
-        error_append_hint(errp, "Valid values are bare and argc-argv.\n");
+        error_append_hint(errp, "Valid values are bare, argc-argv, and "
+                          "linux.\n");
     }
 }
 
@@ -715,7 +815,7 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
                                   mmix_virt_set_elf_startup_abi);
     object_class_property_set_description(
         oc, "elf-startup-abi",
-        "Set the ELF startup ABI (bare or argc-argv)");
+        "Set the ELF startup ABI (bare, argc-argv, or linux)");
 }
 
 static void mmix_virt_instance_init(Object *obj)

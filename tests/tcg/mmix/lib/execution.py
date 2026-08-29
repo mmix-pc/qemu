@@ -134,10 +134,21 @@ def run_semihosting_expected_failure(qemu, workdir, test):
 
 def run_process_failure(qemu, workdir, test):
     image = workdir / f"{test.name}.bin"
+    empty = workdir / f"{test.name}.empty"
+    missing = workdir / f"{test.name}.missing"
+    needs_empty = "$EMPTY" in test.qemu_args
+    needs_missing = "$MISSING" in test.qemu_args
 
     image.write_bytes(test.program)
+    if needs_empty:
+        empty.write_bytes(b"")
+    if needs_missing and missing.exists():
+        missing.unlink()
     qemu_args = tuple(
-        str(image) if arg == "$IMAGE" else arg for arg in test.qemu_args
+        str(image) if arg == "$IMAGE" else
+        str(empty) if arg == "$EMPTY" else
+        str(missing) if arg == "$MISSING" else arg
+        for arg in test.qemu_args
     )
 
     result = run_kernel(

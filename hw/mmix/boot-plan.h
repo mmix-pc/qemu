@@ -13,12 +13,23 @@
 
 typedef struct MMIXBootPlan MMIXBootPlan;
 
+typedef struct MMIXLinuxBootInfo {
+    const char *command_line;
+    const char *initrd_filename;
+    uint64_t initrd_size;
+    uint64_t initrd_base;
+    size_t initrd_request_index;
+    unsigned int cpu_count;
+    bool has_initrd;
+} MMIXLinuxBootInfo;
+
 /*
  * Construct a complete side-effect-free plan. A failed build leaves the
  * caller's current plan unchanged.
  */
 bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
                           const MMIXKernelLoadInfo *image_info,
+                          const MMIXLinuxBootInfo *linux_info,
                           const MMIXRAMReservationRequest *requests,
                           size_t request_count, MMIXBootPlan **plan,
                           Error **errp);
@@ -27,6 +38,7 @@ void mmix_boot_plan_free(MMIXBootPlan *plan);
 
 const char *mmix_boot_plan_image_filename(const MMIXBootPlan *plan);
 const MMIXKernelLoadInfo *mmix_boot_plan_image_info(const MMIXBootPlan *plan);
+const MMIXLinuxBootInfo *mmix_boot_plan_linux_info(const MMIXBootPlan *plan);
 size_t mmix_boot_plan_request_count(const MMIXBootPlan *plan);
 const MMIXRAMReservationRequest *
 mmix_boot_plan_request(const MMIXBootPlan *plan, size_t index);
