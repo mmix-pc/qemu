@@ -34,6 +34,176 @@ def _hosted_stack_spill_fill_image(depth):
     return _hosted_image(program, global_base=R240, globals_={R255: 0})
 
 
+def _padded_bytes(data):
+    return data + b"\0" * (-len(data) % 4)
+
+
+def _hosted_semihosting_console_test():
+    addresses = (
+        0x200,
+        MMIX_DATA_SEGMENT_BASE + 0x200,
+        MMIX_POOL_SEGMENT_BASE + 0x200,
+        MMIX_STACK_SEGMENT_BASE + 0x200,
+    )
+    strings = (b"Text ", b"Data ", b"Pool ", b"Stack\n")
+    program = []
+
+    for address in addresses:
+        program.extend(
+            [
+                *set_octa(R255, address),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
+                     MMIX_SEMIHOSTING_STDOUT),
+            ]
+        )
+    program.extend([*set_octa(R255, 0), halt()])
+    pc = len(b"".join(program)) - 4
+    items = [*program]
+    for address, string in zip(addresses, strings):
+        items.extend([mmo_loc(address), _padded_bytes(string + b"\0")])
+
+    return MMIXSerialTest(
+        "mmo-hosted-semihosting-console-segments",
+        _hosted_image(items),
+        pc=pc,
+        output=b"".join(strings),
+    )
+
+
+def _hosted_semihosting_stdin_test():
+    read_args = MMIX_DATA_SEGMENT_BASE + 0x200
+    write_args = MMIX_POOL_SEGMENT_BASE + 0x200
+    buffer = MMIX_STACK_SEGMENT_BASE + 0x200
+    size = 5
+    program = [
+        *set_octa(R255, read_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, MMIX_SEMIHOSTING_STDIN),
+        *set_octa(R255, write_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, MMIX_SEMIHOSTING_STDOUT),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+
+    return MMIXSerialTest(
+        "mmo-hosted-semihosting-stdin",
+        _hosted_image(
+            [
+                *program,
+                mmo_loc(read_args),
+                struct.pack(">QQ", buffer, size),
+                mmo_loc(write_args),
+                struct.pack(">QQ", buffer, size),
+            ]
+        ),
+        pc=len(b"".join(program)) - 4,
+        output=b"input",
+        stdin_data=b"input",
+    )
+
+
+def _hosted_semihosting_fgets_test():
+    args = MMIX_DATA_SEGMENT_BASE + 0x240
+    buffer = MMIX_STACK_SEGMENT_BASE + 0x240
+    program = [
+        *set_octa(R255, args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FGETS, MMIX_SEMIHOSTING_STDIN),
+        *set_octa(R255, buffer),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS, MMIX_SEMIHOSTING_STDOUT),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+
+    return MMIXSerialTest(
+        "mmo-hosted-semihosting-fgets",
+        _hosted_image(
+            [
+                *program,
+                mmo_loc(args),
+                struct.pack(">QQ", buffer, 8),
+            ]
+        ),
+        pc=len(b"".join(program)) - 4,
+        output=b"line\n",
+        stdin_data=b"line\nextra",
+    )
+
+
+MMO_HOSTED_SEMIHOSTING_CONSOLE_TESTS = [
+    _hosted_semihosting_console_test(),
+]
+
+
+MMO_HOSTED_SEMIHOSTING_STDIN_TESTS = [
+    _hosted_semihosting_stdin_test(),
+    _hosted_semihosting_fgets_test(),
+]
+
+
+def mmo_hosted_semihosting_file_test(pathname):
+    open_write_args = MMIX_DATA_SEGMENT_BASE + 0x200
+    write_args = MMIX_POOL_SEGMENT_BASE + 0x200
+    open_read_args = MMIX_DATA_SEGMENT_BASE + 0x220
+    read_args = MMIX_POOL_SEGMENT_BASE + 0x220
+    pathname_address = MMIX_POOL_SEGMENT_BASE + 0x300
+    write_buffer = MMIX_STACK_SEGMENT_BASE + 0x200
+    read_buffer = 0x300
+    contents = b"hosted-file"
+    handle = MMIX_SEMIHOSTING_FIRST_FILE_HANDLE
+    program = [
+        *set_octa(R255, open_write_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN, handle),
+        insn(ADDI, R4, R255, 0),
+        *set_octa(R255, write_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE, handle),
+        insn(ADDI, R5, R255, 0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE, handle),
+        insn(ADDI, R6, R255, 0),
+        *set_octa(R255, open_read_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FOPEN, handle),
+        insn(ADDI, R7, R255, 0),
+        *set_octa(R255, read_args),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FREAD, handle),
+        insn(ADDI, R8, R255, 0),
+        *set_octa(R9, read_buffer),
+        insn(LDOU, R10, R9, R0),
+        insn(TRAP, 0, MMIX_SEMIHOSTING_FCLOSE, handle),
+        insn(ADDI, R11, R255, 0),
+        *set_octa(R255, 0),
+        halt(),
+    ]
+    items = [
+        *program,
+        mmo_loc(open_write_args),
+        struct.pack(">QQ", pathname_address, MMIX_SEMIHOSTING_TEXT_WRITE),
+        mmo_loc(open_read_args),
+        struct.pack(">QQ", pathname_address, MMIX_SEMIHOSTING_TEXT_READ),
+        mmo_loc(write_args),
+        struct.pack(">QQ", write_buffer, len(contents)),
+        mmo_loc(read_args),
+        struct.pack(">QQ", read_buffer, len(contents) + 4),
+        mmo_loc(pathname_address),
+        _padded_bytes(str(pathname).encode("utf-8") + b"\0"),
+        mmo_loc(write_buffer),
+        _padded_bytes(contents),
+    ]
+
+    return MMIXMMOTest(
+        "mmo-hosted-semihosting-file",
+        _hosted_image(items),
+        pc=len(b"".join(program)) - 4,
+        regs={
+            R4: 0,
+            R5: 0,
+            R6: 0,
+            R7: 0,
+            R8: MASK64 - 3,
+            R10: int.from_bytes(contents[:8], "big"),
+            R11: 0,
+        },
+        qemu_args=("-semihosting",),
+    )
+
+
 MMO_HOSTED_TESTS = [
     MMIXMMOTest(
         "mmo-hosted-startup",
@@ -176,6 +346,24 @@ MMO_HOSTED_TESTS = [
         ),
         pc=0x1c,
         regs={R4: 0x5a},
+    ),
+    MMIXMMOTest(
+        "mmo-hosted-semihosting-invalid-buffer",
+        _hosted_image(
+            [
+                *set_octa(R255, MMIX_DATA_SEGMENT_BASE + 0x200),
+                insn(TRAP, 0, MMIX_SEMIHOSTING_FWRITE,
+                     MMIX_SEMIHOSTING_STDOUT),
+                insn(ADDI, R4, R255, 0),
+                *set_octa(R255, 0),
+                halt(),
+                mmo_loc(MMIX_DATA_SEGMENT_BASE + 0x200),
+                struct.pack(">QQ", MMIX_HOSTED_LIMIT, 4),
+            ]
+        ),
+        pc=0x28,
+        regs={R4: MASK64 - 4},
+        qemu_args=("-semihosting",),
     ),
     MMIXMMOTest(
         "mmo-hosted-stack-spill-fill-cross-page",

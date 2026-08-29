@@ -238,6 +238,9 @@ typedef struct CPUArchState {
     uint8_t semihosting_pending_open_handle;
     uint8_t semihosting_pending_open_mode;
     uint64_t semihosting_pending_io_length;
+    uint64_t semihosting_pending_io_address;
+    bool semihosting_pending_io_to_guest;
+    bool semihosting_bounce_active;
 
     struct {} end_reset_fields;
 } CPUMMIXState;
@@ -293,6 +296,15 @@ void mmix_cpu_set_hosted_memory(CPUState *cs,
                                 const MMIXHostedMemoryOps *ops,
                                 void *opaque);
 bool mmix_cpu_hosted_memory_enabled(CPUMMIXState *env);
+bool mmix_cpu_hosted_memory_validate(CPUMMIXState *env, uint64_t address,
+                                     size_t size, size_t alignment,
+                                     Error **errp);
+bool mmix_cpu_hosted_memory_read(CPUMMIXState *env, uint64_t address,
+                                 void *buffer, size_t size, size_t alignment,
+                                 Error **errp);
+bool mmix_cpu_hosted_memory_write(CPUMMIXState *env, uint64_t address,
+                                  const void *buffer, size_t size,
+                                  size_t alignment, Error **errp);
 uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address);
 uint64_t mmix_cpu_hosted_load_octa(CPUMMIXState *env, uint64_t address);
 void mmix_cpu_hosted_store_octa(CPUMMIXState *env, uint64_t address,

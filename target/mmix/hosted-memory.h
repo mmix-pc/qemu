@@ -20,6 +20,8 @@
 #define MMIX_HOSTED_LIMIT      UINT64_C(0x8000000000000000)
 
 typedef struct MMIXHostedMemoryOps {
+    bool (*validate)(void *opaque, uint64_t address, size_t size,
+                     size_t alignment, Error **errp);
     bool (*read)(void *opaque, uint64_t address, void *buffer, size_t size,
                  size_t alignment, Error **errp);
     bool (*write)(void *opaque, uint64_t address, const void *buffer,

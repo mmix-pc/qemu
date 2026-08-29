@@ -10,5 +10,7 @@
 #include "cpu.h"
 
 void mmix_cpu_release_semihosting_file_handles(CPUMMIXState *env);
+bool mmix_semihosting_get_phys_addr_debug(CPUMMIXState *env, vaddr address,
+                                          hwaddr *physical);
 
 #endif /* MMIX_SEMIHOSTING_H */

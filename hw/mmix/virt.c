@@ -76,6 +76,16 @@ struct MMIXVirtMachineState {
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
 
+static bool mmix_virt_hosted_validate(void *opaque, uint64_t address,
+                                     size_t size, size_t alignment,
+                                     Error **errp)
+{
+    (void)opaque;
+
+    return mmix_sparse_memory_validate_range(address, size, alignment, NULL,
+                                             errp);
+}
+
 static bool mmix_virt_hosted_read(void *opaque, uint64_t address,
                                   void *buffer, size_t size,
                                   size_t alignment, Error **errp)
@@ -107,6 +117,7 @@ static bool mmix_virt_hosted_compare_exchange_octa(
 }
 
 static const MMIXHostedMemoryOps mmix_virt_hosted_memory_ops = {
+    .validate = mmix_virt_hosted_validate,
     .read = mmix_virt_hosted_read,
     .write = mmix_virt_hosted_write,
     .compare_exchange_octa = mmix_virt_hosted_compare_exchange_octa,

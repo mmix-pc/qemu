@@ -8,6 +8,7 @@
 #include "cpu.h"
 #include "mmix-helper.h"
 #include "semihosting.h"
+#include "qapi/error.h"
 #include "exec/helper-proto.h"
 #include "exec/log.h"
 #include "qemu/main-loop.h"
@@ -18,6 +19,8 @@
 
 #define MMIX_SEMIHOSTING_STRING_MAX 256
 #define MMIX_SEMIHOSTING_BUFFER_MAX (1024 * 1024)
+#define MMIX_SEMIHOSTING_BOUNCE_ADDRESS UINT64_C(0xfffffffffff00000)
+#define MMIX_SEMIHOSTING_BOUNCE_PHYS    UINT64_C(0x01000000)
 #define MMIX_SEMIHOSTING_GUESTFD_NONE 0
 #define MMIX_SEMIHOSTING_SUCCESS 0
 #define MMIX_SEMIHOSTING_FAILURE UINT64_MAX
@@ -403,6 +406,7 @@ static void mmix_semihosting_fopen_complete(CPUState *cs, uint64_t ret,
 
     env->semihosting_pending_open_handle = 0;
     env->semihosting_pending_open_mode = 0;
+    env->semihosting_bounce_active = false;
 
     if (ret == (uint64_t)-1) {
         if (err != 0) {
@@ -420,12 +424,34 @@ static void mmix_semihosting_fopen_complete(CPUState *cs, uint64_t ret,
     mmix_cpu_write_reg(env, 255, MMIX_SEMIHOSTING_SUCCESS);
 }
 
+bool mmix_semihosting_get_phys_addr_debug(CPUMMIXState *env, vaddr address,
+                                          hwaddr *physical)
+{
+    /* Common semihosting uaccess sees this window only during one syscall. */
+    if (!env->semihosting_bounce_active ||
+        address < MMIX_SEMIHOSTING_BOUNCE_ADDRESS) {
+        return false;
+    }
+
+    *physical = MMIX_SEMIHOSTING_BOUNCE_PHYS +
+                (address - MMIX_SEMIHOSTING_BOUNCE_ADDRESS);
+    return true;
+}
+
 static void mmix_semihosting_io_complete(CPUState *cs, uint64_t ret, int err)
 {
     CPUMMIXState *env = cpu_env(cs);
     uint64_t requested = env->semihosting_pending_io_length;
+    uint64_t address = env->semihosting_pending_io_address;
+    bool to_guest = env->semihosting_pending_io_to_guest;
+    g_autofree uint8_t *buffer = NULL;
+    Error *memory_error = NULL;
+    MemTxResult result;
 
     env->semihosting_pending_io_length = 0;
+    env->semihosting_pending_io_address = 0;
+    env->semihosting_pending_io_to_guest = false;
+    env->semihosting_bounce_active = false;
 
     if (ret == (uint64_t)-1 || err != 0) {
         mmix_cpu_write_reg(env, 255,
@@ -435,6 +461,30 @@ static void mmix_semihosting_io_complete(CPUState *cs, uint64_t ret, int err)
 
     if (ret > requested) {
         ret = requested;
+    }
+    if (to_guest && ret != 0) {
+        buffer = g_malloc(ret);
+        result = address_space_read(cs->as, MMIX_SEMIHOSTING_BOUNCE_PHYS,
+                                    MEMTXATTRS_UNSPECIFIED, buffer, ret);
+        if (result != MEMTX_OK ||
+            !mmix_cpu_hosted_memory_write(env, address, buffer, ret, 1,
+                                          &memory_error)) {
+            if (memory_error) {
+                qemu_log_mask(LOG_UNIMP,
+                              "MMIX hosted input sparse write failed at "
+                              "0x%016" PRIx64 ": %s\n",
+                              address, error_get_pretty(memory_error));
+                error_free(memory_error);
+            } else {
+                qemu_log_mask(LOG_UNIMP,
+                              "MMIX hosted input bounce read failed at "
+                              "0x%016" PRIx64 "\n",
+                              MMIX_SEMIHOSTING_BOUNCE_ADDRESS);
+            }
+            mmix_cpu_write_reg(env, 255,
+                               mmix_semihosting_io_failure(requested));
+            return;
+        }
     }
     mmix_cpu_write_reg(env, 255,
                        mmix_semihosting_short_count(ret, requested));
@@ -528,6 +578,20 @@ static bool mmix_semihosting_read_byte(CPUMMIXState *env, uint64_t address,
     CPUState *cs = env_cpu(env);
     MemTxResult result;
     hwaddr physical;
+    Error *err = NULL;
+
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        if (mmix_cpu_hosted_memory_read(env, address, byte, 1, 1, &err)) {
+            return true;
+        }
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s invalid sparse %s address 0x%016"
+                      PRIx64 ": %s\n",
+                      service_name, operand_name, address,
+                      error_get_pretty(err));
+        error_free(err);
+        return false;
+    }
 
     if (!mmix_semihosting_translate_byte(env, address, MMU_DATA_LOAD,
                                          service_name, operand_name,
@@ -658,6 +722,7 @@ static bool mmix_semihosting_check_counted_buffer(CPUMMIXState *env,
     uint64_t current;
     hwaddr physical;
     size_t i;
+    Error *err = NULL;
 
     if (length > MMIX_SEMIHOSTING_BUFFER_MAX) {
         qemu_log_mask(LOG_UNIMP,
@@ -665,6 +730,21 @@ static bool mmix_semihosting_check_counted_buffer(CPUMMIXState *env,
                       " exceeds %u bytes\n",
                       service_name, operand_name, length,
                       (unsigned)MMIX_SEMIHOSTING_BUFFER_MAX);
+        return false;
+    }
+    if (length == 0) {
+        return true;
+    }
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        if (mmix_cpu_hosted_memory_validate(env, address, length, 1, &err)) {
+            return true;
+        }
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s invalid sparse %s range at 0x%016"
+                      PRIx64 ": %s\n",
+                      service_name, operand_name, address,
+                      error_get_pretty(err));
+        error_free(err);
         return false;
     }
 
@@ -704,6 +784,26 @@ static bool mmix_semihosting_read_counted_buffer(CPUMMIXState *env,
     }
 
     g_byte_array_set_size(bytes, 0);
+    if (length == 0) {
+        return true;
+    }
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        Error *err = NULL;
+
+        g_byte_array_set_size(bytes, length);
+        if (mmix_cpu_hosted_memory_read(env, address, bytes->data, length, 1,
+                                        &err)) {
+            return true;
+        }
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s sparse %s read failed at 0x%016"
+                      PRIx64 ": %s\n",
+                      service_name, operand_name, address,
+                      error_get_pretty(err));
+        error_free(err);
+        g_byte_array_set_size(bytes, 0);
+        return false;
+    }
     for (i = 0; i < length; i++) {
         current = address + i;
         if (!mmix_semihosting_read_byte(env, current, service_name,
@@ -723,6 +823,20 @@ static bool mmix_semihosting_write_byte(CPUMMIXState *env, uint64_t address,
     CPUState *cs = env_cpu(env);
     MemTxResult result;
     hwaddr physical;
+    Error *err = NULL;
+
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        if (mmix_cpu_hosted_memory_write(env, address, &byte, 1, 1, &err)) {
+            return true;
+        }
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s sparse %s write failed at 0x%016"
+                      PRIx64 ": %s\n",
+                      service_name, operand_name, address,
+                      error_get_pretty(err));
+        error_free(err);
+        return false;
+    }
 
     if (!mmix_semihosting_translate_byte(env, address, MMU_DATA_STORE,
                                          service_name, operand_name,
@@ -740,6 +854,45 @@ static bool mmix_semihosting_write_byte(CPUMMIXState *env, uint64_t address,
         return false;
     }
     return true;
+}
+
+static bool mmix_semihosting_bounce_write(CPUMMIXState *env,
+                                          const void *buffer, size_t size,
+                                          const char *service_name,
+                                          const char *operand_name)
+{
+    MemTxResult result;
+
+    if (size == 0) {
+        env->semihosting_bounce_active = true;
+        return true;
+    }
+    result = address_space_write(env_cpu(env)->as,
+                                 MMIX_SEMIHOSTING_BOUNCE_PHYS,
+                                 MEMTXATTRS_UNSPECIFIED, buffer, size);
+    if (result != MEMTX_OK) {
+        qemu_log_mask(LOG_UNIMP,
+                      "MMIX hosted %s could not stage %s at 0x%016" PRIx64
+                      "\n",
+                      service_name, operand_name,
+                      MMIX_SEMIHOSTING_BOUNCE_ADDRESS);
+        return false;
+    }
+    env->semihosting_bounce_active = true;
+    return true;
+}
+
+static uint64_t mmix_semihosting_prepare_input(CPUMMIXState *env,
+                                               uint64_t address)
+{
+    if (!mmix_cpu_hosted_memory_enabled(env)) {
+        return address;
+    }
+
+    env->semihosting_pending_io_address = address;
+    env->semihosting_pending_io_to_guest = true;
+    env->semihosting_bounce_active = true;
+    return MMIX_SEMIHOSTING_BOUNCE_ADDRESS;
 }
 
 static const char *mmix_semihosting_console_name(uint32_t handle)
@@ -818,6 +971,9 @@ static void mmix_semihosting_fopen(CPUMMIXState *env,
     MMIXSemihostingArgs3 args;
     GByteArray *bytes = g_byte_array_new();
     const char *service_name = mmix_semihosting_service_name(call->service);
+    uint64_t pathname;
+    size_t pathname_size;
+    uint8_t nul = 0;
     int flags;
 
     if (!mmix_semihosting_validate_regular_file_handle(env, call)) {
@@ -841,11 +997,23 @@ static void mmix_semihosting_fopen(CPUMMIXState *env,
         return;
     }
 
+    pathname = args.arg2;
+    pathname_size = bytes->len + 1;
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        g_byte_array_append(bytes, &nul, 1);
+        if (!mmix_semihosting_bounce_write(env, bytes->data, bytes->len,
+                                           service_name, "pathname")) {
+            g_byte_array_free(bytes, true);
+            mmix_cpu_raise_emulator_failure(env);
+        }
+        pathname = MMIX_SEMIHOSTING_BOUNCE_ADDRESS;
+    }
+
     mmix_semihosting_release_file_handle(env, call->handle);
     env->semihosting_pending_open_handle = call->handle;
     env->semihosting_pending_open_mode = args.arg3;
     semihost_sys_open(env_cpu(env), mmix_semihosting_fopen_complete,
-                      args.arg2, bytes->len + 1, flags, 0644);
+                      pathname, pathname_size, flags, 0644);
     g_byte_array_free(bytes, true);
 }
 
@@ -886,7 +1054,8 @@ static void mmix_semihosting_fread(CPUMMIXState *env,
         env->semihosting_pending_io_length = args.arg3;
         BQL_LOCK_GUARD();
         semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
-                          MMIX_SEMIHOSTING_HANDLE_STDIN, args.arg2,
+                          MMIX_SEMIHOSTING_HANDLE_STDIN,
+                          mmix_semihosting_prepare_input(env, args.arg2),
                           args.arg3);
         return;
     }
@@ -903,7 +1072,9 @@ static void mmix_semihosting_fread(CPUMMIXState *env,
 
     env->semihosting_pending_io_length = args.arg3;
     semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
-                      guestfd, args.arg2, args.arg3);
+                      guestfd,
+                      mmix_semihosting_prepare_input(env, args.arg2),
+                      args.arg3);
 }
 
 static bool mmix_semihosting_read_guestfd_byte(CPUMMIXState *env,
@@ -915,10 +1086,12 @@ static bool mmix_semihosting_read_guestfd_byte(CPUMMIXState *env,
     if (need_bql) {
         BQL_LOCK_GUARD();
         semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
-                          guestfd, address, 1);
+                          guestfd,
+                          mmix_semihosting_prepare_input(env, address), 1);
     } else {
         semihost_sys_read(env_cpu(env), mmix_semihosting_io_complete,
-                          guestfd, address, 1);
+                          guestfd,
+                          mmix_semihosting_prepare_input(env, address), 1);
     }
 
     if (mmix_cpu_read_reg(env, 255) != 0) {
@@ -993,6 +1166,7 @@ static void mmix_semihosting_fwrite(CPUMMIXState *env,
     MMIXSemihostingArgs3 args;
     GByteArray *bytes;
     const char *service_name = mmix_semihosting_service_name(call->service);
+    bool buffer_valid;
     int guestfd;
 
     bytes = g_byte_array_new();
@@ -1026,10 +1200,25 @@ static void mmix_semihosting_fwrite(CPUMMIXState *env,
     }
     if (!mmix_semihosting_file_handle_guestfd(env, call, &guestfd) ||
         !mmix_semihosting_mode_can_write(
-            mmix_semihosting_file_handle_mode(env, call->handle)) ||
-        !mmix_semihosting_check_counted_buffer(env, args.arg2, args.arg3,
-                                               MMU_DATA_LOAD, service_name,
-                                               "buffer")) {
+            mmix_semihosting_file_handle_mode(env, call->handle))) {
+        g_byte_array_free(bytes, true);
+        mmix_cpu_write_reg(env, 255, mmix_semihosting_io_failure(args.arg3));
+        return;
+    }
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        buffer_valid =
+            mmix_semihosting_read_counted_buffer(env, args.arg2, args.arg3,
+                                                 service_name, "buffer",
+                                                 bytes) &&
+            mmix_semihosting_bounce_write(env, bytes->data, bytes->len,
+                                          service_name, "buffer");
+    } else {
+        buffer_valid =
+            mmix_semihosting_check_counted_buffer(env, args.arg2, args.arg3,
+                                                  MMU_DATA_LOAD,
+                                                  service_name, "buffer");
+    }
+    if (!buffer_valid) {
         g_byte_array_free(bytes, true);
         mmix_cpu_write_reg(env, 255, mmix_semihosting_io_failure(args.arg3));
         return;
@@ -1038,7 +1227,10 @@ static void mmix_semihosting_fwrite(CPUMMIXState *env,
 
     env->semihosting_pending_io_length = args.arg3;
     semihost_sys_write(env_cpu(env), mmix_semihosting_io_complete,
-                       guestfd, args.arg2, args.arg3);
+                       guestfd,
+                       mmix_cpu_hosted_memory_enabled(env) ?
+                       MMIX_SEMIHOSTING_BOUNCE_ADDRESS : args.arg2,
+                       args.arg3);
 }
 
 static void mmix_semihosting_fseek(CPUMMIXState *env,

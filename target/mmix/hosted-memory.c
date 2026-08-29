@@ -42,9 +42,20 @@ void mmix_cpu_set_hosted_memory(CPUState *cs,
     cpu->hosted_memory_opaque = opaque;
 }
 
-static bool mmix_hosted_memory_read(CPUMMIXState *env, uint64_t address,
-                                    void *buffer, size_t size,
-                                    size_t alignment, Error **errp)
+bool mmix_cpu_hosted_memory_validate(CPUMMIXState *env, uint64_t address,
+                                     size_t size, size_t alignment,
+                                     Error **errp)
+{
+    MMIXCPU *cpu = MMIX_CPU(env_cpu(env));
+
+    g_assert(cpu->hosted_memory_ops);
+    return cpu->hosted_memory_ops->validate(cpu->hosted_memory_opaque,
+                                            address, size, alignment, errp);
+}
+
+bool mmix_cpu_hosted_memory_read(CPUMMIXState *env, uint64_t address,
+                                 void *buffer, size_t size, size_t alignment,
+                                 Error **errp)
 {
     MMIXCPU *cpu = MMIX_CPU(env_cpu(env));
 
@@ -53,14 +64,31 @@ static bool mmix_hosted_memory_read(CPUMMIXState *env, uint64_t address,
                                         buffer, size, alignment, errp);
 }
 
+bool mmix_cpu_hosted_memory_write(CPUMMIXState *env, uint64_t address,
+                                  const void *buffer, size_t size,
+                                  size_t alignment, Error **errp)
+{
+    MMIXCPU *cpu = MMIX_CPU(env_cpu(env));
+    bool success;
+
+    g_assert(cpu->hosted_memory_ops);
+    success = cpu->hosted_memory_ops->write(cpu->hosted_memory_opaque,
+                                            address, buffer, size, alignment,
+                                            errp);
+    if (success && address < MMIX_HOSTED_DATA_BASE) {
+        queue_tb_flush(env_cpu(env));
+    }
+    return success;
+}
+
 uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address)
 {
     uint8_t data[sizeof(uint32_t)];
     Error *err = NULL;
 
     if (address >= MMIX_HOSTED_DATA_BASE ||
-        !mmix_hosted_memory_read(env, address, data, sizeof(data),
-                                 sizeof(data), &err)) {
+        !mmix_cpu_hosted_memory_read(env, address, data, sizeof(data),
+                                    sizeof(data), &err)) {
         if (!err) {
             error_setg(&err, "MMIX hosted instruction fetch outside Text "
                        "at 0x%016" PRIx64, address);
@@ -78,7 +106,7 @@ static uint64_t mmix_cpu_hosted_load(CPUMMIXState *env, uint64_t address,
     uint64_t value;
     Error *err = NULL;
 
-    if (!mmix_hosted_memory_read(env, address, data, size, size, &err)) {
+    if (!mmix_cpu_hosted_memory_read(env, address, data, size, size, &err)) {
         mmix_hosted_memory_failure(env, err);
     }
     switch (size) {
@@ -106,7 +134,6 @@ static uint64_t mmix_cpu_hosted_load(CPUMMIXState *env, uint64_t address,
 static void mmix_cpu_hosted_store(CPUMMIXState *env, uint64_t address,
                                   uint64_t value, MemOp memop)
 {
-    MMIXCPU *cpu = MMIX_CPU(env_cpu(env));
     uint8_t data[sizeof(uint64_t)];
     size_t size = memop_size(memop);
     Error *err = NULL;
@@ -127,12 +154,8 @@ static void mmix_cpu_hosted_store(CPUMMIXState *env, uint64_t address,
     default:
         g_assert_not_reached();
     }
-    if (!cpu->hosted_memory_ops->write(cpu->hosted_memory_opaque, address,
-                                       data, size, size, &err)) {
+    if (!mmix_cpu_hosted_memory_write(env, address, data, size, size, &err)) {
         mmix_hosted_memory_failure(env, err);
-    }
-    if (address < MMIX_HOSTED_DATA_BASE) {
-        queue_tb_flush(env_cpu(env));
     }
 }
 
