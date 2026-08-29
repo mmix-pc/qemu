@@ -5,9 +5,11 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/mmix/mmo-hosted-plan.h"
 #include "hw/mmix/mmo-loader.h"
 #include "hw/mmix/sparse-memory.h"
 #include "qemu/bswap.h"
+#include "qemu/units.h"
 
 enum {
     MMO_ESCAPE = 0x98,
@@ -475,6 +477,249 @@ static void test_failure_preserves_plan(void)
     g_byte_array_unref(valid);
 }
 
+static MMIXMMOHostedOptions hosted_options(void)
+{
+    return (MMIXMMOHostedOptions) {
+        .kernel_filename = "program.mmo",
+        .sparse_budget = 8 * MMIX_SPARSE_PAGE_SIZE,
+        .cpu_count = 1,
+    };
+}
+
+static void assert_hosted_plan_fails(const MMIXMMOPlan *mmo,
+                                     const MMIXMMOHostedOptions *options,
+                                     const char *diagnostic)
+{
+    MMIXMMOHostedPlan *hosted = NULL;
+    Error *err = NULL;
+
+    g_assert_false(mmix_mmo_hosted_plan_build(mmo, options, &hosted, &err));
+    g_assert_null(hosted);
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err), diagnostic));
+    error_free(err);
+}
+
+static void test_hosted_fallback_arguments(void)
+{
+    GByteArray *image = minimal_image(0);
+    MMIXMMOHostedOptions options = hosted_options();
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXMMOPlan *mmo = NULL;
+    const uint8_t *data;
+    size_t size;
+
+    options.append = "alpha  beta";
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_build(mmo, &options, &hosted,
+                                             &error_abort));
+
+    data = mmix_mmo_hosted_plan_argument_data(hosted, &size);
+    g_assert_cmpuint(mmix_mmo_hosted_plan_argument_count(hosted), ==, 3);
+    g_assert_cmphex(mmix_mmo_hosted_plan_argv(hosted), ==,
+                    MMIX_SPARSE_POOL_BASE + 8);
+    g_assert_cmphex(mmix_mmo_hosted_plan_argument_end(hosted), ==,
+                    MMIX_SPARSE_POOL_BASE + 72);
+    g_assert_cmpuint(size, ==, 72);
+    g_assert_cmphex(ldq_be_p(data), ==, MMIX_SPARSE_POOL_BASE + 72);
+    g_assert_cmphex(ldq_be_p(data + 8), ==,
+                    MMIX_SPARSE_POOL_BASE + 40);
+    g_assert_cmphex(ldq_be_p(data + 16), ==,
+                    MMIX_SPARSE_POOL_BASE + 56);
+    g_assert_cmphex(ldq_be_p(data + 24), ==,
+                    MMIX_SPARSE_POOL_BASE + 64);
+    g_assert_cmphex(ldq_be_p(data + 32), ==, 0);
+    g_assert_cmpstr((const char *)data + 40, ==, "program.mmo");
+    g_assert_cmpstr((const char *)data + 56, ==, "alpha");
+    g_assert_cmpstr((const char *)data + 64, ==, "beta");
+    g_assert_cmpuint(mmix_mmo_hosted_plan_materialized_pages(hosted), ==, 2);
+    g_assert_cmphex(mmix_mmo_hosted_plan_materialized_bytes(hosted), ==,
+                    2 * MMIX_SPARSE_PAGE_SIZE);
+
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
+static void test_hosted_explicit_arguments(void)
+{
+    static const char *const arguments[] = { "", "two words" };
+    GByteArray *image = minimal_image(0);
+    MMIXMMOHostedOptions options = hosted_options();
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXMMOPlan *mmo = NULL;
+    const uint8_t *data;
+    size_t size;
+
+    options.explicit_arguments = arguments;
+    options.explicit_argument_count = ARRAY_SIZE(arguments);
+    options.has_explicit_arguments = true;
+    options.semihosting_enabled = true;
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_build(mmo, &options, &hosted,
+                                             &error_abort));
+
+    data = mmix_mmo_hosted_plan_argument_data(hosted, &size);
+    g_assert_cmpuint(mmix_mmo_hosted_plan_argument_count(hosted), ==, 2);
+    g_assert_cmpuint(size, ==, 56);
+    g_assert_cmphex(ldq_be_p(data), ==, MMIX_SPARSE_POOL_BASE + 56);
+    g_assert_cmphex(ldq_be_p(data + 8), ==,
+                    MMIX_SPARSE_POOL_BASE + 32);
+    g_assert_cmphex(ldq_be_p(data + 16), ==,
+                    MMIX_SPARSE_POOL_BASE + 40);
+    g_assert_cmphex(ldq_be_p(data + 24), ==, 0);
+    g_assert_cmpstr((const char *)data + 32, ==, "");
+    g_assert_cmpstr((const char *)data + 40, ==, "two words");
+
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
+static void test_hosted_option_policy(void)
+{
+    static const char *const argument[] = { "program.mmo" };
+    GByteArray *image = minimal_image(0);
+    MMIXMMOHostedOptions options;
+    MMIXMMOPlan *mmo = NULL;
+
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+
+    options = hosted_options();
+    options.cpu_count = 2;
+    assert_hosted_plan_fails(mmo, &options, "exactly one CPU");
+    options = hosted_options();
+    options.has_initrd = true;
+    assert_hosted_plan_fails(mmo, &options, "does not accept -initrd");
+    options = hosted_options();
+    options.has_explicit_elf_startup_abi = true;
+    assert_hosted_plan_fails(mmo, &options, "explicit ELF startup ABI");
+    options = hosted_options();
+    options.has_firmware = true;
+    assert_hosted_plan_fails(mmo, &options, "does not accept firmware");
+    options = hosted_options();
+    options.linux_handoff = true;
+    assert_hosted_plan_fails(mmo, &options, "Linux handoff");
+    options = hosted_options();
+    options.explicit_arguments = argument;
+    options.explicit_argument_count = 1;
+    options.has_explicit_arguments = true;
+    assert_hosted_plan_fails(mmo, &options, "require semihosting");
+    options.semihosting_enabled = true;
+    options.append = "conflict";
+    assert_hosted_plan_fails(mmo, &options,
+                             "explicit semihosting arguments with -append");
+    options = hosted_options();
+    options.has_explicit_arguments = true;
+    options.semihosting_enabled = true;
+    assert_hosted_plan_fails(mmo, &options,
+                             "argument selection is inconsistent");
+    options = hosted_options();
+    options.sparse_budget--;
+    assert_hosted_plan_fails(mmo, &options, "not 8 KiB aligned");
+
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
+static void test_hosted_argument_limit(void)
+{
+    GByteArray *image = minimal_image(0);
+    MMIXMMOHostedOptions options = hosted_options();
+    g_autofree char *large = g_malloc0(8 * MiB + 1);
+    const char *arguments[] = { large };
+    MMIXMMOPlan *mmo = NULL;
+
+    memset(large, 'x', 8 * MiB);
+    options.explicit_arguments = arguments;
+    options.explicit_argument_count = ARRAY_SIZE(arguments);
+    options.has_explicit_arguments = true;
+    options.semihosting_enabled = true;
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    assert_hosted_plan_fails(mmo, &options, "exceeds 8 MiB");
+
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
+static GByteArray *image_with_write(uint64_t address)
+{
+    GByteArray *image = g_byte_array_new();
+
+    image_begin(image, 0);
+    image_append_tetra(image, 0xf0000000);
+    image_append_address_lop(image, LOP_LOC, address);
+    image_append_tetra(image, 0x11223344);
+    image_append_post(image, 255, 0, 0);
+    image_append_symbol_tail(image, NULL, 0);
+    return image;
+}
+
+static void test_hosted_collision_and_budget(void)
+{
+    MMIXMMOHostedOptions options = hosted_options();
+    GByteArray *image;
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXMMOPlan *mmo = NULL;
+
+    image = image_with_write(MMIX_SPARSE_POOL_BASE);
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    assert_hosted_plan_fails(mmo, &options,
+                             "overlaps the Pool argument block");
+    mmix_mmo_plan_free(mmo);
+    mmo = NULL;
+    g_byte_array_unref(image);
+
+    image = image_with_write(MMIX_SPARSE_POOL_BASE + 40);
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_build(mmo, &options, &hosted,
+                                             &error_abort));
+    g_assert_cmpuint(mmix_mmo_hosted_plan_materialized_pages(hosted), ==, 2);
+    mmix_mmo_hosted_plan_free(hosted);
+    hosted = NULL;
+    mmix_mmo_plan_free(mmo);
+    mmo = NULL;
+    g_byte_array_unref(image);
+
+    image = image_with_write(MMIX_SPARSE_DATA_BASE +
+                             4 * MMIX_SPARSE_PAGE_SIZE);
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    options.sparse_budget = 2 * MMIX_SPARSE_PAGE_SIZE;
+    assert_hosted_plan_fails(mmo, &options, "exceeding sparse budget");
+    options.sparse_budget = 3 * MMIX_SPARSE_PAGE_SIZE;
+    g_assert_true(mmix_mmo_hosted_plan_build(mmo, &options, &hosted,
+                                             &error_abort));
+    g_assert_cmpuint(mmix_mmo_hosted_plan_materialized_pages(hosted), ==, 3);
+
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
+static void test_hosted_failure_preserves_plan(void)
+{
+    GByteArray *image = minimal_image(0);
+    MMIXMMOHostedOptions options = hosted_options();
+    MMIXMMOHostedPlan *hosted = NULL;
+    MMIXMMOHostedPlan *original;
+    MMIXMMOPlan *mmo = NULL;
+    Error *err = NULL;
+
+    g_assert_true(parse_image(image, &mmo, &error_abort));
+    g_assert_true(mmix_mmo_hosted_plan_build(mmo, &options, &hosted,
+                                             &error_abort));
+    original = hosted;
+    options.cpu_count = 0;
+    g_assert_false(mmix_mmo_hosted_plan_build(mmo, &options, &hosted, &err));
+    g_assert_true(hosted == original);
+    g_assert_nonnull(err);
+    error_free(err);
+
+    mmix_mmo_hosted_plan_free(hosted);
+    mmix_mmo_plan_free(mmo);
+    g_byte_array_unref(image);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -489,6 +734,18 @@ int main(int argc, char **argv)
                     test_structure_failures);
     g_test_add_func("/mmix/mmo-plan/failure-preserves-plan",
                     test_failure_preserves_plan);
+    g_test_add_func("/mmix/mmo-hosted/fallback-arguments",
+                    test_hosted_fallback_arguments);
+    g_test_add_func("/mmix/mmo-hosted/explicit-arguments",
+                    test_hosted_explicit_arguments);
+    g_test_add_func("/mmix/mmo-hosted/option-policy",
+                    test_hosted_option_policy);
+    g_test_add_func("/mmix/mmo-hosted/argument-limit",
+                    test_hosted_argument_limit);
+    g_test_add_func("/mmix/mmo-hosted/collision-and-budget",
+                    test_hosted_collision_and_budget);
+    g_test_add_func("/mmix/mmo-hosted/failure-preserves-plan",
+                    test_hosted_failure_preserves_plan);
 
     return g_test_run();
 }
