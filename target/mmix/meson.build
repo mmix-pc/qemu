@@ -7,6 +7,7 @@ mmix_ss.add(files(
   'excp_helper.c',
   'fpu_helper.c',
   'int_helper.c',
+  'machine.c',
   'reg_helper.c',
   'semihosting.c',
   'translate.c',

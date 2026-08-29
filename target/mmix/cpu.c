@@ -9,6 +9,7 @@
 #include "qemu/qemu-print.h"
 #include "addressing.h"
 #include "cpu.h"
+#include "machine.h"
 #include "semihosting.h"
 #include "accel/tcg/cpu-loop.h"
 #include "exec/cputlb.h"
@@ -913,6 +914,7 @@ static void mmix_cpu_class_init(ObjectClass *oc, const void *data)
 
     device_class_set_parent_realize(dc, mmix_cpu_realize, &mcc->parent_realize);
     device_class_set_props(dc, mmix_cpu_properties);
+    dc->vmsd = &vmstate_mmix_cpu;
     resettable_class_set_parent_phases(rc, NULL, mmix_cpu_reset_hold, NULL,
                                        &mcc->parent_phases);
 

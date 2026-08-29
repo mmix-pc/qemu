@@ -414,6 +414,68 @@ def run_mttcg_elf_test(qemu, workdir, test):
     assert_regs(test.name, result, test.regs)
 
 
+def run_no_image_mttcg_test(qemu):
+    command = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", "2",
+        "-accel", "tcg,thread=multi",
+        "-display", "none",
+        "-serial", "none",
+        "-S",
+        "-qmp", "stdio",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        thread_ids = [cpu["thread-id"] for cpu in cpus]
+        if len(cpus) != 2 or len(set(thread_ids)) != 2:
+            raise AssertionError(
+                f"expected two independent MTTCG vCPUs, got {thread_ids}"
+            )
+
+        stacks = [
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(2)
+        ]
+        if stacks[0] == stacks[1] or any(stack % 0x2000 for stack in stacks):
+            raise AssertionError(f"invalid per-CPU initial stacks {stacks}")
+        for cpu in range(2):
+            dump = _hmp_register_dump(process, cpu)
+            if _hmp_register_value(dump, "pc=0x") != 0:
+                raise AssertionError(f"CPU {cpu} did not reset at PC zero")
+            if _hmp_register_value(dump, "rO =0x") != stacks[cpu]:
+                raise AssertionError(f"CPU {cpu} rO does not match its stack")
+            if _hmp_register_value(dump, "rS =0x") != stacks[cpu]:
+                raise AssertionError(f"CPU {cpu} rS does not match its stack")
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
 def _qmp_start_paused(qemu, image, test):
     command = build_kernel_command(
         qemu,
@@ -446,6 +508,158 @@ def _hmp_register_value(dump, label):
     if match is None:
         raise AssertionError(f"missing {label!r} in register dump")
     return int(match.group(1), 16)
+
+
+def _qtest_readq(qtest, address):
+    response = _qtest_command(qtest, f"readq {address:#x}")
+    return int(response[1], 0)
+
+
+def _qtest_writeq(qtest, address, value):
+    _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+
+
+def _wait_for_pc(process, expected):
+    deadline = time.monotonic() + 5
+
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+        _qmp_command(process, "stop")
+        dump = _hmp_register_dump(process, 0)
+        if _hmp_register_value(dump, "pc=0x") == expected:
+            return dump
+        _qmp_command(process, "cont")
+    raise AssertionError(f"CPU did not reach PC 0x{expected:x}")
+
+
+def run_elf_state_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    snapshot = workdir / f"{test.name}.qcow2"
+    qtest_path = workdir / f"{test.name}.sock"
+    qemu_img = qemu.with_name("qemu-img")
+    saved_code = 0x1020304050607080
+    saved_bss = 0x8877665544332211
+    saved_argument = 0xa5a55a5af0f00f0f
+    saved_stack = 0x0123456789abcdef
+
+    image.write_bytes(test.image)
+    for path in (snapshot, qtest_path):
+        if path.exists():
+            path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot, "1M"),
+        check=True,
+        timeout=10,
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(
+            *test.qemu_args,
+            "-S",
+            "-qmp",
+            "stdio",
+            "-qtest",
+            f"unix:{qtest_path}",
+            "-qtest-log",
+            "/dev/null",
+            "-drive",
+            f"file={snapshot},format=qcow2,if=none",
+        ),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        stack = _qmp_command(
+            process,
+            "qom-get",
+            {"path": "/machine/cpu[0]", "property": "initial-stack"},
+        )
+
+        _qmp_command(process, "cont")
+        dump = _wait_for_pc(process, test.idle_pc)
+        argument_base = _hmp_register_value(dump, "r34 =0x")
+        expected_argument = argument_base + 24
+        assert _hmp_register_value(dump, "r32 =0x") == test.global_value
+        assert _hmp_register_value(dump, "r33 =0x") == 2
+        assert _hmp_register_value(dump, "r35 =0x") == 250
+        assert _qtest_readq(qtest, test.bss) == 0
+        assert _qtest_readq(qtest, argument_base) == expected_argument
+        assert _qtest_readq(qtest, stack) == 0
+
+        _qtest_writeq(qtest, test.entry, saved_code)
+        _qtest_writeq(qtest, test.bss, saved_bss)
+        _qtest_writeq(qtest, argument_base, saved_argument)
+        _qtest_writeq(qtest, stack, saved_stack)
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "savevm loader-state"},
+        )
+        assert not result, result
+
+        _qmp_command(process, "system_reset")
+        dump = _hmp_register_dump(process, 0)
+        assert _hmp_register_value(dump, "pc=0x") == test.entry
+        assert _hmp_register_value(dump, "r0  =0x") == 2
+        assert _hmp_register_value(dump, "r1  =0x") == argument_base
+        assert _hmp_register_value(dump, "rG =0x") == 250
+        assert _hmp_register_value(dump, "r250=0x") == test.global_value
+        assert _qtest_readq(qtest, test.entry) != saved_code
+        assert _qtest_readq(qtest, test.bss) == 0
+        assert _qtest_readq(qtest, argument_base) == expected_argument
+        assert _qtest_readq(qtest, stack) == 0
+
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "loadvm loader-state"},
+        )
+        assert not result, result
+        dump = _hmp_register_dump(process, 0)
+        assert _hmp_register_value(dump, "pc=0x") == test.idle_pc, dump
+        assert _hmp_register_value(dump, "r32 =0x") == test.global_value
+        assert _hmp_register_value(dump, "r33 =0x") == 2
+        assert _hmp_register_value(dump, "r34 =0x") == argument_base
+        assert _hmp_register_value(dump, "r35 =0x") == 250
+        assert _qtest_readq(qtest, test.entry) == saved_code
+        assert _qtest_readq(qtest, test.bss) == saved_bss
+        assert _qtest_readq(qtest, argument_base) == saved_argument
+        assert _qtest_readq(qtest, stack) == saved_stack
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (snapshot, qtest_path):
+            if path.exists():
+                path.unlink()
 
 
 def run_mttcg_reset_test(qemu, workdir, test):
