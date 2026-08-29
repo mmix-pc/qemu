@@ -41,6 +41,7 @@ void mmix_boot_plan_free(MMIXBootPlan *plan)
     g_free(plan->image_filename);
     g_free((char *)plan->linux_info.command_line);
     g_free((char *)plan->linux_info.initrd_filename);
+    g_clear_pointer(&plan->linux_info.fdt, g_bytes_unref);
     g_free(plan);
 }
 
@@ -113,10 +114,13 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
     if (result->has_linux_info) {
         result->linux_info = *linux_info;
         result->linux_info.initrd_base = 0;
+        result->linux_info.fdt_base = 0;
         result->linux_info.command_line =
             g_strdup(linux_info->command_line);
         result->linux_info.initrd_filename =
             g_strdup(linux_info->initrd_filename);
+        result->linux_info.fdt = linux_info->fdt ?
+            g_bytes_ref(linux_info->fdt) : NULL;
     }
     mmix_boot_plan_copy_requests(result, requests, request_count);
     if (!mmix_ram_reservation_plan(ram_size, result->requests,
@@ -142,6 +146,24 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
             return false;
         }
         result->linux_info.initrd_base = reservation->content.start;
+    }
+    if (result->has_linux_info && result->linux_info.fdt) {
+        size_t index = result->linux_info.fdt_request_index;
+        const MMIXRAMReservation *reservation;
+
+        if (index >= result->ram.count) {
+            error_setg(errp, "MMIX Linux FDT reservation is missing");
+            mmix_boot_plan_free(result);
+            return false;
+        }
+        reservation = &result->ram.reservations[index];
+        if (mmix_phys_range_size(&reservation->content) !=
+            g_bytes_get_size(result->linux_info.fdt)) {
+            error_setg(errp, "MMIX Linux FDT reservation has the wrong size");
+            mmix_boot_plan_free(result);
+            return false;
+        }
+        result->linux_info.fdt_base = reservation->content.start;
     }
 
     mmix_boot_plan_free(*plan);

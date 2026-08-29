@@ -19,6 +19,9 @@ typedef struct MMIXLinuxBootInfo {
     uint64_t initrd_size;
     uint64_t initrd_base;
     size_t initrd_request_index;
+    GBytes *fdt;
+    uint64_t fdt_base;
+    size_t fdt_request_index;
     unsigned int cpu_count;
     bool has_initrd;
 } MMIXLinuxBootInfo;

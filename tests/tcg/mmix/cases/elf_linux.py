@@ -133,4 +133,14 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
         ("-m", "128M", *LINUX_MACHINE, "-initrd", "$IMAGE"),
         ("MMIX RAM reservation 'mmix-kernel/initrd' does not fit",),
     ),
+    MMIXProcessFailure(
+        "elf-linux-fdt-no-free-page",
+        elf64_image(
+            0,
+            halt(),
+            mem_size=128 * 1024 * 1024 - 3 * 1024 * 1024 - 32 * 1024,
+        ),
+        ("-m", "128M", *LINUX_MACHINE),
+        ("MMIX RAM reservation 'mmix-fdt/blob' does not fit",),
+    ),
 ]

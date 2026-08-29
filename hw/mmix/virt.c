@@ -299,11 +299,13 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     bool has_initrd = linux_info && linux_info->has_initrd;
     size_t image_index = initrd_index + has_initrd;
     size_t image_range_count = image_ranges ? image_ranges->len : 0;
-    size_t request_count = image_index + image_range_count;
+    size_t fdt_index = image_index + image_range_count;
+    size_t request_count = fdt_index + (linux_info != NULL);
     g_autofree MMIXRAMReservationRequest *requests =
         g_new0(MMIXRAMReservationRequest, request_count);
     g_auto(GStrv) stack_names = g_new0(char *, stack_count + 1);
     g_auto(GStrv) image_names = g_new0(char *, image_range_count + 1);
+    MMIXPhysRange fdt_stacks[MMIX_VIRT_MAX_CPUS];
     const MMIXRAMReservationRequest framebuffer_request = {
         .owner = "mmix-framebuffer",
         .name = "pixels",
@@ -317,7 +319,10 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     };
     const MMIXRAMReservation *framebuffer;
     g_autoptr(GBytes) argument_data = NULL;
+    g_autoptr(GBytes) fdt_template = NULL;
+    g_autoptr(GBytes) finalized_fdt = NULL;
     MMIXBootPlan *boot_plan = NULL;
+    MMIXBootPlan *preliminary_plan = NULL;
     MMIXLinuxBootInfo planned_linux;
     unsigned int i;
 
@@ -388,15 +393,97 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     if (linux_info) {
         planned_linux = *linux_info;
         planned_linux.initrd_request_index = initrd_index;
+        planned_linux.fdt = NULL;
+        planned_linux.fdt_request_index = fdt_index;
     }
 
     if (!mmix_boot_plan_build(machine->ram_size,
                               image_info ? machine->kernel_filename : NULL,
                               image_info,
                               linux_info ? &planned_linux : NULL,
-                              requests, request_count,
-                              &boot_plan, errp)) {
+                              requests, fdt_index,
+                              &preliminary_plan, errp)) {
         return false;
+    }
+
+    if (linux_info) {
+        const MMIXRAMReservation *initrd = has_initrd ?
+            mmix_boot_plan_reservation(preliminary_plan, initrd_index) : NULL;
+        MMIXFDTConfig config;
+
+        framebuffer = mmix_boot_plan_reservation(
+            preliminary_plan, MMIX_RAM_REQUEST_FRAMEBUFFER);
+        for (i = 0; i < stack_count; i++) {
+            fdt_stacks[i] = mmix_boot_plan_reservation(
+                preliminary_plan,
+                MMIX_RAM_REQUEST_STACK_BASE + i)->content;
+        }
+        config = (MMIXFDTConfig) {
+            .ram_size = machine->ram_size,
+            .command_line = linux_info->command_line,
+            .cpu_count = machine->smp.cpus,
+            .cpu_stacks = fdt_stacks,
+            .has_framebuffer = true,
+            .framebuffer = framebuffer->content,
+            .linux_direct = true,
+            .has_initrd = has_initrd,
+            .initrd_size = has_initrd ?
+                mmix_phys_range_size(&initrd->content) : 0,
+        };
+        if (!mmix_fdt_build(&config, &fdt_template, errp)) {
+            goto fail;
+        }
+        requests[fdt_index] = (MMIXRAMReservationRequest) {
+            .owner = "mmix-fdt",
+            .name = "blob",
+            .stable_id = 0,
+            .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+            .ownership_class = MMIX_RAM_OWNERSHIP_DISCOVERY,
+            .lifetime = MMIX_RAM_LIFETIME_UNTIL_CONSUMED,
+            .placement_class = MMIX_RAM_PLACEMENT_FDT,
+            .size = g_bytes_get_size(fdt_template),
+            .alignment = 8,
+        };
+        planned_linux.fdt = fdt_template;
+        if (!mmix_boot_plan_build(machine->ram_size,
+                                  machine->kernel_filename, image_info,
+                                  &planned_linux, requests, request_count,
+                                  &boot_plan, errp)) {
+            goto fail;
+        }
+        for (i = 0; i < fdt_index; i++) {
+            const MMIXRAMReservation *before =
+                mmix_boot_plan_reservation(preliminary_plan, i);
+            const MMIXRAMReservation *after =
+                mmix_boot_plan_reservation(boot_plan, i);
+
+            if (memcmp(before, after, sizeof(*before))) {
+                error_setg(errp, "MMIX FDT request changed an earlier RAM "
+                           "reservation");
+                goto fail;
+            }
+        }
+        if (!mmix_fdt_finalize_linux(
+                fdt_template,
+                &mmix_boot_plan_reservation(boot_plan, fdt_index)->content,
+                has_initrd ?
+                    &mmix_boot_plan_reservation(boot_plan,
+                                                initrd_index)->content : NULL,
+                &finalized_fdt, errp)) {
+            goto fail;
+        }
+        planned_linux.fdt = finalized_fdt;
+        if (!mmix_boot_plan_build(machine->ram_size,
+                                  machine->kernel_filename, image_info,
+                                  &planned_linux, requests, request_count,
+                                  &boot_plan, errp)) {
+            goto fail;
+        }
+        mmix_boot_plan_free(preliminary_plan);
+        preliminary_plan = NULL;
+    } else {
+        boot_plan = preliminary_plan;
+        preliminary_plan = NULL;
     }
 
     if (has_arguments) {
@@ -407,8 +494,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
             arguments, argument_count, argument_size,
             reservation->content.start, errp);
         if (!argument_data) {
-            mmix_boot_plan_free(boot_plan);
-            return false;
+            goto fail;
         }
     }
 
@@ -437,6 +523,11 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
         }
     }
     return true;
+
+fail:
+    mmix_boot_plan_free(boot_plan);
+    mmix_boot_plan_free(preliminary_plan);
+    return false;
 }
 
 static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,

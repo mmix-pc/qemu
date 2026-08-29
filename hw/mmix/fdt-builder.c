@@ -17,6 +17,9 @@ enum {
     MMIX_FDT_CPU_PHANDLE_BASE = 1,
 };
 
+#define MMIX_FDT_PLACEHOLDER_INITRD_BASE UINT64_C(0x4000000000000000)
+#define MMIX_FDT_PLACEHOLDER_SELF_BASE   UINT64_C(0x7fff000000000000)
+
 static bool mmix_fdt_error(int ret, const char *operation, Error **errp)
 {
     if (ret >= 0) {
@@ -136,6 +139,11 @@ static bool mmix_fdt_validate_config(const MMIXFDTConfig *config,
             }
         }
     }
+    if (config->has_initrd != (config->initrd_size != 0) ||
+        (config->has_initrd && !config->linux_direct)) {
+        error_setg(errp, "MMIX FDT initrd configuration is inconsistent");
+        return false;
+    }
     return mmix_fdt_validate_context_ranges(config, errp);
 }
 
@@ -186,6 +194,15 @@ static bool mmix_fdt_set_u64_ranges(void *fdt, int node, const char *name,
     }
     return !mmix_fdt_error(fdt_setprop(fdt, node, name, cells,
                                        2 * count * sizeof(*cells)),
+                           name, errp);
+}
+
+static bool mmix_fdt_set_u64(void *fdt, int node, const char *name,
+                             uint64_t value, Error **errp)
+{
+    fdt64_t cell = cpu_to_fdt64(value);
+
+    return !mmix_fdt_error(fdt_setprop(fdt, node, name, &cell, sizeof(cell)),
                            name, errp);
 }
 
@@ -647,6 +664,14 @@ static bool mmix_fdt_add_foundation(void *fdt,
                              config->command_line, errp)) {
         return false;
     }
+    if (config->has_initrd &&
+        (!mmix_fdt_set_u64(fdt, chosen, "linux,initrd-start",
+                           MMIX_FDT_PLACEHOLDER_INITRD_BASE, errp) ||
+         !mmix_fdt_set_u64(fdt, chosen, "linux,initrd-end",
+                           MMIX_FDT_PLACEHOLDER_INITRD_BASE +
+                           config->initrd_size, errp))) {
+        return false;
+    }
 
     memory = fdt_path_offset(fdt, "/memory@0");
     if (mmix_fdt_error(memory, "find memory node", errp) ||
@@ -701,11 +726,112 @@ bool mmix_fdt_build(const MMIXFDTConfig *config, GBytes **result,
         !mmix_fdt_add_foundation(fdt, config, errp)) {
         return false;
     }
+    if (config->linux_direct &&
+        (mmix_fdt_error(fdt_add_mem_rsv(
+                            fdt, MMIX_FDT_PLACEHOLDER_SELF_BASE, 1),
+                        "add FDT reservation placeholder", errp) ||
+         (config->has_initrd &&
+          mmix_fdt_error(fdt_add_mem_rsv(
+                             fdt, MMIX_FDT_PLACEHOLDER_INITRD_BASE,
+                             config->initrd_size),
+                         "add initrd reservation placeholder", errp)))) {
+        return false;
+    }
     ret = fdt_pack(fdt);
     if (mmix_fdt_error(ret, "pack tree", errp)) {
         return false;
     }
     size = fdt_totalsize(fdt);
+    if (!mmix_fdt_validate(fdt, size, errp)) {
+        return false;
+    }
+    blob = g_bytes_new_take(g_steal_pointer(&fdt), size);
+    g_clear_pointer(result, g_bytes_unref);
+    *result = blob;
+    return true;
+}
+
+static bool mmix_fdt_set_u64_inplace(void *fdt, int node, const char *name,
+                                     uint64_t value, Error **errp)
+{
+    fdt64_t cell = cpu_to_fdt64(value);
+
+    return !mmix_fdt_error(fdt_setprop_inplace(fdt, node, name, &cell,
+                                                sizeof(cell)),
+                           name, errp);
+}
+
+bool mmix_fdt_finalize_linux(GBytes *template,
+                             const MMIXPhysRange *fdt_range,
+                             const MMIXPhysRange *initrd_range,
+                             GBytes **result, Error **errp)
+{
+    g_autofree void *fdt = NULL;
+    const void *source;
+    GBytes *blob;
+    gsize size;
+    int chosen;
+    int reservation_count;
+    int ret;
+
+    if (!template || !result || !fdt_range ||
+        !mmix_phys_range_valid(fdt_range)) {
+        error_setg(errp, "MMIX Linux FDT finalization input is invalid");
+        return false;
+    }
+    source = g_bytes_get_data(template, &size);
+    if (mmix_phys_range_size(fdt_range) != size ||
+        fdt_range->start % 8 != 0) {
+        error_setg(errp, "MMIX Linux FDT reservation does not match its blob");
+        return false;
+    }
+    reservation_count = fdt_num_mem_rsv(source);
+    if (reservation_count != (initrd_range ? 2 : 1)) {
+        error_setg(errp, "MMIX Linux FDT reservation placeholders are "
+                   "inconsistent");
+        return false;
+    }
+
+    fdt = g_malloc0(MMIX_FDT_MAX_SIZE);
+    ret = fdt_open_into(source, fdt, MMIX_FDT_MAX_SIZE);
+    if (mmix_fdt_error(ret, "open Linux FDT", errp)) {
+        return false;
+    }
+    chosen = fdt_path_offset(fdt, "/chosen");
+    if (mmix_fdt_error(chosen, "find chosen node", errp)) {
+        return false;
+    }
+    if (initrd_range &&
+        (!mmix_phys_range_valid(initrd_range) ||
+         !mmix_fdt_set_u64_inplace(fdt, chosen, "linux,initrd-start",
+                                   initrd_range->start, errp) ||
+         !mmix_fdt_set_u64_inplace(fdt, chosen, "linux,initrd-end",
+                                   initrd_range->end, errp))) {
+        return false;
+    }
+    while (reservation_count-- > 0) {
+        ret = fdt_del_mem_rsv(fdt, 0);
+        if (mmix_fdt_error(ret, "remove FDT reservation placeholder", errp)) {
+            return false;
+        }
+    }
+    if (mmix_fdt_error(fdt_add_mem_rsv(
+                           fdt, fdt_range->start,
+                           mmix_phys_range_size(fdt_range)),
+                       "add FDT self-reservation", errp) ||
+        (initrd_range &&
+         mmix_fdt_error(fdt_add_mem_rsv(
+                            fdt, initrd_range->start,
+                            mmix_phys_range_size(initrd_range)),
+                        "add initrd reservation", errp)) ||
+        mmix_fdt_error(fdt_pack(fdt), "pack finalized Linux FDT", errp)) {
+        return false;
+    }
+    if (fdt_totalsize(fdt) != size) {
+        error_setg(errp, "MMIX Linux FDT totalsize changed during "
+                   "finalization");
+        return false;
+    }
     if (!mmix_fdt_validate(fdt, size, errp)) {
         return false;
     }

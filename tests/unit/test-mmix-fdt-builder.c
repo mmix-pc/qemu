@@ -722,6 +722,101 @@ static void test_oversized_serialized_fdt(void)
     error_free(err);
 }
 
+static void test_linux_placement_finalization(void)
+{
+    const MMIXPhysRange fdt_range = {
+        .start = 0x400000,
+    };
+    const MMIXPhysRange initrd_range = {
+        .start = 0x200000,
+        .end = 0x210000,
+    };
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE,
+                                          "console=ttyS0");
+    g_autoptr(GBytes) template = NULL;
+    g_autoptr(GBytes) finalized = NULL;
+    MMIXPhysRange selected_fdt = fdt_range;
+    const fdt64_t *value;
+    const void *fdt;
+    uint64_t address;
+    uint64_t size;
+    gsize template_size;
+    int length;
+
+    config.linux_direct = true;
+    config.has_initrd = true;
+    config.initrd_size = mmix_phys_range_size(&initrd_range);
+    template = build_configured_fdt(&config);
+    template_size = g_bytes_get_size(template);
+    selected_fdt.end = selected_fdt.start + template_size;
+
+    g_assert_true(mmix_fdt_finalize_linux(
+        template, &selected_fdt, &initrd_range, &finalized, &error_abort));
+    g_assert_cmpuint(g_bytes_get_size(finalized), ==, template_size);
+    fdt = g_bytes_get_data(finalized, NULL);
+    g_assert_cmpint(fdt_num_mem_rsv(fdt), ==, 2);
+    g_assert_cmpint(fdt_get_mem_rsv(fdt, 0, &address, &size), ==, 0);
+    g_assert_cmphex(address, ==, selected_fdt.start);
+    g_assert_cmphex(size, ==, template_size);
+    g_assert_cmpint(fdt_get_mem_rsv(fdt, 1, &address, &size), ==, 0);
+    g_assert_cmphex(address, ==, initrd_range.start);
+    g_assert_cmphex(size, ==, mmix_phys_range_size(&initrd_range));
+
+    value = fdt_getprop(fdt, node_offset(fdt, "/chosen"),
+                        "linux,initrd-start", &length);
+    g_assert_nonnull(value);
+    g_assert_cmpint(length, ==, sizeof(*value));
+    g_assert_cmphex(fdt64_to_cpu(*value), ==, initrd_range.start);
+    value = fdt_getprop(fdt, node_offset(fdt, "/chosen"),
+                        "linux,initrd-end", &length);
+    g_assert_nonnull(value);
+    g_assert_cmpint(length, ==, sizeof(*value));
+    g_assert_cmphex(fdt64_to_cpu(*value), ==, initrd_range.end);
+}
+
+static void test_linux_finalization_failure_is_atomic(void)
+{
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autoptr(GBytes) template = NULL;
+    g_autoptr(GBytes) original = build_fdt(MMIX_VIRT_RAM_MIN_SIZE, "");
+    GBytes *result = g_bytes_ref(original);
+    MMIXPhysRange wrong_size = {
+        .start = 0x400000,
+        .end = 0x400008,
+    };
+    Error *err = NULL;
+
+    config.linux_direct = true;
+    template = build_configured_fdt(&config);
+    g_assert_false(mmix_fdt_finalize_linux(template, &wrong_size, NULL,
+                                           &result, &err));
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err),
+                            "reservation does not match its blob"));
+    g_assert_true(result == original);
+    error_free(err);
+
+    err = NULL;
+    g_clear_pointer(&template, g_bytes_unref);
+    config.has_initrd = true;
+    config.initrd_size = 0x10000;
+    template = build_configured_fdt(&config);
+    wrong_size = (MMIXPhysRange) {
+        .start = 0x400000,
+        .end = 0x400000 + g_bytes_get_size(template),
+    };
+    g_assert_false(mmix_fdt_finalize_linux(
+        template, &wrong_size,
+        &(MMIXPhysRange) { .start = 0x400000, .end = 0x410000 },
+        &result, &err));
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err), "reservations 0 and 1 "
+                            "overlap"));
+    g_assert_true(result == original);
+    error_free(err);
+    g_bytes_unref(result);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -747,5 +842,9 @@ int main(int argc, char **argv)
                     test_invalid_serialized_fdt);
     g_test_add_func("/mmix/fdt-builder/oversized-serialized-fdt",
                     test_oversized_serialized_fdt);
+    g_test_add_func("/mmix/fdt-builder/linux-placement-finalization",
+                    test_linux_placement_finalization);
+    g_test_add_func("/mmix/fdt-builder/linux-finalization-failure-atomic",
+                    test_linux_finalization_failure_is_atomic);
     return g_test_run();
 }

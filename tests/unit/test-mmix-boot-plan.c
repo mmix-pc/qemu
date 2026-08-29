@@ -89,6 +89,21 @@ static MMIXRAMReservationRequest initrd_request(uint64_t size)
     };
 }
 
+static MMIXRAMReservationRequest fdt_request(uint64_t size)
+{
+    return (MMIXRAMReservationRequest) {
+        .owner = "mmix-fdt",
+        .name = "blob",
+        .stable_id = 0,
+        .placement = MMIX_RAM_RESERVATION_RELOCATABLE,
+        .ownership_class = MMIX_RAM_OWNERSHIP_DISCOVERY,
+        .lifetime = MMIX_RAM_LIFETIME_UNTIL_CONSUMED,
+        .placement_class = MMIX_RAM_PLACEMENT_FDT,
+        .size = size,
+        .alignment = 8,
+    };
+}
+
 static void assert_range(const MMIXPhysRange *range, uint64_t start,
                          uint64_t end)
 {
@@ -280,12 +295,14 @@ static void test_linux_boot_information(void)
 {
     g_autofree char *command_line = g_strdup("console=ttyS0");
     g_autofree char *initrd_filename = g_strdup("initrd.img");
+    g_autoptr(GBytes) fdt = g_bytes_new_static("fdt", 3);
     MMIXRAMReservationRequest requests[] = {
         framebuffer_request(),
         stack_request(0, "initial-stack-0"),
         initrd_request(16 * MiB),
         fixed_request("mmix-kernel", "load-segment-0",
                       MMIX_RAM_OWNERSHIP_IMAGE, 4 * GiB, 8 * KiB),
+        fdt_request(g_bytes_get_size(fdt)),
     };
     MMIXKernelLoadInfo image_info = {
         .entry = 4 * GiB,
@@ -296,11 +313,14 @@ static void test_linux_boot_information(void)
         .initrd_filename = initrd_filename,
         .initrd_size = 16 * MiB,
         .initrd_request_index = 2,
+        .fdt = fdt,
+        .fdt_request_index = 4,
         .cpu_count = 1,
         .has_initrd = true,
     };
     const MMIXLinuxBootInfo *stored;
     const MMIXRAMReservation *initrd;
+    const MMIXRAMReservation *fdt_reservation;
     MMIXBootPlan *plan = NULL;
 
     g_assert_true(mmix_boot_plan_build(TEST_LARGE_RAM_SIZE, "kernel.elf",
@@ -317,8 +337,54 @@ static void test_linux_boot_information(void)
     g_assert_cmpuint(stored->cpu_count, ==, 1);
     g_assert_cmpuint(stored->initrd_size, ==, 16 * MiB);
     initrd = mmix_boot_plan_reservation(plan, 2);
+    fdt_reservation = mmix_boot_plan_reservation(plan, 4);
     g_assert_cmphex(stored->initrd_base, ==, initrd->content.start);
     g_assert_cmphex(stored->initrd_base, >, 4 * GiB);
+    g_assert_cmphex(stored->fdt_base, ==, fdt_reservation->content.start);
+    g_assert_cmphex(stored->fdt_base % 8, ==, 0);
+    g_assert_cmphex(stored->fdt_base, <, stored->initrd_base);
+    g_assert_cmphex(stored->fdt_base, ==,
+                    TEST_LARGE_RAM_SIZE - 3 * MiB - 32 * KiB -
+                    16 * MiB - 8 * KiB);
+    g_assert_cmphex(stored->fdt_base, >, 4 * GiB);
+    g_assert_cmphex(mmix_phys_range_size(&fdt_reservation->content), ==, 3);
+    g_assert_cmphex(mmix_phys_range_size(&fdt_reservation->ownership), ==,
+                    8 * KiB);
+    g_assert_true(g_bytes_equal(stored->fdt, fdt));
+    mmix_boot_plan_free(plan);
+}
+
+static void test_linux_fdt_failure_is_atomic(void)
+{
+    g_autoptr(GBytes) fdt = g_bytes_new_static("fdt", 3);
+    MMIXRAMReservationRequest request = fdt_request(3);
+    MMIXKernelLoadInfo image_info = {
+        .image_type = MMIX_KERNEL_IMAGE_ELF,
+    };
+    MMIXLinuxBootInfo linux_info = {
+        .command_line = "",
+        .fdt = fdt,
+        .fdt_request_index = 0,
+        .cpu_count = 1,
+    };
+    MMIXBootPlan *plan = NULL;
+    MMIXBootPlan *original;
+    Error *err = NULL;
+
+    g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, "good.elf",
+                                       &image_info, &linux_info, &request, 1,
+                                       &plan, &error_abort));
+    original = plan;
+    request.size = 4;
+    g_assert_false(mmix_boot_plan_build(TEST_RAM_SIZE, "bad.elf",
+                                        &image_info, &linux_info, &request, 1,
+                                        &plan, &err));
+    g_assert_nonnull(err);
+    g_assert_nonnull(strstr(error_get_pretty(err),
+                            "FDT reservation has the wrong size"));
+    g_assert_true(plan == original);
+    g_assert_true(g_bytes_equal(mmix_boot_plan_linux_info(plan)->fdt, fdt));
+    error_free(err);
     mmix_boot_plan_free(plan);
 }
 
@@ -334,5 +400,7 @@ int main(int argc, char **argv)
                     test_invalid_image_pair);
     g_test_add_func("/mmix/boot-plan/linux-information",
                     test_linux_boot_information);
+    g_test_add_func("/mmix/boot-plan/linux-fdt-failure-atomic",
+                    test_linux_fdt_failure_is_atomic);
     return g_test_run();
 }
