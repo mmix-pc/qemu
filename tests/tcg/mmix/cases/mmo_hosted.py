@@ -204,6 +204,30 @@ def mmo_hosted_semihosting_file_test(pathname):
     )
 
 
+def mmo_hosted_debug_image(*, fill_budget=False):
+    items = [jump(JMP, 0)]
+
+    if fill_budget:
+        page_size = 0x2000
+        minimum_budget_pages = 128 * 1024 * 1024 // page_size
+        # Text and the fallback Pool argument block consume one page each.
+        for page in range(minimum_budget_pages - 2):
+            items.extend(
+                [
+                    mmo_loc(MMIX_DATA_SEGMENT_BASE + page * page_size),
+                    struct.pack(">I", page + 1),
+                ]
+            )
+    else:
+        items.extend(
+            [
+                mmo_loc(MMIX_DATA_SEGMENT_BASE + 0x100),
+                bytes.fromhex("1122334455667788"),
+            ]
+        )
+    return _hosted_image(items)
+
+
 MMO_HOSTED_TESTS = [
     MMIXMMOTest(
         "mmo-hosted-startup",

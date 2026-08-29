@@ -937,6 +937,7 @@ static void mmix_cpu_class_init(ObjectClass *oc, const void *data)
     cc->dump_state = mmix_cpu_dump_state;
     cc->set_pc = mmix_cpu_set_pc;
     cc->get_pc = mmix_cpu_get_pc;
+    cc->memory_rw_debug = mmix_cpu_memory_rw_debug;
     cc->sysemu_ops = &mmix_sysemu_ops;
     cc->gdb_read_register = mmix_cpu_gdb_read_register;
     cc->gdb_write_register = mmix_cpu_gdb_write_register;

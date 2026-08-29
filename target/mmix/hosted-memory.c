@@ -81,6 +81,34 @@ bool mmix_cpu_hosted_memory_write(CPUMMIXState *env, uint64_t address,
     return success;
 }
 
+int mmix_cpu_memory_rw_debug(CPUState *cs, vaddr address, uint8_t *buffer,
+                             size_t length, bool is_write)
+{
+    CPUMMIXState *env = cpu_env(cs);
+    Error *err = NULL;
+    bool success;
+
+    if (!mmix_cpu_hosted_memory_enabled(env)) {
+        return cpu_memory_rw_debug(cs, address, buffer, length, is_write);
+    }
+    if (length == 0) {
+        return 0;
+    }
+
+    if (is_write) {
+        success = mmix_cpu_hosted_memory_write(env, address, buffer, length,
+                                               1, &err);
+    } else {
+        success = mmix_cpu_hosted_memory_read(env, address, buffer, length,
+                                              1, &err);
+    }
+    if (!success) {
+        error_free(err);
+        return -1;
+    }
+    return 0;
+}
+
 uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address)
 {
     uint8_t data[sizeof(uint32_t)];

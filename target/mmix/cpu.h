@@ -283,6 +283,8 @@ hwaddr mmix_cpu_get_phys_addr_debug(CPUState *cs, vaddr addr);
 void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags);
 int mmix_cpu_gdb_read_register(CPUState *cs, GByteArray *buf, int reg);
 int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *buf, int reg);
+int mmix_cpu_memory_rw_debug(CPUState *cs, vaddr address, uint8_t *buffer,
+                             size_t length, bool is_write);
 
 uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
