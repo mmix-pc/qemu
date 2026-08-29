@@ -630,6 +630,113 @@ static void test_mmix_bare_elf_load_and_reset(void)
     g_assert_cmpint(g_rmdir(directory), ==, 0);
 }
 
+static char *mmix_create_hosted_elf(const char *directory)
+{
+    enum { CODE_OFFSET = 0x100 };
+    const uint8_t code[] = { 0, 0, 0, 0 };
+    uint8_t image[CODE_OFFSET + sizeof(code)] = { 0 };
+    Elf64_Ehdr ehdr = { 0 };
+    Elf64_Phdr phdr = { 0 };
+    g_autofree char *filename =
+        g_build_filename(directory, "hosted.elf", NULL);
+    g_autoptr(GError) error = NULL;
+
+    memcpy(ehdr.e_ident, ELFMAG, SELFMAG);
+    ehdr.e_ident[EI_CLASS] = ELFCLASS64;
+    ehdr.e_ident[EI_DATA] = ELFDATA2MSB;
+    ehdr.e_ident[EI_VERSION] = EV_CURRENT;
+    ehdr.e_type = cpu_to_be16(ET_EXEC);
+    ehdr.e_machine = cpu_to_be16(EM_MMIX);
+    ehdr.e_version = cpu_to_be32(EV_CURRENT);
+    ehdr.e_phoff = cpu_to_be64(sizeof(ehdr));
+    ehdr.e_ehsize = cpu_to_be16(sizeof(ehdr));
+    ehdr.e_phentsize = cpu_to_be16(sizeof(phdr));
+    ehdr.e_phnum = cpu_to_be16(1);
+
+    phdr.p_type = cpu_to_be32(PT_LOAD);
+    phdr.p_flags = cpu_to_be32(PF_R | PF_X);
+    phdr.p_offset = cpu_to_be64(CODE_OFFSET);
+    phdr.p_filesz = cpu_to_be64(sizeof(code));
+    phdr.p_memsz = cpu_to_be64(sizeof(code));
+    phdr.p_align = cpu_to_be64(1);
+
+    memcpy(image, &ehdr, sizeof(ehdr));
+    memcpy(image + sizeof(ehdr), &phdr, sizeof(phdr));
+    memcpy(image + CODE_OFFSET, code, sizeof(code));
+    g_assert_true(g_file_set_contents(filename, (const char *)image,
+                                      sizeof(image), &error));
+    g_assert_no_error(error);
+    return g_steal_pointer(&filename);
+}
+
+static uint64_t mmix_hmp_register_value(const char *registers,
+                                        const char *name)
+{
+    g_autofree char *prefix = g_strdup_printf("%s=0x", name);
+    const char *value = strstr(registers, prefix);
+
+    g_assert_nonnull(value);
+    return g_ascii_strtoull(value + strlen(prefix), NULL, 16);
+}
+
+static void test_mmix_hosted_arguments_reset(void)
+{
+    static const char first[] = "prog";
+    static const char second[] = "one";
+    enum {
+        ARGUMENT_COUNT = 2,
+        POINTER_BYTES = (ARGUMENT_COUNT + 1) * sizeof(uint64_t),
+        ARGUMENT_BYTES = POINTER_BYTES + sizeof(first) + sizeof(second),
+    };
+    uint8_t expected[ARGUMENT_BYTES] = { 0 };
+    uint8_t actual[ARGUMENT_BYTES];
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory =
+        g_dir_make_tmp("mmix-elf-arguments-XXXXXX", &error);
+    g_autofree char *filename = NULL;
+    g_autofree char *registers = NULL;
+    uint64_t base;
+    QTestState *qts;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(directory);
+    filename = mmix_create_hosted_elf(directory);
+    qts = qtest_initf(
+        "-machine virt,elf-startup-abi=argc-argv "
+        "-semihosting-config enable=on,arg=prog,arg=one -kernel %s",
+        filename);
+
+    registers = qtest_hmp(qts, "info registers");
+    g_assert_cmphex(mmix_hmp_register_value(registers, "r0  "), ==,
+                    ARGUMENT_COUNT);
+    g_assert_cmphex(mmix_hmp_register_value(registers, "rL "), ==, 2);
+    base = mmix_hmp_register_value(registers, "r1  ");
+    g_assert_cmphex(base % (8 * KiB), ==, 0);
+
+    stq_be_p(expected, base + POINTER_BYTES);
+    stq_be_p(expected + sizeof(uint64_t),
+             base + POINTER_BYTES + sizeof(first));
+    memcpy(expected + POINTER_BYTES, first, sizeof(first));
+    memcpy(expected + POINTER_BYTES + sizeof(first), second, sizeof(second));
+    qtest_memread(qts, base, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), expected, sizeof(expected));
+
+    qtest_memset(qts, base, 0xa5, sizeof(actual));
+    qtest_system_reset(qts);
+    qtest_memread(qts, base, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), expected, sizeof(expected));
+    g_clear_pointer(&registers, g_free);
+    registers = qtest_hmp(qts, "info registers");
+    g_assert_cmphex(mmix_hmp_register_value(registers, "r0  "), ==,
+                    ARGUMENT_COUNT);
+    g_assert_cmphex(mmix_hmp_register_value(registers, "r1  "), ==, base);
+    g_assert_cmphex(mmix_hmp_register_value(registers, "rL "), ==, 2);
+    qtest_quit(qts);
+
+    g_assert_cmpint(g_unlink(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     static const MMIXRAMAcceptedCase accepted[] = {
@@ -773,6 +880,8 @@ int main(int argc, char **argv)
                    test_mmix_raw_minimum_and_reset);
     qtest_add_func("/mmix/kernel/elf/bare-load-reset",
                    test_mmix_bare_elf_load_and_reset);
+    qtest_add_func("/mmix/kernel/elf/arguments-reset",
+                   test_mmix_hosted_arguments_reset);
     qtest_add_func("/mmix/translation/flat-identity",
                    test_mmix_flat_translation_identity);
     qtest_add_func("/mmix/translation/negative-alias",
