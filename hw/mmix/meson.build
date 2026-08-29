@@ -9,6 +9,7 @@ mmix_ss.add(when: 'CONFIG_MMIX_VIRT', if_true: files(
   'mmo-loader.c',
   'physical-layout.c',
   'ram-reservation.c',
+  'sparse-memory.c',
   'timer.c',
   'virt.c',
 ))

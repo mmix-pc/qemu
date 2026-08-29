@@ -66,6 +66,9 @@ if config_all_devices.has_key('CONFIG_MMIX_VIRT')
       meson.project_source_root() / 'hw/mmix/physical-layout.c',
       meson.project_source_root() / 'hw/mmix/ram-reservation.c'
     ],
+    'test-mmix-sparse-memory': [
+      meson.project_source_root() / 'hw/mmix/sparse-memory.c'
+    ],
   }
 endif
 
