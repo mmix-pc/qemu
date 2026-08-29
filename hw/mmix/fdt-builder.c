@@ -466,6 +466,142 @@ static bool mmix_fdt_add_interrupt_topology(void *fdt,
            mmix_fdt_add_timer_node(fdt, config, errp);
 }
 
+static bool mmix_fdt_add_uart_node(void *fdt,
+                                   const MMIXFDTConfig *config,
+                                   Error **errp)
+{
+    const MMIXPhysRange range = {
+        .start = MMIX_VIRT_UART0_BASE,
+        .end = MMIX_VIRT_UART0_BASE + MMIX_VIRT_UART0_REGISTER_SIZE,
+    };
+    g_autofree char *name = g_strdup_printf(
+        "serial@%" PRIx64, MMIX_VIRT_UART0_BASE);
+    g_autofree char *path = g_strdup_printf("/soc/%s", name);
+    int aliases;
+    int chosen;
+    int node;
+
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"), name, errp);
+    if (node < 0 ||
+        !mmix_fdt_set_string(fdt, node, "compatible", "ns16550a", errp) ||
+        !mmix_fdt_set_u64_range(fdt, node, "reg", &range, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "clock-frequency",
+                          MMIX_VIRT_UART0_CLOCK_FREQUENCY, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "current-speed",
+                          MMIX_VIRT_UART0_BAUD_BASE, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "reg-shift",
+                          MMIX_VIRT_UART0_REGISTER_SHIFT, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "reg-io-width", 1, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "interrupts",
+                          MMIX_VIRT_UART0_IRQ, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "interrupt-parent",
+                          mmix_fdt_intc_phandle(config), errp)) {
+        return false;
+    }
+
+    aliases = fdt_path_offset(fdt, "/aliases");
+    if (mmix_fdt_error(aliases, "find aliases node", errp) ||
+        !mmix_fdt_set_string(fdt, aliases, "serial0", path, errp)) {
+        return false;
+    }
+    chosen = fdt_path_offset(fdt, "/chosen");
+    return !mmix_fdt_error(chosen, "find chosen node", errp) &&
+           mmix_fdt_set_string(fdt, chosen, "stdout-path",
+                               "serial0:115200n8", errp);
+}
+
+static bool mmix_fdt_add_framebuffer_nodes(void *fdt,
+                                           const MMIXFDTConfig *config,
+                                           Error **errp)
+{
+    const MMIXPhysRange control = {
+        .start = MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE,
+        .end = MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE +
+               MMIX_VIRT_FRAMEBUFFER_CONTROL_MMIO_SIZE,
+    };
+    uint32_t phandle;
+    g_autofree char *control_name = NULL;
+    g_autofree char *simple_name = NULL;
+    int node;
+
+    if (!config->has_framebuffer) {
+        return true;
+    }
+    phandle = mmix_fdt_framebuffer_phandle(config);
+    control_name = g_strdup_printf("framebuffer@%" PRIx64,
+                                   MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE);
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
+                             control_name, errp);
+    if (node < 0 ||
+        !mmix_fdt_set_string(fdt, node, "compatible",
+                             "qemu,mmix-framebuffer", errp) ||
+        !mmix_fdt_set_u64_range(fdt, node, "reg", &control, errp) ||
+        !mmix_fdt_set_u32(fdt, node, "memory-region", phandle, errp)) {
+        return false;
+    }
+
+    simple_name = g_strdup_printf("framebuffer@%" PRIx64,
+                                  config->framebuffer.start);
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/chosen"),
+                             simple_name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "simple-framebuffer", errp) &&
+           mmix_fdt_set_u64_range(fdt, node, "reg",
+                                  &config->framebuffer, errp) &&
+           mmix_fdt_set_u32(fdt, node, "width",
+                            MMIX_VIRT_FRAMEBUFFER_WIDTH, errp) &&
+           mmix_fdt_set_u32(fdt, node, "height",
+                            MMIX_VIRT_FRAMEBUFFER_HEIGHT, errp) &&
+           mmix_fdt_set_u32(fdt, node, "stride",
+                            MMIX_VIRT_FRAMEBUFFER_STRIDE, errp) &&
+           mmix_fdt_set_string(fdt, node, "format", "x8r8g8b8", errp) &&
+           mmix_fdt_set_string(fdt, node, "status", "okay", errp) &&
+           mmix_fdt_set_u32(fdt, node, "memory-region", phandle, errp);
+}
+
+static bool mmix_fdt_add_virtio_mmio_nodes(void *fdt,
+                                           const MMIXFDTConfig *config,
+                                           Error **errp)
+{
+    int i;
+
+    /* libfdt prepends subnodes, so reverse insertion preserves slot order. */
+    for (i = MMIX_VIRT_VIRTIO_MMIO_COUNT - 1; i >= 0; i--) {
+        uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
+                        i * MMIX_VIRT_VIRTIO_MMIO_STRIDE;
+        const MMIXPhysRange range = {
+            .start = base,
+            .end = base + MMIX_VIRT_VIRTIO_MMIO_REGISTER_SIZE,
+        };
+        g_autofree char *name = g_strdup_printf(
+            "virtio_mmio@%" PRIx64, base);
+        int node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
+                                     name, errp);
+
+        if (node < 0 ||
+            !mmix_fdt_set_string(fdt, node, "compatible",
+                                 "virtio,mmio", errp) ||
+            !mmix_fdt_set_u64_range(fdt, node, "reg", &range, errp) ||
+            !mmix_fdt_set_u32(fdt, node, "interrupts",
+                              MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE + i, errp) ||
+            !mmix_fdt_set_u32(fdt, node, "interrupt-parent",
+                              mmix_fdt_intc_phandle(config), errp)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool mmix_fdt_add_active_devices(void *fdt,
+                                        const MMIXFDTConfig *config,
+                                        Error **errp)
+{
+    return mmix_fdt_add_virtio_mmio_nodes(fdt, config, errp) &&
+           mmix_fdt_add_framebuffer_nodes(fdt, config, errp) &&
+           mmix_fdt_add_uart_node(fdt, config, errp);
+}
+
 static bool mmix_fdt_add_foundation(void *fdt,
                                     const MMIXFDTConfig *config,
                                     Error **errp)
@@ -533,7 +669,8 @@ static bool mmix_fdt_add_foundation(void *fdt,
         !mmix_fdt_set_empty(fdt, soc, "ranges", errp) ||
         !mmix_fdt_add_cpu_nodes(fdt, config, errp) ||
         !mmix_fdt_add_reserved_memory(fdt, config, errp) ||
-        !mmix_fdt_add_interrupt_topology(fdt, config, errp)) {
+        !mmix_fdt_add_interrupt_topology(fdt, config, errp) ||
+        !mmix_fdt_add_active_devices(fdt, config, errp)) {
         return false;
     }
     return true;

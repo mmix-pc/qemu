@@ -96,6 +96,11 @@ static void assert_absent(const void *fdt, const char *path, const char *name)
     g_assert_cmpint(length, ==, -FDT_ERR_NOTFOUND);
 }
 
+static void assert_node_absent(const void *fdt, const char *path)
+{
+    g_assert_cmpint(fdt_path_offset(fdt, path), ==, -FDT_ERR_NOTFOUND);
+}
+
 static void assert_range(const void *fdt, const char *path,
                          const MMIXPhysRange *expected)
 {
@@ -300,6 +305,132 @@ static void assert_interrupt_topology(const void *fdt,
                MMIX_VIRT_TIMER_CONTEXT_STRIDE);
 }
 
+static void assert_active_devices(const void *fdt,
+                                  unsigned int cpu_count,
+                                  const MMIXPhysRange *framebuffer)
+{
+    const char *uart_path = "/soc/serial@1000010000000";
+    const MMIXPhysRange uart = {
+        .start = MMIX_VIRT_UART0_BASE,
+        .end = MMIX_VIRT_UART0_BASE + MMIX_VIRT_UART0_REGISTER_SIZE,
+    };
+    const unsigned int reserved_slots[] = {
+        MMIX_VIRT_VIRTIO_MMIO_COUNT,
+        MMIX_VIRT_VIRTIO_MMIO_SLOT_CAPACITY - 1,
+    };
+    uint32_t intc_phandle = 1 + 2 * cpu_count + (framebuffer != NULL);
+    int node = fdt_first_subnode(fdt, node_offset(fdt, "/soc"));
+    unsigned int child_count = 0;
+    unsigned int virtio_slot = 0;
+    unsigned int i;
+
+    assert_string(fdt, uart_path, "compatible", "ns16550a");
+    assert_range(fdt, uart_path, &uart);
+    assert_u32(fdt, uart_path, "clock-frequency",
+               MMIX_VIRT_UART0_CLOCK_FREQUENCY);
+    assert_u32(fdt, uart_path, "current-speed",
+               MMIX_VIRT_UART0_BAUD_BASE);
+    assert_u32(fdt, uart_path, "reg-shift",
+               MMIX_VIRT_UART0_REGISTER_SHIFT);
+    assert_u32(fdt, uart_path, "reg-io-width", 1);
+    assert_u32(fdt, uart_path, "interrupts", MMIX_VIRT_UART0_IRQ);
+    assert_u32(fdt, uart_path, "interrupt-parent", intc_phandle);
+    assert_string(fdt, "/aliases", "serial0", uart_path);
+    assert_string(fdt, "/chosen", "stdout-path", "serial0:115200n8");
+
+    for (i = 0; i < MMIX_VIRT_VIRTIO_MMIO_COUNT; i++) {
+        uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
+                        i * MMIX_VIRT_VIRTIO_MMIO_STRIDE;
+        const MMIXPhysRange range = {
+            .start = base,
+            .end = base + MMIX_VIRT_VIRTIO_MMIO_REGISTER_SIZE,
+        };
+        g_autofree char *path = g_strdup_printf(
+            "/soc/virtio_mmio@%" PRIx64, base);
+
+        assert_string(fdt, path, "compatible", "virtio,mmio");
+        assert_range(fdt, path, &range);
+        assert_u32(fdt, path, "interrupts",
+                   MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE + i);
+        assert_u32(fdt, path, "interrupt-parent", intc_phandle);
+    }
+
+    while (node >= 0) {
+        const char *compatible;
+        int length;
+
+        child_count++;
+        compatible = fdt_getprop(fdt, node, "compatible", &length);
+        if (compatible && !strcmp(compatible, "virtio,mmio")) {
+            uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
+                            virtio_slot * MMIX_VIRT_VIRTIO_MMIO_STRIDE;
+            g_autofree char *name = g_strdup_printf(
+                "virtio_mmio@%" PRIx64, base);
+
+            g_assert_cmpstr(fdt_get_name(fdt, node, NULL), ==, name);
+            virtio_slot++;
+        }
+        node = fdt_next_subnode(fdt, node);
+    }
+    g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
+    g_assert_cmpuint(virtio_slot, ==, MMIX_VIRT_VIRTIO_MMIO_COUNT);
+    g_assert_cmpuint(child_count, ==,
+                     1 + 3 + MMIX_VIRT_VIRTIO_MMIO_COUNT +
+                     (framebuffer != NULL));
+    assert_node_absent(fdt, "/flash@1000000000000");
+    assert_node_absent(fdt, "/pcie@1000100000000");
+
+    for (i = 0; i < G_N_ELEMENTS(reserved_slots); i++) {
+        uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
+                        reserved_slots[i] * MMIX_VIRT_VIRTIO_MMIO_STRIDE;
+        g_autofree char *path = g_strdup_printf(
+            "/soc/virtio_mmio@%" PRIx64, base);
+
+        assert_node_absent(fdt, path);
+    }
+
+    if (framebuffer) {
+        const char *control_path =
+            "/soc/framebuffer@1000018000000";
+        const MMIXPhysRange control = {
+            .start = MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE,
+            .end = MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE +
+                   MMIX_VIRT_FRAMEBUFFER_CONTROL_MMIO_SIZE,
+        };
+        g_autofree char *simple_path = g_strdup_printf(
+            "/chosen/framebuffer@%" PRIx64, framebuffer->start);
+        g_autofree char *memory_path = g_strdup_printf(
+            "/reserved-memory/framebuffer@%" PRIx64, framebuffer->start);
+        uint32_t framebuffer_phandle = 1 + 2 * cpu_count;
+
+        assert_string(fdt, control_path, "compatible",
+                      "qemu,mmix-framebuffer");
+        assert_range(fdt, control_path, &control);
+        assert_u32(fdt, control_path, "memory-region",
+                   framebuffer_phandle);
+        assert_string(fdt, simple_path, "compatible",
+                      "simple-framebuffer");
+        assert_range(fdt, simple_path, framebuffer);
+        assert_u32(fdt, simple_path, "width", MMIX_VIRT_FRAMEBUFFER_WIDTH);
+        assert_u32(fdt, simple_path, "height",
+                   MMIX_VIRT_FRAMEBUFFER_HEIGHT);
+        assert_u32(fdt, simple_path, "stride",
+                   MMIX_VIRT_FRAMEBUFFER_STRIDE);
+        assert_string(fdt, simple_path, "format", "x8r8g8b8");
+        assert_string(fdt, simple_path, "status", "okay");
+        assert_u32(fdt, simple_path, "memory-region",
+                   framebuffer_phandle);
+        g_assert_cmpint(fdt_node_offset_by_phandle(
+                            fdt, framebuffer_phandle), ==,
+                        node_offset(fdt, memory_path));
+    } else {
+        assert_node_absent(fdt, "/soc/framebuffer@1000018000000");
+        g_assert_cmpint(fdt_first_subnode(fdt,
+                                         node_offset(fdt, "/chosen")), ==,
+                        -FDT_ERR_NOTFOUND);
+    }
+}
+
 static void test_default_foundation(void)
 {
     g_autoptr(GBytes) blob = build_fdt(MMIX_VIRT_RAM_DEFAULT_SIZE, "");
@@ -308,6 +439,7 @@ static void test_default_foundation(void)
 
     assert_foundation(fdt, size, MMIX_VIRT_RAM_DEFAULT_SIZE, "");
     assert_interrupt_topology(fdt, 1, false);
+    assert_active_devices(fdt, 1, NULL);
 }
 
 static void test_large_ram_and_command_line(void)
@@ -355,6 +487,7 @@ static void test_single_cpu_with_framebuffer(void)
     g_assert_cmpint(fdt_node_offset_by_phandle(fdt, 3), ==,
                     node_offset(fdt, framebuffer_path));
     assert_interrupt_topology(fdt, 1, true);
+    assert_active_devices(fdt, 1, &framebuffer);
 }
 
 static void test_maximum_cpu_topology(void)
