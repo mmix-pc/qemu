@@ -527,6 +527,118 @@ def _hmp_register_value(dump, label):
     return int(match.group(1), 16)
 
 
+def run_linux_entry_state_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+
+    image.write_bytes(test.image)
+    qemu_args = tuple(
+        str(image) if arg == "$IMAGE" else arg for arg in test.qemu_args
+    )
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(*qemu_args, "-S", "-qmp", "stdio"),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        if len(cpus) != test.cpu_count:
+            raise AssertionError(
+                f"{test.name}: expected {test.cpu_count} CPUs, got {len(cpus)}"
+            )
+
+        fdt = None
+        stacks = []
+        for cpu in range(test.cpu_count):
+            stack = _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            dump = _hmp_register_dump(process, cpu)
+            cpu_fdt = _hmp_register_value(dump, "r1  =0x")
+
+            if _hmp_register_value(dump, "pc=0x") != test.entry:
+                raise AssertionError(f"{test.name}: CPU {cpu} entry mismatch")
+            if _hmp_register_value(dump, "r0  =0x") != cpu:
+                raise AssertionError(f"{test.name}: CPU {cpu} ID mismatch")
+            if _hmp_register_value(dump, "rL=") != 2:
+                raise AssertionError(f"{test.name}: CPU {cpu} rL mismatch")
+            ro = _hmp_register_value(dump, "rO=0x")
+            rs = _hmp_register_value(dump, "rS=0x")
+            if ro != stack or rs != stack:
+                raise AssertionError(f"{test.name}: CPU {cpu} stack mismatch")
+            rk = _hmp_register_value(dump, "rK =0x")
+            rq = _hmp_register_value(dump, "rQ =0x")
+            if rk != 0 or rq != 0:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} interrupts are not masked"
+                )
+            if fdt is None:
+                fdt = cpu_fdt
+            elif cpu_fdt != fdt:
+                raise AssertionError(f"{test.name}: CPU FDT pointers differ")
+            stacks.append(stack)
+
+        if fdt is None or fdt == 0 or fdt < test.minimum_fdt or fdt % 8:
+            raise AssertionError(f"{test.name}: invalid FDT pointer {fdt!r}")
+        if len(set(stacks)) != test.cpu_count:
+            raise AssertionError(f"{test.name}: bootstrap stacks overlap")
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
+def run_linux_smp_entry_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    log = workdir / f"{test.name}.log"
+
+    image.write_bytes(test.image)
+    if log.exists():
+        log.unlink()
+    completed = run_kernel(
+        qemu,
+        image,
+        trace="int",
+        log=log,
+        qemu_args=test.qemu_args,
+        check=False,
+        timeout=10,
+    )
+    result = read_log(log)
+    assert_exit_pc(test.name, result, test.success_pc)
+    assert_exit_status(test.name, completed, 0)
+
+    regs = result.regs
+    expected = {32: 0, 46: 1, 50: 1, 52: 0x1000, 55: 1, 56: 1}
+    assert_regs(test.name, result, expected)
+    if regs[33] == 0 or regs[33] % 8 or regs[33] != regs[51]:
+        raise AssertionError(f"{test.name}: invalid common FDT pointer")
+    if regs[34] != regs[35] or regs[53] != regs[54]:
+        raise AssertionError(f"{test.name}: invalid CPU stack pair")
+    if regs[34] == regs[53]:
+        raise AssertionError(f"{test.name}: CPUs share bootstrap stacks")
+
+
 def _qtest_readq(qtest, address):
     response = _qtest_command(qtest, f"readq {address:#x}")
     return int(response[1], 0)

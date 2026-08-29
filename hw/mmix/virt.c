@@ -674,6 +674,24 @@ static void mmix_virt_apply_mmo_startup(MMIXVirtMachineState *vms,
     mmix_cpu_update_interrupt(env);
 }
 
+static void mmix_virt_apply_linux_startup(
+    CPUState *cs, unsigned int cpu_id, const MMIXKernelLoadInfo *info,
+    const MMIXLinuxBootInfo *linux_info)
+{
+    CPUMMIXState *env = &MMIX_CPU(cs)->env;
+
+    g_assert(info != NULL);
+    g_assert(linux_info != NULL);
+    g_assert(env->flat_translation);
+    g_assert(env->sregs[MMIX_SREG_RK] == MMIX_INITIAL_RK);
+    g_assert(env->sregs[MMIX_SREG_RQ] == 0);
+
+    mmix_cpu_write_reg(env, 0, cpu_id);
+    mmix_cpu_write_reg(env, 1, linux_info->fdt_base);
+    g_assert(env->sregs[MMIX_SREG_RL] == 2);
+    cpu_set_pc(cs, info->entry);
+}
+
 static bool mmix_virt_reconstruct_mmo_memory(MMIXVirtMachineState *vms,
                                              Error **errp)
 {
@@ -698,6 +716,8 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     const MMIXKernelLoadInfo *info =
         mmix_boot_plan_image_info(vms->boot_plan);
+    const MMIXLinuxBootInfo *linux_info =
+        mmix_boot_plan_linux_info(vms->boot_plan);
     Error *local_err = NULL;
     unsigned int i;
 
@@ -736,6 +756,9 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         mmix_virt_apply_global_registers(vms->cpus[i], info);
         if (vms->mmo_memory) {
             mmix_virt_apply_mmo_startup(vms, vms->cpus[i]);
+        } else if (linux_info) {
+            mmix_virt_apply_linux_startup(vms->cpus[i], i, info,
+                                          linux_info);
         }
         if (i == (info ? info->boot_cpu_id : 0) && vms->argument_data) {
             CPUMMIXState *env = &MMIX_CPU(vms->cpus[i])->env;
@@ -745,7 +768,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         }
     }
 
-    if (info) {
+    if (info && !linux_info) {
         cpu_set_pc(vms->cpus[info->boot_cpu_id], info->entry);
     }
 }
@@ -1040,23 +1063,16 @@ static void mmix_virt_init(MachineState *machine)
         !mmix_virt_prepare_dump_fdt(vms, &error_fatal)) {
         return;
     }
+    memory_region_add_subregion(get_system_memory(), vms->ram.start,
+                                machine->ram);
+
     if (linux_info_ptr) {
-        memory_region_add_subregion(get_system_memory(), vms->ram.start,
-                                    machine->ram);
         if (!mmix_boot_payload_commit(
                 vms->boot_payload, memory_region_get_ram_ptr(machine->ram),
                 machine->ram_size, &error_fatal)) {
             return;
         }
-        error_setg(&error_fatal, "MMIX Linux direct boot payload committed; "
-                   "execution requires Linux entry support");
-        return;
-    }
-
-    memory_region_add_subregion(get_system_memory(), vms->ram.start,
-                                machine->ram);
-
-    if (image_info_ptr) {
+    } else if (image_info_ptr) {
         switch (image_info_ptr->image_type) {
         case MMIX_KERNEL_IMAGE_RAW:
             if (mmix_commit_raw_kernel(
