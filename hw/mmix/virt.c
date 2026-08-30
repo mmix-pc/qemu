@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
+#include "qemu/datadir.h"
 #include "qemu/error-report.h"
 #include "qemu/host-utils.h"
 #include "qemu/option.h"
@@ -22,6 +23,7 @@
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
 #include "system/block-backend-global-state.h"
+#include "system/block-backend-io.h"
 #include "system/blockdev.h"
 #include "system/reset.h"
 #include "system/runstate.h"
@@ -79,7 +81,9 @@ struct MMIXVirtMachineState {
     uint64_t argument_base;
     uint64_t argument_count;
     MMIXBootMode boot_mode;
-    char *pflash_backend_name[2];
+    char *pflash_backend_name[MMIX_VIRT_FLASH_BANK_COUNT];
+    BlockBackend *pflash_backend[MMIX_VIRT_FLASH_BANK_COUNT];
+    GBytes *bios_data;
     MMIXELFStartupABI elf_startup_abi;
     bool elf_startup_abi_explicit;
     MMIXMMOPlan *mmo_plan;
@@ -95,7 +99,9 @@ struct MMIXVirtMachineState {
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
 
 static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
-                                           unsigned int bank)
+                                           unsigned int bank,
+                                           BlockBackend *backend,
+                                           GBytes *bios_data)
 {
     static const uint64_t bases[MMIX_VIRT_FLASH_BANK_COUNT] = {
         MMIX_VIRT_FLASH0_BASE,
@@ -119,19 +125,33 @@ static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
     qdev_prop_set_uint16(dev, "id2", 0x00);
     qdev_prop_set_uint16(dev, "id3", 0x00);
     qdev_prop_set_string(dev, "name", name);
+    qdev_prop_set_bit(dev, "readonly", bank == 0);
+    if (backend) {
+        qdev_prop_set_drive(dev, "drive", backend);
+    }
 
     object_property_add_child(OBJECT(vms), name, OBJECT(dev));
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     memory = pflash_cfi01_get_memory(PFLASH_CFI01(dev));
-    memset(memory_region_get_ram_ptr(memory), 0xff,
-           MMIX_VIRT_FLASH_BANK_SIZE);
+    if (!backend) {
+        void *storage = memory_region_get_ram_ptr(memory);
+
+        memset(storage, 0xff, MMIX_VIRT_FLASH_BANK_SIZE);
+        if (bios_data) {
+            gsize size;
+            const void *data = g_bytes_get_data(bios_data, &size);
+
+            memcpy(storage, data, size);
+        }
+    }
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, bases[bank]);
     return PFLASH_CFI01(dev);
 }
 
 static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
                                              unsigned int bank,
-                                             bool *present, Error **errp)
+                                             BlockBackend **backend,
+                                             Error **errp)
 {
     const char *name = vms->pflash_backend_name[bank];
     DriveInfo *legacy = drive_get(IF_PFLASH, 0, bank);
@@ -143,13 +163,92 @@ static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
                    bank, bank);
         return false;
     }
-    if (name && !blk_by_name(name)) {
-        error_setg(errp, "MMIX pflash%u cannot find block backend '%s'",
-                   bank, name);
+    if (name) {
+        *backend = blk_by_name(name);
+        if (!*backend) {
+            error_setg(errp, "MMIX pflash%u cannot find block backend '%s'",
+                       bank, name);
+            return false;
+        }
+    } else {
+        *backend = legacy ? blk_by_legacy_dinfo(legacy) : NULL;
+    }
+
+    return true;
+}
+
+static bool mmix_virt_validate_pflash_backend(BlockBackend *backend,
+                                              unsigned int bank,
+                                              Error **errp)
+{
+    int64_t size;
+    bool writable;
+
+    if (!backend) {
+        return true;
+    }
+
+    size = blk_getlength(backend);
+    if (size < 0) {
+        error_setg(errp, "MMIX pflash%u could not determine backend size: %s",
+                   bank, strerror(-size));
+        return false;
+    }
+    if (size != MMIX_VIRT_FLASH_BANK_SIZE) {
+        error_setg(errp, "MMIX pflash%u backend has size 0x%" PRIx64
+                   "; required size is 0x%" PRIx64,
+                   bank, (uint64_t)size, MMIX_VIRT_FLASH_BANK_SIZE);
         return false;
     }
 
-    *present = name || legacy;
+    writable = blk_supports_write_perm(backend);
+    if (bank == 0 && writable) {
+        error_setg(errp, "MMIX pflash0 backend must be read-only");
+        return false;
+    }
+    if (bank == 1 && !writable) {
+        error_setg(errp, "MMIX pflash1 backend must be writable");
+        return false;
+    }
+    return true;
+}
+
+static bool mmix_virt_load_bios(MMIXVirtMachineState *vms,
+                                const char *name, Error **errp)
+{
+    g_autofree char *filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, name);
+    g_autofree char *contents = NULL;
+    g_autoptr(GError) gerror = NULL;
+    gsize size;
+
+    if (!filename) {
+        error_setg(errp, "could not find MMIX firmware image '%s'", name);
+        return false;
+    }
+    if (!g_file_get_contents(filename, &contents, &size, &gerror)) {
+        error_setg(errp, "could not read MMIX firmware image '%s': %s",
+                   name, gerror->message);
+        return false;
+    }
+    if (size == 0) {
+        error_setg(errp, "MMIX -bios image '%s' is empty", name);
+        return false;
+    }
+    if (size > MMIX_VIRT_FLASH_BANK_SIZE) {
+        error_setg(errp, "MMIX -bios image '%s' has size 0x%" G_GSIZE_MODIFIER
+                   "x; maximum size is 0x%" PRIx64,
+                   name, size, MMIX_VIRT_FLASH_BANK_SIZE);
+        return false;
+    }
+    if (size % 4) {
+        error_setg(errp, "MMIX -bios image '%s' has size 0x%" G_GSIZE_MODIFIER
+                   "x; size must be a multiple of 4 bytes",
+                   name, size);
+        return false;
+    }
+
+    g_clear_pointer(&vms->bios_data, g_bytes_unref);
+    vms->bios_data = g_bytes_new_take(g_steal_pointer(&contents), size);
     return true;
 }
 
@@ -159,23 +258,34 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
     MachineState *machine = MACHINE(vms);
     bool has_bios = machine->firmware &&
                     strcmp(machine->firmware, "none");
-    bool has_pflash[2];
+    BlockBackend *pflash[MMIX_VIRT_FLASH_BANK_COUNT];
     bool firmware;
+    unsigned int i;
 
-    if (!mmix_virt_resolve_pflash_backend(vms, 0, &has_pflash[0], errp) ||
-        !mmix_virt_resolve_pflash_backend(vms, 1, &has_pflash[1], errp)) {
-        return false;
+    for (i = 0; i < MMIX_VIRT_FLASH_BANK_COUNT; i++) {
+        if (!mmix_virt_resolve_pflash_backend(vms, i, &pflash[i], errp)) {
+            return false;
+        }
+        vms->pflash_backend[i] = pflash[i];
     }
-    if (has_bios && has_pflash[0]) {
+    if (has_bios && pflash[0]) {
         error_setg(errp, "MMIX executable firmware cannot be supplied by "
                    "both -bios and pflash0");
         return false;
     }
 
-    firmware = has_bios || has_pflash[0];
-    if (has_pflash[1] && !firmware) {
+    firmware = has_bios || pflash[0];
+    if (pflash[1] && !firmware) {
         error_setg(errp, "MMIX pflash1 requires executable firmware from "
                    "-bios or pflash0");
+        return false;
+    }
+    for (i = 0; i < MMIX_VIRT_FLASH_BANK_COUNT; i++) {
+        if (!mmix_virt_validate_pflash_backend(pflash[i], i, errp)) {
+            return false;
+        }
+    }
+    if (has_bios && !mmix_virt_load_bios(vms, machine->firmware, errp)) {
         return false;
     }
     if (firmware && machine->kernel_filename) {
@@ -1224,8 +1334,10 @@ static void mmix_virt_init(MachineState *machine)
     }
 
     for (i = 0; i < MMIX_VIRT_FLASH_BANK_COUNT; i++) {
-        vms->flash[i] = mmix_virt_create_flash(vms, i);
+        vms->flash[i] = mmix_virt_create_flash(
+            vms, i, vms->pflash_backend[i], i == 0 ? vms->bios_data : NULL);
     }
+    g_clear_pointer(&vms->bios_data, g_bytes_unref);
 
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
@@ -1432,6 +1544,7 @@ static void mmix_virt_instance_finalize(Object *obj)
     mmix_boot_payload_free(vms->boot_payload);
     g_clear_pointer(&vms->argument_data, g_bytes_unref);
     g_clear_pointer(&vms->fdt, g_bytes_unref);
+    g_clear_pointer(&vms->bios_data, g_bytes_unref);
     mmix_sparse_memory_free(vms->mmo_memory);
     mmix_mmo_hosted_plan_free(vms->mmo_hosted_plan);
     mmix_mmo_plan_free(vms->mmo_plan);

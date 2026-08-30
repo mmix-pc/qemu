@@ -11,10 +11,15 @@ from lib.execution import run_no_image_mttcg_test, run_paused_machine
 
 
 MMO_PREAMBLE = bytes((0x98, 0x09, 0x01, 0x01))
+FLASH_SIZE = 64 * 1024 * 1024
 
 
 def _pflash_drive(path, unit):
-    return ("-drive", f"if=pflash,unit={unit},format=raw,file={path}")
+    readonly = ",readonly=on" if unit == 0 else ""
+    return (
+        "-drive",
+        f"if=pflash,unit={unit},format=raw,file={path}{readonly}",
+    )
 
 
 def _firmware_files(workdir, name):
@@ -23,9 +28,27 @@ def _firmware_files(workdir, name):
     for role in ("bios", "pflash0", "pflash1", "kernel", "initrd"):
         path = workdir / f"firmware-preflight-{name}-{role}.bin"
         contents = f"{name}-{role}".encode("ascii")
+        if role == "bios":
+            contents += bytes(-len(contents) % 4)
         path.write_bytes(contents)
+        if role in ("pflash0", "pflash1"):
+            with path.open("r+b") as stream:
+                stream.truncate(FLASH_SIZE)
         files[role] = path
     return files
+
+
+def _file_states(files):
+    states = {}
+
+    for role, path in files.items():
+        stat = path.stat()
+        with path.open("rb") as stream:
+            first = stream.read(64)
+            stream.seek(max(0, stat.st_size - 64))
+            last = stream.read(64)
+        states[role] = (stat.st_size, stat.st_mtime_ns, first, last)
+    return states
 
 
 def _firmware_args(files, *, bios=False, bios_none=False, pflash0=False,
@@ -52,7 +75,8 @@ def _firmware_args(files, *, bios=False, bios_none=False, pflash0=False,
 def _machine_pflash_configuration(files, *, bios_none=False, pflash1=False):
     properties = ["virt", "pflash0=code"]
     args = [
-        "-drive", f"if=none,id=code,format=raw,file={files['pflash0']}",
+        "-drive", f"if=none,id=code,format=raw,readonly=on,"
+                  f"file={files['pflash0']}",
     ]
 
     if bios_none:
@@ -85,15 +109,17 @@ def test_no_image_mttcg_startup(qemu):
     (
         ("bios", {"bios": True}),
         ("bios-payloads", {"bios": True, "payloads": True}),
+        ("legacy-pflash0", {"pflash0": True}),
+        ("legacy-pflash-banks", {"pflash0": True, "pflash1": True}),
     ),
 )
 def test_firmware_preflight_accepts_valid_inputs(qemu, workdir, name, options):
     files = _firmware_files(workdir, name)
-    before = {role: path.read_bytes() for role, path in files.items()}
+    before = _file_states(files)
 
     run_paused_machine(qemu, qemu_args=_firmware_args(files, **options))
 
-    assert {role: path.read_bytes() for role, path in files.items()} == before
+    assert _file_states(files) == before
 
 
 @pytest.mark.parametrize(
@@ -108,17 +134,17 @@ def test_firmware_preflight_accepts_machine_pflash_properties(
     qemu, workdir, name, options
 ):
     files = _firmware_files(workdir, name)
-    before = {role: path.read_bytes() for role, path in files.items()}
+    before = _file_states(files)
     machine, args = _machine_pflash_configuration(files, **options)
 
     run_paused_machine(qemu, machine=machine, qemu_args=args)
 
-    assert {role: path.read_bytes() for role, path in files.items()} == before
+    assert _file_states(files) == before
 
 
 def test_firmware_preflight_accepts_bios_with_machine_pflash1(qemu, workdir):
     files = _firmware_files(workdir, "bios-pflash1")
-    before = {role: path.read_bytes() for role, path in files.items()}
+    before = _file_states(files)
     args = (
         "-drive", f"if=none,id=vars,format=raw,file={files['pflash1']}",
         "-bios", str(files["bios"]),
@@ -126,7 +152,7 @@ def test_firmware_preflight_accepts_bios_with_machine_pflash1(qemu, workdir):
 
     run_paused_machine(qemu, machine="virt,pflash1=vars", qemu_args=args)
 
-    assert {role: path.read_bytes() for role, path in files.items()} == before
+    assert _file_states(files) == before
 
 
 @pytest.mark.parametrize(
@@ -160,13 +186,13 @@ def test_firmware_preflight_rejects_conflicts(
     qemu, workdir, name, options, diagnostic
 ):
     files = _firmware_files(workdir, name)
-    before = {role: path.read_bytes() for role, path in files.items()}
+    before = _file_states(files)
 
     result = _run_preflight_failure(qemu, _firmware_args(files, **options))
 
     assert result.returncode != 0
     assert diagnostic in result.stderr
-    assert {role: path.read_bytes() for role, path in files.items()} == before
+    assert _file_states(files) == before
 
 
 def test_firmware_preflight_rejects_mmo_payload(qemu, workdir):
