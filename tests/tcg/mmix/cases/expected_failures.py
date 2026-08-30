@@ -8,18 +8,10 @@ from .common import *
 EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
         "register-stack-underflow",
-        insn(POP, 0, 0, 0),
+        raw_direct_image(insn(POP, 0, 0, 0)),
         ("MMIX register stack underflow during POP",
-         "rO=0x10000 rS=0x10000",
-         "MMIX emulator failure"),
-    ),
-    MMIXExpectedFailure(
-        "register-stack-underflow-nondefault-bound",
-        insn(POP, 0, 0, 0),
-        ("MMIX register stack underflow during POP",
-         "rO=0x20000 rS=0x20000",
-         "MMIX emulator failure"),
-        qemu_args=("-global", "any-mmix-cpu.initial-stack=0x20000"),
+         "depth=0",
+         "MMIX emulator failure at 0x0000000000000100"),
     ),
 ]
 

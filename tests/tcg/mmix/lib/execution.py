@@ -125,12 +125,26 @@ def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
     if log.exists():
         log.unlink()
 
+    command = build_kernel_command(qemu, image, trace="unimp,int", log=log,
+                                   qemu_args=qemu_args)
+    process = subprocess.Popen(command)
+    deadline = time.monotonic() + 2
+
     try:
-        run_kernel(qemu, image, trace="unimp,int", log=log,
-                   qemu_args=qemu_args,
-                   check=False, timeout=2)
-    except subprocess.TimeoutExpired:
-        pass
+        while process.poll() is None and time.monotonic() < deadline:
+            if log.exists():
+                log_text = log.read_text(encoding="utf-8")
+                if all(pattern in log_text for pattern in test.patterns):
+                    break
+            time.sleep(0.001)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
     if not log.exists():
         raise AssertionError(f"{test.name}: missing log")
