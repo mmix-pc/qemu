@@ -24,6 +24,8 @@ typedef struct MMIXFDTConfig {
     bool has_framebuffer;
     /* Page-rounded backing reservation, not just the visible pixel bytes. */
     MMIXPhysRange framebuffer;
+    bool has_flash;
+    bool has_fw_cfg;
     bool linux_direct;
     bool has_initrd;
     uint64_t initrd_size;

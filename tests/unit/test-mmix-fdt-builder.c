@@ -465,6 +465,42 @@ static void test_deterministic_output(void)
     g_assert_true(g_bytes_equal(first, second));
 }
 
+static void test_firmware_visible_devices(void)
+{
+    const MMIXPhysRange flash[] = {
+        {
+            .start = MMIX_VIRT_FLASH0_BASE,
+            .end = MMIX_VIRT_FLASH0_BASE + MMIX_VIRT_FLASH_BANK_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_FLASH1_BASE,
+            .end = MMIX_VIRT_FLASH1_BASE + MMIX_VIRT_FLASH_BANK_SIZE,
+        },
+    };
+    const MMIXPhysRange fw_cfg = {
+        .start = MMIX_VIRT_FW_CFG_BASE,
+        .end = MMIX_VIRT_FW_CFG_BASE + MMIX_VIRT_FW_CFG_REGISTER_SIZE,
+    };
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autoptr(GBytes) blob;
+    const void *fdt;
+
+    config.has_flash = true;
+    config.has_fw_cfg = true;
+    blob = build_configured_fdt(&config);
+    fdt = g_bytes_get_data(blob, NULL);
+
+    assert_string(fdt, "/flash@1000000000000", "compatible",
+                  "cfi-flash");
+    assert_ranges(fdt, "/flash@1000000000000", flash,
+                  G_N_ELEMENTS(flash));
+    assert_u32(fdt, "/flash@1000000000000", "bank-width", 4);
+    assert_string(fdt, "/fw-cfg@1000014000000", "compatible",
+                  "qemu,fw-cfg-mmio");
+    assert_range(fdt, "/fw-cfg@1000014000000", &fw_cfg);
+    assert_empty(fdt, "/fw-cfg@1000014000000", "dma-coherent");
+}
+
 static void test_single_cpu_with_framebuffer(void)
 {
     const MMIXPhysRange framebuffer = {
@@ -826,6 +862,8 @@ int main(int argc, char **argv)
                     test_large_ram_and_command_line);
     g_test_add_func("/mmix/fdt-builder/deterministic-output",
                     test_deterministic_output);
+    g_test_add_func("/mmix/fdt-builder/firmware-visible-devices",
+                    test_firmware_visible_devices);
     g_test_add_func("/mmix/fdt-builder/single-cpu-framebuffer",
                     test_single_cpu_with_framebuffer);
     g_test_add_func("/mmix/fdt-builder/maximum-cpu-topology",

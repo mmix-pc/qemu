@@ -655,6 +655,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
             .cpu_stacks = fdt_stacks,
             .has_framebuffer = true,
             .framebuffer = framebuffer->content,
+            .has_flash = true,
             .linux_direct = true,
             .has_initrd = has_initrd,
             .initrd_size = has_initrd ?
@@ -837,10 +838,12 @@ static bool mmix_virt_prepare_dump_fdt(MMIXVirtMachineState *vms,
             .start = vms->framebuffer_base,
             .end = vms->framebuffer_base + vms->framebuffer_size,
         },
+        .has_flash = true,
     };
     unsigned int i;
 
-    if (!machine->dumpdtb) {
+    if (!machine->dumpdtb &&
+        vms->boot_mode != MMIX_BOOT_MODE_FIRMWARE) {
         return true;
     }
     if (vms->mmo_memory) {
@@ -857,7 +860,9 @@ static bool mmix_virt_prepare_dump_fdt(MMIXVirtMachineState *vms,
     if (!mmix_fdt_build(&config, &vms->fdt, errp)) {
         return false;
     }
-    machine->fdt = (void *)g_bytes_get_data(vms->fdt, NULL);
+    if (machine->dumpdtb) {
+        machine->fdt = (void *)g_bytes_get_data(vms->fdt, NULL);
+    }
     return true;
 }
 

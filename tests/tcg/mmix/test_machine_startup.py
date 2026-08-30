@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+from cases.common import elf64_image
 from lib.execution import (
     run_firmware_entry_state_test,
     run_no_image_mttcg_test,
@@ -270,3 +271,60 @@ def test_canonical_dtb_dump_is_deterministic(qemu, workdir):
     assert struct.unpack(">I", blobs[0][:4])[0] == 0xD00DFEED
     assert struct.unpack(">I", blobs[0][4:8])[0] == len(blobs[0])
     assert len(blobs[0]) <= 2 * 1024 * 1024
+
+
+def test_firmware_dtb_matches_other_boot_modes(qemu, workdir):
+    bios = workdir / "firmware-fdt.bin"
+    kernel = workdir / "direct-fdt.elf"
+    bios.write_bytes(halt())
+    kernel.write_bytes(elf64_image(0, halt()))
+    blobs = []
+
+    for name, machine, args in (
+        ("erased", "virt", ()),
+        ("direct", "virt,elf-startup-abi=linux",
+         ("-kernel", str(kernel))),
+        ("firmware", "virt", ("-bios", str(bios))),
+    ):
+        dtb = workdir / f"canonical-{name}.dtb"
+        subprocess.run(
+            [qemu, "-machine", f"{machine},dumpdtb={dtb}",
+             "-display", "none",
+             "-monitor", "none", "-serial", "none", *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        blobs.append(dtb.read_bytes())
+
+    assert blobs[0] == blobs[1] == blobs[2]
+
+
+def test_firmware_dtb_is_preplacement_description(qemu, workdir):
+    bios = workdir / "firmware-preplacement-fdt.bin"
+    kernel = workdir / "firmware-payload.bin"
+    initrd = workdir / "firmware-initrd.bin"
+    dtb = workdir / "firmware-preplacement.dtb"
+    command_line = b"firmware keeps payload placement"
+
+    bios.write_bytes(halt())
+    kernel.write_bytes(b"opaque kernel payload")
+    initrd.write_bytes(b"opaque initrd payload")
+    subprocess.run(
+        [qemu, "-machine", f"virt,dumpdtb={dtb}", "-display", "none",
+         "-monitor", "none", "-serial", "none", "-bios", bios,
+         "-kernel", kernel, "-initrd", initrd, "-append",
+         command_line.decode("ascii")],
+        capture_output=True,
+        check=True,
+    )
+
+    blob = dtb.read_bytes()
+    header = struct.unpack_from(">10I", blob)
+    reservation_offset = header[4]
+    first_reservation = struct.unpack_from(">QQ", blob, reservation_offset)
+
+    assert command_line + b"\0" in blob
+    assert b"linux,initrd-start\0" not in blob
+    assert b"linux,initrd-end\0" not in blob
+    assert first_reservation == (0, 0)

@@ -31,6 +31,9 @@ enum {
 };
 
 #define MMIX_UART_BASE UINT64_C(0x0001000010000000)
+#define MMIX_FLASH0_BASE UINT64_C(0x0001000000000000)
+#define MMIX_FLASH1_BASE UINT64_C(0x0001000004000000)
+#define MMIX_FLASH_BANK_SIZE UINT64_C(0x4000000)
 #define MMIX_FRAMEBUFFER_CONTROL_BASE UINT64_C(0x0001000018000000)
 #define MMIX_TIMER_BASE UINT64_C(0x0001000020000000)
 #define MMIX_TIMER_CONTEXT_BASE UINT64_C(0x0001000020010000)
@@ -389,6 +392,7 @@ static void assert_interrupt_topology(QTestState *qts, const void *fdt,
 static void assert_active_devices(QTestState *qts, const void *fdt,
                                   uint32_t intc_phandle)
 {
+    const char *flash = "/flash@1000000000000";
     const char *uart = "/soc/serial@1000010000000";
     const char *control = "/soc/framebuffer@1000018000000";
     uint64_t framebuffer = qtest_readq(
@@ -411,6 +415,12 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
     assert_u32(fdt, uart, "interrupt-parent", intc_phandle);
     assert_string(fdt, "/aliases", "serial0", uart);
     assert_string(fdt, "/chosen", "stdout-path", "serial0:115200n8");
+
+    assert_string(fdt, flash, "compatible", "cfi-flash");
+    assert_two_ranges(fdt, flash,
+                      MMIX_FLASH0_BASE, MMIX_FLASH_BANK_SIZE,
+                      MMIX_FLASH1_BASE, MMIX_FLASH_BANK_SIZE);
+    assert_u32(fdt, flash, "bank-width", 4);
 
     framebuffer_phandle = get_u32(fdt, memory, "phandle");
     assert_string(fdt, memory, "compatible",
@@ -443,7 +453,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
     g_assert_cmpint(fdt_path_offset(fdt,
                                    "/soc/virtio_mmio@1000040200000"), ==,
                     -FDT_ERR_NOTFOUND);
-    g_assert_cmpint(fdt_path_offset(fdt, "/flash@1000000000000"), ==,
+    g_assert_cmpint(fdt_path_offset(fdt, "/fw-cfg@1000014000000"), ==,
                     -FDT_ERR_NOTFOUND);
     g_assert_cmpint(fdt_path_offset(fdt, "/pcie@1000100000000"), ==,
                     -FDT_ERR_NOTFOUND);

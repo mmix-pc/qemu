@@ -620,6 +620,59 @@ static bool mmix_fdt_add_active_devices(void *fdt,
            mmix_fdt_add_uart_node(fdt, config, errp);
 }
 
+static bool mmix_fdt_add_flash_node(void *fdt,
+                                    const MMIXFDTConfig *config,
+                                    Error **errp)
+{
+    const MMIXPhysRange ranges[] = {
+        {
+            .start = MMIX_VIRT_FLASH0_BASE,
+            .end = MMIX_VIRT_FLASH0_BASE + MMIX_VIRT_FLASH_BANK_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_FLASH1_BASE,
+            .end = MMIX_VIRT_FLASH1_BASE + MMIX_VIRT_FLASH_BANK_SIZE,
+        },
+    };
+    g_autofree char *name = NULL;
+    int node;
+
+    if (!config->has_flash) {
+        return true;
+    }
+    name = g_strdup_printf("flash@%" PRIx64, MMIX_VIRT_FLASH0_BASE);
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/"), name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible", "cfi-flash",
+                               errp) &&
+           mmix_fdt_set_u64_ranges(fdt, node, "reg", ranges,
+                                   G_N_ELEMENTS(ranges), errp) &&
+           mmix_fdt_set_u32(fdt, node, "bank-width", 4, errp);
+}
+
+static bool mmix_fdt_add_fw_cfg_node(void *fdt,
+                                     const MMIXFDTConfig *config,
+                                     Error **errp)
+{
+    const MMIXPhysRange range = {
+        .start = MMIX_VIRT_FW_CFG_BASE,
+        .end = MMIX_VIRT_FW_CFG_BASE + MMIX_VIRT_FW_CFG_REGISTER_SIZE,
+    };
+    g_autofree char *name = NULL;
+    int node;
+
+    if (!config->has_fw_cfg) {
+        return true;
+    }
+    name = g_strdup_printf("fw-cfg@%" PRIx64, MMIX_VIRT_FW_CFG_BASE);
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/"), name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "qemu,fw-cfg-mmio", errp) &&
+           mmix_fdt_set_u64_range(fdt, node, "reg", &range, errp) &&
+           mmix_fdt_set_empty(fdt, node, "dma-coherent", errp);
+}
+
 static bool mmix_fdt_add_foundation(void *fdt,
                                     const MMIXFDTConfig *config,
                                     Error **errp)
@@ -701,7 +754,9 @@ static bool mmix_fdt_add_foundation(void *fdt,
         !mmix_fdt_add_active_devices(fdt, config, errp)) {
         return false;
     }
-    return true;
+    /* Reverse insertion keeps the lower-address flash node first. */
+    return mmix_fdt_add_fw_cfg_node(fdt, config, errp) &&
+           mmix_fdt_add_flash_node(fdt, config, errp);
 }
 
 bool mmix_fdt_build(const MMIXFDTConfig *config, GBytes **result,
