@@ -2,14 +2,18 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import pathlib
 import struct
 import subprocess
+import sys
 
 import pytest
 
 from cases.common import ADDI, JMP, R0, R32, elf64_image, insn, jump
 from lib.execution import (
     run_firmware_entry_state_test,
+    run_firmware_handoff_test,
+    run_firmware_no_kernel_test,
     run_firmware_reset_and_snapshot_test,
     run_no_image_mttcg_test,
     run_paused_machine,
@@ -19,6 +23,7 @@ from lib.mmix_asm import halt
 
 MMO_PREAMBLE = bytes((0x98, 0x09, 0x01, 0x01))
 FLASH_SIZE = 64 * 1024 * 1024
+FIRMWARE_DATA = pathlib.Path(__file__).parent / "data" / "firmware"
 
 
 def _pflash_drive(path, unit):
@@ -143,6 +148,44 @@ def test_firmware_reset_and_snapshot_state(qemu, workdir):
     ))
 
     run_firmware_reset_and_snapshot_test(qemu, workdir, firmware)
+
+
+def test_firmware_fixture_is_reproducible():
+    subprocess.run(
+        [sys.executable, FIRMWARE_DATA / "build-fixtures.py", "--check"],
+        check=True,
+        timeout=10,
+    )
+
+
+@pytest.mark.parametrize(
+    "cpu_count,memory,initrd,command_line",
+    (
+        (1, "128M", False, None),
+        (2, "512M", True, None),
+        (2, "8G", True, "console=ttyS0 firmware fixture"),
+    ),
+)
+def test_firmware_loads_and_enters_next_stage(
+    qemu, workdir, cpu_count, memory, initrd, command_line
+):
+    run_firmware_handoff_test(
+        qemu,
+        workdir,
+        FIRMWARE_DATA / "mmix-virt-fw.bin",
+        FIRMWARE_DATA / "mmix-virt-kernel.bin",
+        cpu_count=cpu_count,
+        memory=memory,
+        initrd=initrd,
+        command_line=command_line,
+    )
+
+
+@pytest.mark.parametrize("cpu_count", (1, 2))
+def test_firmware_without_kernel_retains_control(qemu, workdir, cpu_count):
+    run_firmware_no_kernel_test(
+        qemu, workdir, FIRMWARE_DATA / "mmix-virt-fw.bin", cpu_count
+    )
 
 
 @pytest.mark.parametrize(

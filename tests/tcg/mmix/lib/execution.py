@@ -881,6 +881,159 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
                 path.unlink()
 
 
+def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
+                              cpu_count, memory, initrd=False,
+                              command_line=None):
+    fdt_address = 0x00100000
+    kernel_address = 0x00200000
+    record_address = 0x00300000
+    release_address = 0x00008000
+    success_address = 0x00300800
+    success_value = 0x4d4d495846574f4b
+    serial = workdir / f"firmware-handoff-{cpu_count}-{memory}.serial"
+    qtest_path = workdir / f"firmware-handoff-{cpu_count}-{memory}.sock"
+    initrd_path = workdir / f"firmware-handoff-{cpu_count}-{memory}.initrd"
+
+    for path in (serial, qtest_path, initrd_path):
+        if path.exists():
+            path.unlink()
+    args = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", str(cpu_count),
+        "-m", memory,
+        "-accel", "tcg,thread=multi",
+        "-bios", str(firmware),
+        "-kernel", str(kernel),
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", f"file:{serial}",
+        "-S",
+        "-qmp", "stdio",
+        "-qtest", f"unix:{qtest_path}",
+        "-qtest-log", "/dev/null",
+    ]
+    if initrd:
+        initrd_path.write_bytes(b"MMIX firmware initrd fixture\n")
+        args.extend(("-initrd", str(initrd_path)))
+    if command_line is not None:
+        args.extend(("-append", command_line))
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    process = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        _qmp_command(process, "cont")
+
+        deadline = time.monotonic() + 10
+        while _qtest_readq(qtest, success_address) != success_value:
+            if process.poll() is not None:
+                raise AssertionError("QEMU exited before firmware handoff")
+            if time.monotonic() >= deadline:
+                raise AssertionError("timed out waiting for firmware handoff")
+            time.sleep(0.01)
+        _qmp_command(process, "stop")
+
+        def select_fw_cfg(selector):
+            _qtest_command(qtest,
+                           f"writew {0x0001000014000008:#x} {selector:#x}")
+
+        def read_fw_cfg(size):
+            return bytes(
+                int(_qtest_command(
+                    qtest, f"readb {0x0001000014000000:#x}"
+                )[1], 0)
+                for _ in range(size)
+            )
+
+        select_fw_cfg(0x19)
+        count = int.from_bytes(read_fw_cfg(4), "big")
+        files = {}
+        for _ in range(count):
+            entry = read_fw_cfg(64)
+            name = entry[8:].split(b"\0", 1)[0].decode("ascii")
+            files[name] = (
+                int.from_bytes(entry[4:6], "big"),
+                int.from_bytes(entry[0:4], "big"),
+            )
+        fdt_selector, fdt_size = files["etc/fdt"]
+        select_fw_cfg(fdt_selector)
+        fdt = read_fw_cfg(fdt_size)
+
+        assert _qtest_read(qtest, fdt_address, fdt_size) == fdt
+        assert _qtest_read(qtest, kernel_address,
+                           kernel.stat().st_size) == kernel.read_bytes()
+        assert _qtest_readq(qtest, release_address) == fdt_address
+        stacks = []
+        for cpu in range(cpu_count):
+            record = record_address + cpu * 32
+            assert _qtest_readq(qtest, record) == cpu
+            assert _qtest_readq(qtest, record + 8) == fdt_address
+            assert _qtest_readq(qtest, record + 16) == 2
+            stack = _qtest_readq(qtest, record + 24)
+            assert stack != 0
+            stacks.append(stack)
+        assert len(set(stacks)) == cpu_count
+        assert serial.read_bytes() == b"MMIX firmware handoff\n"
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (qtest_path, initrd_path):
+            if path.exists():
+                path.unlink()
+
+
+def run_firmware_no_kernel_test(qemu, workdir, firmware, cpu_count):
+    serial = workdir / f"firmware-no-kernel-{cpu_count}.serial"
+
+    if serial.exists():
+        serial.unlink()
+    try:
+        subprocess.run(
+            [
+                qemu,
+                "-machine", "virt",
+                "-smp", str(cpu_count),
+                "-bios", firmware,
+                "-display", "none",
+                "-monitor", "none",
+                "-serial", f"file:{serial}",
+            ],
+            check=False,
+            timeout=0.25,
+        )
+        raise AssertionError("firmware without a kernel unexpectedly exited")
+    except subprocess.TimeoutExpired:
+        pass
+    assert serial.read_bytes() == b""
+
+
 def _qmp_start_paused(qemu, image, test):
     command = build_kernel_command(
         qemu,
