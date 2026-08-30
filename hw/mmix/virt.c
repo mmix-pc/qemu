@@ -918,6 +918,20 @@ static void mmix_virt_apply_linux_startup(
     cpu_set_pc(cs, info->entry);
 }
 
+static void mmix_virt_apply_firmware_startup(CPUState *cs,
+                                             unsigned int cpu_id)
+{
+    CPUMMIXState *env = &MMIX_CPU(cs)->env;
+
+    g_assert(env->flat_translation);
+    g_assert(env->sregs[MMIX_SREG_RK] == MMIX_INITIAL_RK);
+    g_assert(env->sregs[MMIX_SREG_RQ] == 0);
+
+    mmix_cpu_write_reg(env, 0, cpu_id);
+    g_assert(env->sregs[MMIX_SREG_RL] == 1);
+    cpu_set_pc(cs, MMIX_VIRT_FIRMWARE_RESET_PC);
+}
+
 static bool mmix_virt_reconstruct_mmo_memory(MMIXVirtMachineState *vms,
                                              Error **errp)
 {
@@ -995,6 +1009,8 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         } else if (linux_info) {
             mmix_virt_apply_linux_startup(vms->cpus[i], i, info,
                                           linux_info);
+        } else if (vms->boot_mode == MMIX_BOOT_MODE_FIRMWARE) {
+            mmix_virt_apply_firmware_startup(vms->cpus[i], i);
         }
         if (i == (info ? info->boot_cpu_id : 0) && vms->argument_data) {
             CPUMMIXState *env = &MMIX_CPU(vms->cpus[i])->env;

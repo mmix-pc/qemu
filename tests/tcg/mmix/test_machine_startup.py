@@ -7,7 +7,12 @@ import subprocess
 
 import pytest
 
-from lib.execution import run_no_image_mttcg_test, run_paused_machine
+from lib.execution import (
+    run_firmware_entry_state_test,
+    run_no_image_mttcg_test,
+    run_paused_machine,
+)
+from lib.mmix_asm import halt
 
 
 MMO_PREAMBLE = bytes((0x98, 0x09, 0x01, 0x01))
@@ -102,6 +107,31 @@ def _run_preflight_failure(qemu, args):
 
 def test_no_image_mttcg_startup(qemu):
     run_no_image_mttcg_test(qemu)
+
+
+@pytest.mark.parametrize("cpu_count", (1, 64))
+def test_firmware_cpu_entry_state(qemu, workdir, cpu_count):
+    bios = workdir / f"firmware-entry-{cpu_count}.bin"
+    bios.write_bytes(halt())
+
+    run_firmware_entry_state_test(qemu, bios, cpu_count)
+
+
+def test_firmware_executes_from_negative_flash_alias(qemu, workdir):
+    bios = workdir / "firmware-negative-alias.bin"
+    bios.write_bytes(halt())
+
+    result = subprocess.run(
+        [qemu, "-machine", "virt", "-bios", bios, "-semihosting",
+         "-display", "none", "-monitor", "none", "-serial", "none"],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr.decode(
+        "utf-8", errors="replace"
+    )
 
 
 @pytest.mark.parametrize(

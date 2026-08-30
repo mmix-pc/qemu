@@ -532,6 +532,121 @@ def run_no_image_mttcg_test(qemu):
         raise
 
 
+def _hmp_special_registers(dump):
+    return {
+        name: int(value, 16)
+        for name, value in re.findall(
+            r"\b(r[A-Z]{1,2})\s*=0x([0-9a-fA-F]+)", dump
+        )
+    }
+
+
+def _hmp_general_registers(dump):
+    return {
+        int(reg): int(value, 16)
+        for reg, value in re.findall(
+            r"\br(\d+)\s*=0x([0-9a-fA-F]+)", dump
+        )
+    }
+
+
+def run_firmware_entry_state_test(qemu, bios, cpu_count):
+    command = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", str(cpu_count),
+        "-accel", "tcg,thread=multi",
+        "-bios", str(bios),
+        "-display", "none",
+        "-serial", "none",
+        "-S",
+        "-qmp", "stdio",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        if len(cpus) != cpu_count:
+            raise AssertionError(
+                f"expected {cpu_count} firmware CPUs, got {len(cpus)}"
+            )
+
+        stacks = [
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(cpu_count)
+        ]
+        if len(set(stacks)) != cpu_count or any(
+            stack % 0x2000 for stack in stacks
+        ):
+            raise AssertionError(
+                f"invalid per-CPU firmware stacks {stacks}"
+            )
+
+        special_defaults = {
+            "rG": 32,
+            "rL": 1,
+            "rT": 0x8000000500000000,
+            "rTT": 0x8000000600000000,
+            "rV": 0x369C200400000000,
+        }
+        for cpu, stack in enumerate(stacks):
+            dump = _hmp_register_dump(process, cpu)
+            if _hmp_register_value(dump, "pc=0x") != 0x8001000000000000:
+                raise AssertionError(f"CPU {cpu} firmware PC mismatch")
+            if _hmp_register_value(dump, "npc=0x") != 0x8001000000000004:
+                raise AssertionError(f"CPU {cpu} firmware npc mismatch")
+
+            regs = _hmp_general_registers(dump)
+            expected_regs = {reg: 0 for reg in range(256)}
+            expected_regs[0] = cpu
+            if regs != expected_regs:
+                raise AssertionError(
+                    f"CPU {cpu} firmware general-register mismatch"
+                )
+
+            sregs = _hmp_special_registers(dump)
+            expected_sregs = {
+                name: 0
+                for name in (
+                    "rB rD rE rH rJ rM rR rBB rC rN rO rS rI rT rTT "
+                    "rK rQ rU rV rG rL rA rF rP rW rX rY rZ rWW rXX "
+                    "rYY rZZ"
+                ).split()
+            }
+            expected_sregs.update(special_defaults)
+            expected_sregs["rO"] = stack
+            expected_sregs["rS"] = stack
+            if sregs != expected_sregs:
+                raise AssertionError(
+                    f"CPU {cpu} firmware special-register mismatch"
+                )
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
 def _qmp_start_paused(qemu, image, test):
     command = build_kernel_command(
         qemu,
