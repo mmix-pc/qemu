@@ -13,6 +13,7 @@ from .smp import (
     smp_elf_image,
     smp_emit_unconditional_branch,
     smp_load,
+    smp_cpu_id_from_stack,
     smp_store,
     smp_sync,
 )
@@ -205,7 +206,7 @@ def smp_contending_shootdown_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *set_octa(R40, STRESS_STATE),
         wyde(SETL, R41, 1),

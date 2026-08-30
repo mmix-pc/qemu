@@ -302,6 +302,7 @@ qtests_riscv64 = ['riscv-csr-test'] + \
 qtests_hexagon = ['boot-serial-test']
 
 qtests_mmix = [
+  'mmix-fdt-test',
   'mmix-framebuffer-test',
   'mmix-intc-test',
   'mmix-ipi-test',
@@ -411,6 +412,7 @@ qtests = {
   'erst-test': files('erst-test.c'),
   'ivshmem-test': [rt, '../../contrib/ivshmem-server/ivshmem-server.c'],
   'migration-test': test_migration_files + migration_tls_files + migration_colo_files,
+  'mmix-fdt-test': [fdt],
   'pxe-test': files('boot-sector.c'),
   'pnv-xive2-test': files('pnv-xive2-common.c', 'pnv-xive2-flush-sync.c',
                           'pnv-xive2-nvpg_bar.c'),

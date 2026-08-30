@@ -7,6 +7,39 @@
 #include "qemu/osdep.h"
 #include "hw/mmix/boot-payload.h"
 #include "qapi/error.h"
+#include "system/memory.h"
+
+static uint8_t *test_address_space_ram;
+static size_t test_address_space_size;
+
+MemTxResult address_space_write(const AddressSpace *as, hwaddr addr,
+                                MemTxAttrs attrs, const void *buf,
+                                hwaddr len)
+{
+    g_assert_nonnull(as);
+    g_assert_cmphex(attrs.requester_id, ==,
+                    MEMTXATTRS_UNSPECIFIED.requester_id);
+    if (addr > test_address_space_size ||
+        len > test_address_space_size - addr) {
+        return MEMTX_ERROR;
+    }
+    memcpy(test_address_space_ram + addr, buf, len);
+    return MEMTX_OK;
+}
+
+MemTxResult address_space_set(const AddressSpace *as, hwaddr addr,
+                              uint8_t value, hwaddr len, MemTxAttrs attrs)
+{
+    g_assert_nonnull(as);
+    g_assert_cmphex(attrs.requester_id, ==,
+                    MEMTXATTRS_UNSPECIFIED.requester_id);
+    if (addr > test_address_space_size ||
+        len > test_address_space_size - addr) {
+        return MEMTX_ERROR;
+    }
+    memset(test_address_space_ram + addr, value, len);
+    return MEMTX_OK;
+}
 
 static void test_commit_exact_contents(void)
 {
@@ -64,6 +97,31 @@ static void test_rejects_invalid_entries_without_writes(void)
     mmix_boot_payload_free(payload);
 }
 
+static void test_commit_address_space(void)
+{
+    static const uint8_t bytes[] = { 0x11, 0x22, 0x33 };
+    g_autoptr(GBytes) data = g_bytes_new_static(bytes, sizeof(bytes));
+    g_autofree uint8_t *ram = g_malloc0(32);
+    MMIXBootPayload *payload = mmix_boot_payload_new(32);
+    AddressSpace *address_space = (AddressSpace *)payload;
+
+    memset(ram, 0xaa, 32);
+    test_address_space_ram = ram;
+    test_address_space_size = 32;
+    g_assert_true(mmix_boot_payload_add(payload, "segment", 8, data, 8,
+                                       &error_abort));
+    g_assert_true(mmix_boot_payload_commit_address_space(
+                      payload, address_space, 32, &error_abort));
+    g_assert_cmpmem(ram + 8, sizeof(bytes), bytes, sizeof(bytes));
+    g_assert_cmphex(ram[11], ==, 0);
+    g_assert_cmphex(ram[15], ==, 0);
+    g_assert_cmphex(ram[16], ==, 0xaa);
+
+    test_address_space_ram = NULL;
+    test_address_space_size = 0;
+    mmix_boot_payload_free(payload);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -71,5 +129,7 @@ int main(int argc, char **argv)
                     test_commit_exact_contents);
     g_test_add_func("/mmix/boot-payload/reject-before-write",
                     test_rejects_invalid_entries_without_writes);
+    g_test_add_func("/mmix/boot-payload/commit-address-space",
+                    test_commit_address_space);
     return g_test_run();
 }

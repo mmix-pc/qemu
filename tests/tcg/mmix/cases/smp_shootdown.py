@@ -8,6 +8,7 @@ import dataclasses
 
 from .common import *
 from .smp import (
+    SMP_CPU_ID_STACK_PHYS,
     SMPProgram,
     SMP_ENTRY,
     SMP_WAIT_LIMIT,
@@ -17,6 +18,7 @@ from .smp import (
     smp_emit_unconditional_branch,
     smp_emit_wait_equal,
     smp_load,
+    smp_cpu_id_from_stack,
     smp_store,
     smp_sync,
 )
@@ -178,6 +180,8 @@ SMP_SHOOTDOWN_ROUTINE_B = 0x2222
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPShootdownTest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
+    main_start = SMP_ENTRY
     name: str
     image: bytes
     main_end: int
@@ -261,6 +265,8 @@ class MMIXSMPShootdownTest:
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPExpectedMemoryTest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
+    main_start = SMP_ENTRY
     name: str
     image: bytes
     main_end: int
@@ -596,7 +602,7 @@ def smp_remote_data_shootdown_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *set_octa(R40, SMP_SHOOTDOWN_STATE),
         *set_octa(R41, SMP_SHOOTDOWN_HISTORY),
@@ -948,7 +954,7 @@ def smp_data_permission_shootdown_program():
     )
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *set_octa(R40, SMP_SHOOTDOWN_STATE),
         wyde(SETL, R42, 1),
@@ -1124,7 +1130,6 @@ def smp_data_permission_shootdown_program():
     main = program.build()
     read_load = smp_load(R82, R43, 0)
     write_store = smp_store(R89, R43, 0)
-    cpu1_stack = INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE
     read_ipi = SMP_SHOOTDOWN_PERMISSION_PHYS + SMP_SHOOTDOWN_PERMISSION_READ_IPI
     read_fault = (
         SMP_SHOOTDOWN_PERMISSION_PHYS + SMP_SHOOTDOWN_PERMISSION_READ_FAULT
@@ -1156,8 +1161,6 @@ def smp_data_permission_shootdown_program():
         (read_ipi + SMP_SHOOTDOWN_SNAPSHOT_RYY, 0),
         (read_ipi + SMP_SHOOTDOWN_SNAPSHOT_RZZ, 0),
         (read_ipi + SMP_SHOOTDOWN_SNAPSHOT_RBB, SMP_SHOOTDOWN_SENTINEL),
-        (read_ipi + SMP_SHOOTDOWN_SNAPSHOT_RO, cpu1_stack),
-        (read_ipi + SMP_SHOOTDOWN_SNAPSHOT_RS, cpu1_stack),
         (read_fault + SMP_SHOOTDOWN_SNAPSHOT_KIND,
          SMP_SHOOTDOWN_TRAP_KIND_PROGRAM),
         (read_fault + SMP_SHOOTDOWN_SNAPSHOT_COUNT, 1),
@@ -1171,8 +1174,6 @@ def smp_data_permission_shootdown_program():
          SMP_SHOOTDOWN_VIRTUAL),
         (read_fault + SMP_SHOOTDOWN_SNAPSHOT_RZZ, 0),
         (read_fault + SMP_SHOOTDOWN_SNAPSHOT_RBB, SMP_SHOOTDOWN_SENTINEL),
-        (read_fault + SMP_SHOOTDOWN_SNAPSHOT_RO, cpu1_stack),
-        (read_fault + SMP_SHOOTDOWN_SNAPSHOT_RS, cpu1_stack),
         (write_fault + SMP_SHOOTDOWN_SNAPSHOT_KIND,
          SMP_SHOOTDOWN_TRAP_KIND_PROGRAM),
         (write_fault + SMP_SHOOTDOWN_SNAPSHOT_COUNT, 2),
@@ -1188,8 +1189,6 @@ def smp_data_permission_shootdown_program():
          0xdeadbeefdeadbeef),
         (write_fault + SMP_SHOOTDOWN_SNAPSHOT_RBB,
          SMP_SHOOTDOWN_SENTINEL),
-        (write_fault + SMP_SHOOTDOWN_SNAPSHOT_RO, cpu1_stack),
-        (write_fault + SMP_SHOOTDOWN_SNAPSHOT_RS, cpu1_stack),
     ]
     masked = (
         (read_ipi + SMP_SHOOTDOWN_SNAPSHOT_RQ, RQ_IPI, RQ_IPI),
@@ -1259,7 +1258,7 @@ def smp_instruction_shootdown_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *set_octa(R40, SMP_SHOOTDOWN_STATE),
         wyde(SETL, R42, 1),
@@ -1462,7 +1461,6 @@ def smp_instruction_shootdown_program():
         insn(GO, R111, R100, R254),
     ])
     fault = SMP_SHOOTDOWN_INSTRUCTION_PHYS + SMP_SHOOTDOWN_INSN_EXEC_FAULT
-    cpu1_stack = INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE
     expected = (
         (SMP_SHOOTDOWN_INSTRUCTION_PHYS + SMP_SHOOTDOWN_INSN_STALE_A,
          SMP_SHOOTDOWN_ROUTINE_A),
@@ -1496,8 +1494,6 @@ def smp_instruction_shootdown_program():
         (fault + SMP_SHOOTDOWN_SNAPSHOT_RYY, 0),
         (fault + SMP_SHOOTDOWN_SNAPSHOT_RZZ, 0),
         (fault + SMP_SHOOTDOWN_SNAPSHOT_RBB, SMP_SHOOTDOWN_SENTINEL),
-        (fault + SMP_SHOOTDOWN_SNAPSHOT_RO, cpu1_stack),
-        (fault + SMP_SHOOTDOWN_SNAPSHOT_RS, cpu1_stack),
     )
     return MMIXSMPExpectedMemoryTest(
         name="smp-multi-thread-instruction-shootdown",

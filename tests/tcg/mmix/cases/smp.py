@@ -17,6 +17,8 @@ SMP_MAILBOX_SLOT_SIZE = 0x40
 SMP_WAIT_LIMIT = 1 << 28
 SMP_TIMEOUT_WAIT_LIMIT = 1024
 SMP_TIMEOUT_RESULT = 0xdead
+SMP_CPU_ID_STACK_PHYS = 0x0021f000
+SMP_CPU_ID_STACK = (1 << 63) | SMP_CPU_ID_STACK_PHYS
 
 SMP_MAILBOX_CPU_ID = 0x00
 SMP_MAILBOX_FDT = 0x08
@@ -169,6 +171,16 @@ def smp_sync(mode=0):
 
 def smp_cswap(value, address, offset=0):
     return insn(CSWAPI, value, address, offset)
+
+
+def smp_cpu_id_from_stack(destination, address, scratch):
+    return (
+        insn(GET, destination, 0, SR_O),
+        *set_octa(address, SMP_CPU_ID_STACK),
+        insn(LDOUI, scratch, address, 0),
+        insn(CMPU, destination, destination, scratch),
+        insn(ZSNZI, destination, destination, 1),
+    )
 
 
 def smp_mailbox_baseline_program(wait_limit=SMP_WAIT_LIMIT):

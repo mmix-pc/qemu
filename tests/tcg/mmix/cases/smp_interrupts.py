@@ -8,10 +8,12 @@ import dataclasses
 
 from .common import *
 from .smp import (
+    SMP_CPU_ID_STACK_PHYS,
     SMPProgram,
     SMP_ENTRY,
     SMP_WAIT_LIMIT,
     TCG_THREAD_MULTI,
+    smp_cpu_id_from_stack,
     smp_elf_image,
     smp_load,
     smp_store,
@@ -68,6 +70,7 @@ SMP_INTERRUPT_SENTINELS = (0x550, 0x551)
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPInterruptTest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
     name: str
     image: bytes
     main_end: int
@@ -191,7 +194,7 @@ def _interrupt_handler(cpu, handler_address):
         smp_store(R199, R180, SMP_INTERRUPT_HANDLER_RQ),
         insn(LDOUI, R191, R180, SMP_INTERRUPT_HANDLER_COUNT),
         insn(ADDUI, R191, R191, 1),
-        insn(LDTU, R192, R181, 0),
+        insn(LDOU, R192, R181, 0),
         smp_store(R192, R180, SMP_INTERRUPT_CLAIM),
         insn(SYNC, 0, 0, 1),
         smp_store(R191, R180, SMP_INTERRUPT_HANDLER_COUNT),
@@ -214,7 +217,7 @@ def _interrupt_handler(cpu, handler_address):
 
     program.mark("source_removed")
     program.emit(
-        insn(STTU, R183, R182, 0),
+        insn(STOU, R183, R182, 0),
         insn(PUTI, SR_Q, 0, 0),
         insn(SYNC, 0, 0, 1),
         smp_store(R191, R180, SMP_INTERRUPT_HANDLER_DONE),
@@ -228,7 +231,7 @@ def smp_interrupt_lifecycle_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *_emit_mailbox_address(R40, R32, R41),
     )
@@ -267,7 +270,7 @@ def smp_interrupt_lifecycle_program():
     program.mark("setup_complete")
     program.emit(
         *set_octa(R70, RK_INTERRUPT_CONTROLLER),
-        insn(STTU, R63, R60, 0),
+        insn(STOU, R63, R60, 0),
         insn(PUT, SR_TT, 0, R66),
         insn(PUT, SR_K, 0, R67),
         insn(GET, R68, 0, SR_K),
@@ -322,7 +325,7 @@ def smp_interrupt_lifecycle_program():
     program.mark("claim_ack")
     program.emit(
         smp_store(R254, R40, SMP_INTERRUPT_COMMAND),
-        insn(LDTU, R84, R61, 0),
+        insn(LDOU, R84, R61, 0),
         smp_store(R84, R40, SMP_INTERRUPT_CLAIM),
     )
     _emit_return_to_command_loop(program, SMP_INTERRUPT_STAGE_CLAIMED)
@@ -330,7 +333,7 @@ def smp_interrupt_lifecycle_program():
     program.mark("complete")
     program.emit(
         smp_store(R254, R40, SMP_INTERRUPT_COMMAND),
-        insn(STTU, R65, R62, 0),
+        insn(STOU, R65, R62, 0),
         insn(PUTI, SR_Q, 0, 0),
         insn(GET, R85, 0, SR_Q),
         smp_store(R85, R40, SMP_INTERRUPT_RQ_AFTER),

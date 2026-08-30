@@ -1209,7 +1209,6 @@ def _run_smp_interrupt_protocol(qtest, test):
 
     snapshots = []
     for cpu, expected_count in enumerate((2, 3)):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         snapshot = {
             "rWW": read(cpu, test.rww_offset),
             "rXX": read(cpu, test.rxx_offset),
@@ -1229,10 +1228,10 @@ def _run_smp_interrupt_protocol(qtest, test):
         assert snapshot["rXX"] & test.dynamic_trap_resume_next
         assert read(cpu, test.handler_rq_offset) & test.interrupt_request
         assert snapshot["rBB"] == test.sentinels[cpu]
-        assert snapshot["rO"] == expected_stack
-        assert snapshot["rS"] == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert snapshot["rO"] == snapshot["rS"]
+        assert snapshot["rO"] % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == snapshot["rO"]
+        assert read(cpu, test.rs_final_offset) == snapshot["rS"]
         assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
         assert read(cpu, test.rk_final_offset) == test.interrupt_request
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -1341,7 +1340,6 @@ def _run_smp_timer_protocol(qtest, test):
 
     snapshots = []
     for cpu in range(test.cpu_count):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         snapshot = {
             "rWW": read(cpu, test.rww_offset),
             "rXX": read(cpu, test.rxx_offset),
@@ -1361,10 +1359,10 @@ def _run_smp_timer_protocol(qtest, test):
         assert snapshot["rXX"] & test.dynamic_trap_resume_next
         assert read(cpu, test.handler_rq_offset) & test.interrupt_request
         assert snapshot["rBB"] == test.sentinels[cpu]
-        assert snapshot["rO"] == expected_stack
-        assert snapshot["rS"] == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert snapshot["rO"] == snapshot["rS"]
+        assert snapshot["rO"] % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == snapshot["rO"]
+        assert read(cpu, test.rs_final_offset) == snapshot["rS"]
         assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
         assert read(cpu, test.rk_final_offset) == test.interrupt_request
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -1476,6 +1474,10 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
 
     cpu0_timer_mask = 1 << test.timer_irq_base
     write_mmio(intc_enable_address(0), cpu0_timer_mask)
+    write_mmio(
+        intc_enable_address(1),
+        (1 << test.shared_irq) | (1 << (test.timer_irq_base + 1)),
+    )
     set_irq(1)
     wait(1, test.handler_count_offset, 1,
          "retargeting the shared source to CPU1")
@@ -1517,7 +1519,6 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
 
     snapshots = []
     for cpu in range(test.cpu_count):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         snapshot = {
             "rWW": read(cpu, test.rww_offset),
             "rXX": read(cpu, test.rxx_offset),
@@ -1539,10 +1540,10 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
         assert snapshot["rXX"] & test.dynamic_trap_resume_next
         assert read(cpu, test.handler_rq_offset) & test.interrupt_request
         assert snapshot["rBB"] == test.sentinels[cpu]
-        assert snapshot["rO"] == expected_stack
-        assert snapshot["rS"] == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert snapshot["rO"] == snapshot["rS"]
+        assert snapshot["rO"] % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == snapshot["rO"]
+        assert read(cpu, test.rs_final_offset) == snapshot["rS"]
         assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
         assert read(cpu, test.rk_final_offset) == test.interrupt_request
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -1744,8 +1745,8 @@ def _run_smp_ipi_protocol(qtest, test):
         command(cpu, test.command_finalize, test.stage_final,
                 f"recording CPU{cpu} final state")
 
+    stacks = []
     for cpu in range(test.cpu_count):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         expected_handlers = ipi_counts[cpu] + extra_handlers[cpu]
 
         assert read(cpu, test.handler_count_offset) == expected_handlers
@@ -1763,10 +1764,12 @@ def _run_smp_ipi_protocol(qtest, test):
         assert read(cpu, test.ryy_offset) == 0
         assert read(cpu, test.rzz_offset) == 0
         assert read(cpu, test.rbb_offset) == test.sentinels[cpu]
-        assert read(cpu, test.ro_entry_offset) == expected_stack
-        assert read(cpu, test.rs_entry_offset) == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        stack = read(cpu, test.ro_entry_offset)
+        stacks.append(stack)
+        assert stack == read(cpu, test.rs_entry_offset)
+        assert stack % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == stack
+        assert read(cpu, test.rs_final_offset) == stack
         assert read(cpu, test.rq_final_offset) & test.request_mask == 0
         assert read(cpu, test.rk_final_offset) == test.request_mask
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -1774,6 +1777,8 @@ def _run_smp_ipi_protocol(qtest, test):
         assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
         assert read_mmio(ipi_status_address(cpu)) == 0
         assert read_mmio(timer_status_address(cpu)) == 0
+
+    assert len(set(stacks)) == test.cpu_count
 
     write(0, test.command_offset, test.command_halt)
 
@@ -1948,6 +1953,18 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
             raise AssertionError(
                 f"{test.name}: vCPUs share host thread ids {thread_ids}"
             )
+        if use_loader:
+            stack = _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": "/machine/cpu[0]",
+                    "property": "initial-stack",
+                },
+            )
+            _qtest_command(
+                qtest, f"writeq {test.cpu_id_stack_phys:#x} {stack:#x}"
+            )
         _qmp_command(process, "cont")
         protocol(qtest, test)
         stdout, stderr = process.communicate(timeout=5)
@@ -1973,35 +1990,35 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
 def run_mttcg_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_interrupt_protocol,
-        "m45-qtest.sock",
+        "m45-qtest.sock", use_loader=True,
     )
 
 
 def run_mttcg_timer_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_timer_protocol,
-        "m46-qtest.sock",
+        "m46-qtest.sock", use_loader=True,
     )
 
 
 def run_mttcg_shared_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shared_interrupt_protocol,
-        "m47-qtest.sock",
+        "m47-qtest.sock", use_loader=True,
     )
 
 
 def run_mttcg_ipi_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_ipi_protocol,
-        "m48-qtest.sock",
+        "m48-qtest.sock", use_loader=True,
     )
 
 
 def run_mttcg_shootdown_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shootdown_protocol,
-        "m49-qtest.sock",
+        "m49-qtest.sock", use_loader=True,
     )
 
 

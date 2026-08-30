@@ -8,10 +8,12 @@ import dataclasses
 
 from .common import *
 from .smp import (
+    SMP_CPU_ID_STACK_PHYS,
     SMPProgram,
     SMP_ENTRY,
     SMP_WAIT_LIMIT,
     TCG_THREAD_MULTI,
+    smp_cpu_id_from_stack,
     smp_elf_image,
     smp_load,
     smp_store,
@@ -56,6 +58,7 @@ SMP_SHARED_SENTINELS = (0x660, 0x661)
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPSharedInterruptTest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
     name: str
     image: bytes
     main_end: int
@@ -248,10 +251,7 @@ def smp_shared_interrupt_program():
     program = SMPProgram()
 
     program.emit(
-        insn(GET, R32, 0, SR_O),
-        *set_octa(R33, INITIAL_STACK),
-        insn(SUBU, R32, R32, R33),
-        insn(SRUI, R32, R32, 15),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *_emit_mailbox_address(R40, R32, R41),
     )
@@ -259,8 +259,7 @@ def smp_shared_interrupt_program():
     program.emit(
         *set_octa(R60, _intc_context_address(
             1, MMIX_VIRT_INTC_CONTEXT_ENABLE)),
-        *set_octa(R61, (1 << SMP_SHARED_IRQ) |
-                  (1 << (MMIX_VIRT_TIMER_IRQ_BASE + 1))),
+        *set_octa(R61, 1 << (MMIX_VIRT_TIMER_IRQ_BASE + 1)),
         *set_octa(R62, SMP_SHARED_HANDLER1),
         *set_octa(R100, SMP_SHARED_SENTINELS[1]),
     )
