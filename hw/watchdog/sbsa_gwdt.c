@@ -26,10 +26,19 @@
 #include "qemu/module.h"
 #include "trace.h"
 
+static int sbsa_gwdt_post_load(void *opaque, int version_id)
+{
+    SBSA_GWDTState *s = opaque;
+
+    qemu_set_irq(s->irq, !!(s->wcs & SBSA_GWDT_WCS_WS0));
+    return 0;
+}
+
 static const VMStateDescription vmstate_sbsa_gwdt = {
     .name = "sbsa-gwdt",
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = sbsa_gwdt_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_TIMER_PTR(timer, SBSA_GWDTState),
         VMSTATE_UINT32(wcs, SBSA_GWDTState),
@@ -133,6 +142,7 @@ static void sbsa_gwdt_rwrite(void *opaque, hwaddr offset, uint64_t data,
     trace_sbsa_gwdt_refresh_write(offset, data);
     if (offset == SBSA_GWDT_WRR) {
         s->wcs &= ~(SBSA_GWDT_WCS_WS0 | SBSA_GWDT_WCS_WS1);
+        qemu_set_irq(s->irq, 0);
 
         sbsa_gwdt_update_timer(s, EXPLICIT_REFRESH);
     } else {
@@ -194,6 +204,7 @@ static void wdt_sbsa_gwdt_reset(DeviceState *dev)
     s->worl = 0;
     s->woru = 0;
     s->id = SBSA_GWDT_ID;
+    qemu_set_irq(s->irq, 0);
 }
 
 static void sbsa_gwdt_timer_sysinterrupt(void *opaque)

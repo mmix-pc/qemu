@@ -27,7 +27,8 @@ static uint64_t mmix_intc_bit(unsigned int source)
 
 static bool mmix_intc_source_active(unsigned int source)
 {
-    if (source == MMIX_VIRT_UART0_IRQ || source == MMIX_VIRT_RTC_IRQ) {
+    if (source == MMIX_VIRT_UART0_IRQ || source == MMIX_VIRT_RTC_IRQ ||
+        source == MMIX_VIRT_WATCHDOG_IRQ) {
         return true;
     }
     if (source >= MMIX_VIRT_TIMER_IRQ_BASE &&

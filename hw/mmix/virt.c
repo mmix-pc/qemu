@@ -23,6 +23,7 @@
 #include "hw/nvram/fw_cfg.h"
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
+#include "hw/watchdog/sbsa_gwdt.h"
 #include "semihosting/semihost.h"
 #include "system/block-backend-global-state.h"
 #include "system/block-backend-io.h"
@@ -1427,6 +1428,7 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *timer;
     DeviceState *framebuffer;
     DeviceState *rtc;
+    DeviceState *watchdog;
     DeviceState *hosted_state;
     MMIXKernelLoadInfo image_info;
     const MMIXKernelLoadInfo *image_info_ptr = NULL;
@@ -1547,6 +1549,18 @@ static void mmix_virt_init(MachineState *machine)
     sysbus_mmio_map(SYS_BUS_DEVICE(rtc), 0, MMIX_VIRT_RTC_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(rtc), 0,
                        qdev_get_gpio_in(intc, MMIX_VIRT_RTC_IRQ));
+
+    watchdog = qdev_new(TYPE_WDT_SBSA);
+    object_property_add_child(OBJECT(machine), "watchdog", OBJECT(watchdog));
+    qdev_prop_set_uint64(watchdog, "clock-frequency",
+                         MMIX_VIRT_WATCHDOG_CLOCK_FREQUENCY);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(watchdog), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(watchdog), 0,
+                    MMIX_VIRT_WATCHDOG_REFRESH_BASE);
+    sysbus_mmio_map(SYS_BUS_DEVICE(watchdog), 1,
+                    MMIX_VIRT_WATCHDOG_CONTROL_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(watchdog), 0,
+                       qdev_get_gpio_in(intc, MMIX_VIRT_WATCHDOG_IRQ));
 
     framebuffer = qdev_new(TYPE_MMIX_FRAMEBUFFER);
     object_property_add_child(OBJECT(machine), "framebuffer",

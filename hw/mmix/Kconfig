@@ -8,3 +8,4 @@ config MMIX_VIRT
     select GOLDFISH_RTC
     select PFLASH_CFI01
     select VIRTIO_MMIO
+    select WDT_SBSA

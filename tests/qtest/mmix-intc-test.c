@@ -38,6 +38,7 @@
 
 #define MMIX_IRQ_UART                1
 #define MMIX_IRQ_RTC                 2
+#define MMIX_IRQ_WATCHDOG            3
 #define MMIX_IRQ_TIMER_BASE          16
 #define MMIX_IRQ_VIRTIO_BASE         2048
 
@@ -244,12 +245,13 @@ static void test_mmix_intc_configuration(void)
 static void test_mmix_intc_source_namespace(void)
 {
     static const unsigned int active[] = {
-        MMIX_IRQ_UART, MMIX_IRQ_RTC, MMIX_IRQ_TIMER_BASE, 63, 64,
+        MMIX_IRQ_UART, MMIX_IRQ_RTC, MMIX_IRQ_WATCHDOG,
+        MMIX_IRQ_TIMER_BASE, 63, 64,
         MMIX_IRQ_TIMER_BASE + 63,
         MMIX_IRQ_VIRTIO_BASE, MMIX_IRQ_VIRTIO_BASE + 31,
     };
     static const unsigned int reserved[] = {
-        0, 3, 15, 80, 1024, MMIX_IRQ_VIRTIO_BASE - 1,
+        0, 15, 80, 1024, MMIX_IRQ_VIRTIO_BASE - 1,
         MMIX_IRQ_VIRTIO_BASE + 32, 6144, 8191,
     };
     QTestState *qts = mmix_intc_start(64);

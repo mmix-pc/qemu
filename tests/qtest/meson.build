@@ -313,6 +313,7 @@ qtests_mmix = [
   'mmix-rtc-test',
   'mmix-timer-test',
   'mmix-virtio-mmio-test',
+  'mmix-watchdog-test',
 ]
 
 qos_test_ss = ss.source_set()
