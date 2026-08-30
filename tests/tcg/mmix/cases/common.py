@@ -62,15 +62,6 @@ VM_RV_SOFTWARE = VM_RV_PAGE0 | 1
 VM_PAGE_TABLE_ROOT2 = 0x4000
 VM_RV_ROOT2 = 0x11110d0000004000
 NEGATIVE_HANDLER = 0x8000000000000080
-MMIX_VIRT_LOW_RAM = "low_ram"
-MMIX_VIRT_POOL = "pool"
-MMIX_VIRT_DATA = "data"
-MMIX_VIRT_STACK = "stack"
-MMIX_VIRT_PLATFORM_RAM = "platform_ram"
-MMIX_VIRT_BOOTINFO = "bootinfo"
-MMIX_VIRT_KERNEL_CMDLINE = "kernel_cmdline"
-MMIX_VIRT_FRAMEBUFFER = "framebuffer"
-MMIX_VIRT_MMIO = "mmio"
 MMIX_VIRT_UART0 = "uart0"
 MMIX_VIRT_VIRTIO_MMIO = "virtio_mmio"
 MMIX_VIRT_FRAMEBUFFER_CONTROL = "framebuffer_control"
@@ -82,15 +73,6 @@ MMIX_VIRT_INTC_CONTEXT_BASE = 0x04000000
 MMIX_VIRT_INTC_CONTEXT_STRIDE = 0x10000
 MMIX_VIRT_INTC_SIZE = 0x08000000
 MMIX_VIRT_MEMMAP = {
-    MMIX_VIRT_LOW_RAM: (0x00000000, 0x06000000),
-    MMIX_VIRT_POOL: (0x06000000, 0x00800000),
-    MMIX_VIRT_DATA: (0x06800000, 0x04000000),
-    MMIX_VIRT_STACK: (0x0A800000, 0x04000000),
-    MMIX_VIRT_PLATFORM_RAM: (0x0E800000, 0x00800000),
-    MMIX_VIRT_BOOTINFO: (0x0E800000, 0),
-    MMIX_VIRT_KERNEL_CMDLINE: (0, 0x1000),
-    MMIX_VIRT_FRAMEBUFFER: (0x0F000000, 0x01000000),
-    MMIX_VIRT_MMIO: (0x10000000, 0x10000000),
     MMIX_VIRT_UART0: (0x0001000010000000, 0x8),
     MMIX_VIRT_FRAMEBUFFER_CONTROL: (0x0001000018000000, 0x1000),
     MMIX_VIRT_TIMER: (0x0001000020000000, 0x04000000),
@@ -107,7 +89,6 @@ MMIX_VIRT_UART0_LSR_THRE = 0x20
 MMIX_VIRT_UART0_IRQ = 1
 MMIX_VIRT_VIRTIO_BLOCK0_IRQ = 2048
 MMIX_VIRT_VIRTIO_MMIO_COUNT = 32
-MMIX_VIRT_FRAMEBUFFER_IRQ = 3
 MMIX_VIRT_FRAMEBUFFER_WIDTH = 1024
 MMIX_VIRT_FRAMEBUFFER_HEIGHT = 768
 MMIX_VIRT_FRAMEBUFFER_BPP = 32
@@ -148,23 +129,14 @@ MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER] = (
     MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0],
     MMIX_VIRT_TIMER_SIZE,
 )
-MMIX_BOOTINFO_MAGIC = 0x4D4D4958424F4F54
-MMIX_BOOTINFO_VERSION = 1
-MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE = 1 << 0
-MMIX_BOOTINFO_KERNEL_CMDLINE_MAX = 4095
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
 MMIX_LOGICAL_SEGMENT_SIZE = 0x2000000000000000
-MMIX_POOL_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_POOL][0]
 MMIX_POOL_SEGMENT_SIZE = 0x0000000000800000
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
-MMIX_DATA_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_DATA][0]
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
 MMIX_STACK_SEGMENT_BASE = 0x6000000000000000
 MMIX_HOSTED_LIMIT = 0x8000000000000000
-MMIX_STACK_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_STACK][0]
 MMIX_STACK_SEGMENT_SIZE = 0x0000000004000000
-MMIX_LOW_RAM_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_LOW_RAM][0]
-MMIX_LOW_RAM_SIZE = MMIX_VIRT_MEMMAP[MMIX_VIRT_LOW_RAM][1]
 MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS = MMIX_HOSTED_LIMIT
 MMIX_SEMIHOSTING_HALT = 0
 MMIX_SEMIHOSTING_FOPEN = 1
@@ -204,124 +176,6 @@ SHN_XINDEX = 0xffff
 MMIX_REGS = 256
 MMIX_GLOBAL_REG_MIN = 32
 MMIX_OCTA_SIZE = 8
-
-MMIX_BOOTINFO_FIELDS = (
-    "magic",
-    "version",
-    "size",
-    "flags",
-    "cpu_count",
-    "boot_cpu_id",
-    "ram_base",
-    "ram_size",
-    "low_ram_base",
-    "low_ram_size",
-    "pool_logical_base",
-    "pool_phys_base",
-    "pool_size",
-    "data_logical_base",
-    "data_phys_base",
-    "data_size",
-    "stack_logical_base",
-    "stack_phys_base",
-    "stack_size",
-    "mmio_base",
-    "uart_base",
-    "uart_irq",
-    "timer_base",
-    "timer_irq_base",
-    "timer_irq_count",
-    "intc_base",
-    "intc_irq_count",
-    "virtio_mmio_base",
-    "virtio_mmio_irq",
-    "virtio_mmio_count",
-    "framebuffer_control_base",
-    "framebuffer_base",
-    "framebuffer_size",
-    "framebuffer_irq",
-    "framebuffer_width",
-    "framebuffer_height",
-    "framebuffer_stride",
-    "framebuffer_format",
-    "kernel_cmdline_addr",
-    "kernel_cmdline_size",
-    "ipi_base",
-    "ipi_target_count",
-    "ipi_request_mask",
-    "high_ram_base",
-    "high_ram_size",
-)
-MMIX_BOOTINFO_FORMAT = ">" + ("Q" * len(MMIX_BOOTINFO_FIELDS))
-MMIX_BOOTINFO_SIZE = struct.calcsize(MMIX_BOOTINFO_FORMAT)
-MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO] = (
-    MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
-    MMIX_BOOTINFO_SIZE,
-)
-MMIX_VIRT_MEMMAP[MMIX_VIRT_KERNEL_CMDLINE] = (
-    MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0] + MMIX_BOOTINFO_SIZE,
-    MMIX_BOOTINFO_KERNEL_CMDLINE_MAX + 1,
-)
-
-
-def parse_bootinfo(data):
-    values = struct.unpack(MMIX_BOOTINFO_FORMAT, data[:MMIX_BOOTINFO_SIZE])
-    return dict(zip(MMIX_BOOTINFO_FIELDS, values))
-
-
-def expected_bootinfo(ram_size=512 * 1024 * 1024):
-    high_ram_size = max(0, ram_size - 256 * 1024 * 1024)
-
-    return {
-        "magic": MMIX_BOOTINFO_MAGIC,
-        "version": MMIX_BOOTINFO_VERSION,
-        "size": MMIX_BOOTINFO_SIZE,
-        "flags": 0,
-        "cpu_count": 1,
-        "boot_cpu_id": 0,
-        "ram_base": 0,
-        "ram_size": ram_size,
-        "low_ram_base": MMIX_LOW_RAM_BASE,
-        "low_ram_size": MMIX_LOW_RAM_SIZE,
-        "pool_logical_base": MMIX_POOL_SEGMENT_BASE,
-        "pool_phys_base": MMIX_POOL_SEGMENT_PHYS_BASE,
-        "pool_size": MMIX_POOL_SEGMENT_SIZE,
-        "data_logical_base": MMIX_DATA_SEGMENT_BASE,
-        "data_phys_base": MMIX_DATA_SEGMENT_PHYS_BASE,
-        "data_size": MMIX_DATA_SEGMENT_SIZE,
-        "stack_logical_base": MMIX_STACK_SEGMENT_BASE,
-        "stack_phys_base": MMIX_STACK_SEGMENT_PHYS_BASE,
-        "stack_size": MMIX_STACK_SEGMENT_SIZE,
-        "mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_MMIO][0],
-        "uart_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_UART0][0],
-        "uart_irq": MMIX_VIRT_UART0_IRQ,
-        "timer_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0],
-        "timer_irq_base": MMIX_VIRT_TIMER_IRQ_BASE,
-        "timer_irq_count": 1,
-        "intc_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0],
-        "intc_irq_count": MMIX_VIRT_INTC_IRQ_COUNT,
-        "virtio_mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_VIRTIO_MMIO][0],
-        "virtio_mmio_irq": MMIX_VIRT_VIRTIO_BLOCK0_IRQ,
-        "virtio_mmio_count": MMIX_VIRT_VIRTIO_MMIO_COUNT,
-        "framebuffer_control_base": MMIX_VIRT_MEMMAP[
-            MMIX_VIRT_FRAMEBUFFER_CONTROL
-        ][0],
-        "framebuffer_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_FRAMEBUFFER][0],
-        "framebuffer_size": MMIX_VIRT_MEMMAP[MMIX_VIRT_FRAMEBUFFER][1],
-        "framebuffer_irq": MMIX_VIRT_FRAMEBUFFER_IRQ,
-        "framebuffer_width": MMIX_VIRT_FRAMEBUFFER_WIDTH,
-        "framebuffer_height": MMIX_VIRT_FRAMEBUFFER_HEIGHT,
-        "framebuffer_stride": MMIX_VIRT_FRAMEBUFFER_STRIDE,
-        "framebuffer_format": MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888,
-        "kernel_cmdline_addr": 0,
-        "kernel_cmdline_size": 0,
-        "ipi_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0],
-        "ipi_target_count": 1,
-        "ipi_request_mask": RQ_IPI,
-        "high_ram_base": 0x20000000 if high_ram_size else 0,
-        "high_ram_size": high_ram_size,
-    }
-
 
 def serial_tx_program(message=b"MMIX\n"):
     program = [*set_octa(R1, MMIX_VIRT_UART0_BASE)]

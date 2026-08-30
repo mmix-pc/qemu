@@ -19,7 +19,7 @@ SMP_TIMEOUT_WAIT_LIMIT = 1024
 SMP_TIMEOUT_RESULT = 0xdead
 
 SMP_MAILBOX_CPU_ID = 0x00
-SMP_MAILBOX_BOOTINFO = 0x08
+SMP_MAILBOX_FDT = 0x08
 SMP_MAILBOX_ENTRY = 0x10
 SMP_MAILBOX_RO = 0x18
 SMP_MAILBOX_RS = 0x20
@@ -50,6 +50,7 @@ class MMIXSMPTest:
         return (
             "-smp", str(self.cpu_count),
             "-accel", f"tcg,thread={self.thread_mode}",
+            "-machine", "elf-startup-abi=linux",
         )
 
 
@@ -171,7 +172,6 @@ def smp_cswap(value, address, offset=0):
 
 
 def smp_mailbox_baseline_program(wait_limit=SMP_WAIT_LIMIT):
-    bootinfo = MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0]
     program = SMPProgram()
 
     program.emit(
@@ -182,7 +182,7 @@ def smp_mailbox_baseline_program(wait_limit=SMP_WAIT_LIMIT):
         insn(GET, R36, 0, SR_S),
         *smp_mailbox_address(R40, R32, R41),
         smp_store(R32, R40, SMP_MAILBOX_CPU_ID),
-        smp_store(R33, R40, SMP_MAILBOX_BOOTINFO),
+        smp_store(R33, R40, SMP_MAILBOX_FDT),
         smp_store(R34, R40, SMP_MAILBOX_ENTRY),
         smp_store(R35, R40, SMP_MAILBOX_RO),
         smp_store(R36, R40, SMP_MAILBOX_RS),
@@ -219,17 +219,22 @@ def smp_mailbox_baseline_program(wait_limit=SMP_WAIT_LIMIT):
     program.emit(
         smp_sync(2),
         smp_load(R50, R49, SMP_MAILBOX_CPU_ID),
-        smp_load(R51, R49, SMP_MAILBOX_BOOTINFO),
+        smp_load(R51, R49, SMP_MAILBOX_FDT),
         smp_load(R52, R49, SMP_MAILBOX_ENTRY),
         smp_load(R53, R49, SMP_MAILBOX_RO),
         smp_load(R54, R49, SMP_MAILBOX_RS),
         smp_load(R55, R49, SMP_MAILBOX_PROGRESS),
         *set_octa(R59, SMP_MAILBOX_BASE),
         smp_load(R60, R59, SMP_MAILBOX_CPU_ID),
-        smp_load(R61, R59, SMP_MAILBOX_BOOTINFO),
+        smp_load(R61, R59, SMP_MAILBOX_FDT),
         smp_load(R62, R59, SMP_MAILBOX_ENTRY),
         smp_load(R63, R59, SMP_MAILBOX_RO),
         smp_load(R64, R59, SMP_MAILBOX_RS),
+        insn(CMPU, R65, R51, R61),
+    )
+    program.emit_branch(BNZ, R65, "timeout_halt")
+    program.emit_branch(BZ, R51, "timeout_halt")
+    program.emit(
         wyde(SETL, R46, 1),
         smp_store(R46, R40, SMP_MAILBOX_RESULT),
     )
@@ -242,22 +247,14 @@ def smp_mailbox_baseline_program(wait_limit=SMP_WAIT_LIMIT):
     image = program.build()
     regs = {
         R32: 0,
-        R33: bootinfo,
         R34: SMP_ENTRY,
-        R35: INITIAL_STACK,
-        R36: INITIAL_STACK,
         R46: 1,
         R50: 1,
-        R51: bootinfo,
         R52: SMP_ENTRY,
-        R53: INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
-        R54: INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
         R55: 1,
         R60: 0,
-        R61: bootinfo,
         R62: SMP_ENTRY,
-        R63: INITIAL_STACK,
-        R64: INITIAL_STACK,
+        R65: 0,
     }
     return SMPProgramImage(
         code=image,
@@ -292,10 +289,7 @@ SMP_TESTS = [
         pc=SMP_MAILBOX_TIMEOUT.timeout_pc,
         regs={
             R32: 0,
-            R33: MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
             R34: SMP_ENTRY,
-            R35: INITIAL_STACK,
-            R36: INITIAL_STACK,
             R43: 0,
             R44: 0,
             R46: SMP_TIMEOUT_RESULT,
