@@ -647,6 +647,240 @@ def run_firmware_entry_state_test(qemu, bios, cpu_count):
         raise
 
 
+def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
+    reset_pc = 0x8001000000000000
+    flash0 = 0x0001000000000000
+    flash1 = 0x0001000004000000
+    fw_cfg = 0x0001000014000000
+    timer_context = 0x0001000020010000
+    ipi = 0x0001000024000000
+    ipi_context1 = ipi + 0x20000
+    ram_marker = 0x10000
+    fdt_copy = 0x20000
+    stack_values = (
+        bytes.fromhex("1122334455667788"),
+        bytes.fromhex("99aabbccddeeff00"),
+    )
+    ram_value = bytes.fromhex("0123456789abcdef")
+    kernel_data = b"firmware snapshot kernel\n"
+    initrd_data = b"firmware snapshot initrd\n"
+    command_line = "console=ttyS0 firmware-state"
+    bios = workdir / "firmware-reset-snapshot.bin"
+    kernel = workdir / "firmware-reset-snapshot-kernel.bin"
+    initrd = workdir / "firmware-reset-snapshot-initrd.bin"
+    snapshot = workdir / "firmware-reset-snapshot.qcow2"
+    qtest_path = workdir / "firmware-reset-snapshot.sock"
+    qemu_img = qemu.with_name("qemu-img")
+
+    bios.write_bytes(firmware)
+    kernel.write_bytes(kernel_data)
+    initrd.write_bytes(initrd_data)
+    for path in (snapshot, qtest_path):
+        if path.exists():
+            path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot, "1M"),
+        check=True,
+        timeout=10,
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    command = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", "2",
+        "-accel", "tcg,thread=multi",
+        "-bios", str(bios),
+        "-kernel", str(kernel),
+        "-initrd", str(initrd),
+        "-append", command_line,
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", "none",
+        "-S",
+        "-qmp", "stdio",
+        "-qtest", f"unix:{qtest_path}",
+        "-qtest-log", "/dev/null",
+        "-drive", f"file={snapshot},format=qcow2,if=none",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+
+        def readb(address):
+            response = _qtest_command(qtest, f"readb {address:#x}")
+            return int(response[1], 0)
+
+        def writeb(address, value):
+            _qtest_command(qtest, f"writeb {address:#x} {value:#x}")
+
+        def select_fw_cfg(selector):
+            _qtest_command(qtest, f"writew {fw_cfg + 8:#x} {selector:#x}")
+
+        def read_fw_cfg(size):
+            return bytes(readb(fw_cfg) for _ in range(size))
+
+        def fw_cfg_files():
+            select_fw_cfg(0x19)
+            count = int.from_bytes(read_fw_cfg(4), "big")
+            files = {}
+            for _ in range(count):
+                entry = read_fw_cfg(64)
+                size = int.from_bytes(entry[0:4], "big")
+                selector = int.from_bytes(entry[4:6], "big")
+                name = entry[8:].split(b"\0", 1)[0].decode("ascii")
+                files[name] = (selector, size)
+            return files
+
+        def read_fw_cfg_file(files, name):
+            selector, size = files[name]
+            select_fw_cfg(selector)
+            return read_fw_cfg(size)
+
+        def program_flash1(value):
+            writeb(flash1, 0x40)
+            writeb(flash1, value)
+            writeb(flash1, 0xff)
+
+        stacks = tuple(
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(2)
+        )
+        assert len(set(stacks)) == 2
+        files = fw_cfg_files()
+        fdt = read_fw_cfg_file(files, "etc/fdt")
+        assert read_fw_cfg_file(files, "opt/mmix/kernel") == kernel_data
+        assert read_fw_cfg_file(files, "opt/mmix/initrd") == initrd_data
+        assert read_fw_cfg_file(files, "opt/mmix/cmdline") == (
+            command_line.encode("ascii") + b"\0"
+        )
+
+        original_bios = _qtest_read(qtest, flash0, len(firmware))
+        assert original_bios == firmware
+        program_flash1(0xa5)
+        _qtest_write(qtest, ram_marker, ram_value)
+        _qtest_write(qtest, fdt_copy, fdt)
+        for stack, value in zip(stacks, stack_values):
+            _qtest_write(qtest, stack, value)
+        _qtest_writeq(qtest, ipi + 8, 0x2)
+        _qtest_writeq(qtest, timer_context, (1 << 64) - 1)
+        _qtest_writeq(qtest, timer_context + 8, 0x3)
+
+        bios.write_bytes(bytes(len(firmware)))
+        kernel.write_bytes(b"changed kernel\n")
+        initrd.write_bytes(b"changed initrd\n")
+        _qmp_command(process, "system_reset")
+
+        assert _qtest_read(qtest, flash0, len(firmware)) == original_bios
+        assert readb(flash1) == 0xa5
+        assert _qtest_read(qtest, ram_marker, len(ram_value)) == ram_value
+        assert _qtest_read(qtest, fdt_copy, len(fdt)) == fdt
+        for cpu, stack in enumerate(stacks):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == reset_pc
+            assert _hmp_register_value(dump, "npc=0x") == reset_pc + 4
+            assert _hmp_register_value(dump, "r0  =0x") == cpu
+            assert _hmp_register_value(dump, "r32 =0x") == 0
+            assert _hmp_register_value(dump, "rO=0x") == stack
+            assert _hmp_register_value(dump, "rS=0x") == stack
+            assert _qtest_read(qtest, stack, 8) == bytes(8)
+        assert _qtest_readq(qtest, ipi_context1) == 0
+        assert _qtest_readq(qtest, timer_context) == 0
+        assert _qtest_readq(qtest, timer_context + 8) == 0
+        assert _qtest_readq(qtest, timer_context + 0x10) == 0
+        assert read_fw_cfg_file(fw_cfg_files(), "opt/mmix/kernel") == kernel_data
+        assert read_fw_cfg_file(fw_cfg_files(), "opt/mmix/initrd") == initrd_data
+
+        _qmp_command(process, "cont")
+        dumps = _wait_for_cpu_pcs(process, (reset_pc + 4, reset_pc + 4))
+        for cpu, dump in enumerate(dumps):
+            assert _hmp_register_value(dump, "r32 =0x") == 0x40 + cpu
+        for stack, value in zip(stacks, stack_values):
+            _qtest_write(qtest, stack, value)
+        program_flash1(0xa0)
+        _qtest_writeq(qtest, ipi + 8, 0x2)
+        _qtest_writeq(qtest, timer_context, (1 << 64) - 1)
+        _qtest_writeq(qtest, timer_context + 8, 0x3)
+        select_fw_cfg(0)
+        assert read_fw_cfg(2) == b"QE"
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "savevm firmware-state"},
+        )
+        assert not result, result
+
+        _qtest_write(qtest, ram_marker, bytes(len(ram_value)))
+        _qtest_write(qtest, fdt_copy, bytes(len(fdt)))
+        for stack in stacks:
+            _qtest_write(qtest, stack, bytes(8))
+        program_flash1(0x80)
+        _qtest_writeq(qtest, ipi_context1 + 8, 1)
+        _qtest_writeq(qtest, timer_context + 8, 0)
+        select_fw_cfg(1)
+        read_fw_cfg(1)
+        _qmp_command(process, "system_reset")
+
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "loadvm firmware-state"},
+        )
+        assert not result, result
+        for cpu, stack in enumerate(stacks):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == reset_pc + 4
+            assert _hmp_register_value(dump, "r32 =0x") == 0x40 + cpu
+            assert _qtest_read(qtest, stack, 8) == stack_values[cpu]
+        assert _qtest_read(qtest, flash0, len(firmware)) == original_bios
+        assert readb(flash1) == 0xa0
+        assert _qtest_read(qtest, ram_marker, len(ram_value)) == ram_value
+        assert _qtest_read(qtest, fdt_copy, len(fdt)) == fdt
+        assert _qtest_readq(qtest, ipi_context1) == 1
+        assert _qtest_readq(qtest, timer_context) == (1 << 64) - 1
+        assert _qtest_readq(qtest, timer_context + 8) == 0x3
+        assert read_fw_cfg(1) == b"M"
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (bios, kernel, initrd, snapshot, qtest_path):
+            if path.exists():
+                path.unlink()
+
+
 def _qmp_start_paused(qemu, image, test):
     command = build_kernel_command(
         qemu,

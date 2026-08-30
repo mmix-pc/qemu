@@ -7,9 +7,10 @@ import subprocess
 
 import pytest
 
-from cases.common import elf64_image
+from cases.common import ADDI, JMP, R0, R32, elf64_image, insn, jump
 from lib.execution import (
     run_firmware_entry_state_test,
+    run_firmware_reset_and_snapshot_test,
     run_no_image_mttcg_test,
     run_paused_machine,
 )
@@ -133,6 +134,15 @@ def test_firmware_executes_from_negative_flash_alias(qemu, workdir):
     assert result.returncode == 0, result.stderr.decode(
         "utf-8", errors="replace"
     )
+
+
+def test_firmware_reset_and_snapshot_state(qemu, workdir):
+    firmware = b"".join((
+        insn(ADDI, R32, R0, 0x40),
+        jump(JMP, 0),
+    ))
+
+    run_firmware_reset_and_snapshot_test(qemu, workdir, firmware)
 
 
 @pytest.mark.parametrize(
