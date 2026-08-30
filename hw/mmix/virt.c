@@ -20,6 +20,7 @@
 #include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
+#include "hw/nvram/fw_cfg.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
 #include "system/block-backend-global-state.h"
@@ -61,6 +62,11 @@ typedef enum MMIXBootMode {
     MMIX_BOOT_MODE_FIRMWARE,
 } MMIXBootMode;
 
+typedef struct MMIXFWCfgFile {
+    const char *name;
+    GBytes *data;
+} MMIXFWCfgFile;
+
 enum {
     MMIX_LINUX_COMMAND_LINE_MAX = 4095,
 };
@@ -84,6 +90,9 @@ struct MMIXVirtMachineState {
     char *pflash_backend_name[MMIX_VIRT_FLASH_BANK_COUNT];
     BlockBackend *pflash_backend[MMIX_VIRT_FLASH_BANK_COUNT];
     GBytes *bios_data;
+    GBytes *firmware_kernel_data;
+    GBytes *firmware_initrd_data;
+    GBytes *firmware_cmdline_data;
     MMIXELFStartupABI elf_startup_abi;
     bool elf_startup_abi_explicit;
     MMIXMMOPlan *mmo_plan;
@@ -252,6 +261,118 @@ static bool mmix_virt_load_bios(MMIXVirtMachineState *vms,
     return true;
 }
 
+static bool mmix_virt_load_firmware_input(const char *filename,
+                                          const char *role,
+                                          GBytes **result, Error **errp)
+{
+    g_autofree char *contents = NULL;
+    g_autoptr(GError) gerror = NULL;
+    int64_t expected_size = get_image_size(filename, errp);
+    gsize size;
+
+    if (expected_size < 0) {
+        return false;
+    }
+    if (expected_size >= UINT32_MAX) {
+        error_setg(errp, "MMIX firmware %s '%s' has size 0x%" PRIx64
+                   "; fw_cfg files must be smaller than 0x%x bytes",
+                   role, filename, (uint64_t)expected_size, UINT32_MAX);
+        return false;
+    }
+    if (!g_file_get_contents(filename, &contents, &size, &gerror)) {
+        error_setg(errp, "could not read MMIX firmware %s '%s': %s",
+                   role, filename, gerror->message);
+        return false;
+    }
+    if (size != expected_size) {
+        error_setg(errp, "MMIX firmware %s '%s' changed size during "
+                   "preflight: expected 0x%" PRIx64 ", got 0x%"
+                   G_GSIZE_MODIFIER "x",
+                   role, filename, (uint64_t)expected_size, size);
+        return false;
+    }
+
+    g_clear_pointer(result, g_bytes_unref);
+    *result = g_bytes_new_take(g_steal_pointer(&contents), size);
+    return true;
+}
+
+static size_t mmix_virt_fw_cfg_files(MMIXVirtMachineState *vms,
+                                     MMIXFWCfgFile files[4])
+{
+    size_t count = 0;
+
+    if (vms->boot_mode != MMIX_BOOT_MODE_FIRMWARE) {
+        return 0;
+    }
+    files[count++] = (MMIXFWCfgFile) { "etc/fdt", vms->fdt };
+    if (vms->firmware_kernel_data) {
+        files[count++] = (MMIXFWCfgFile) {
+            "opt/mmix/kernel", vms->firmware_kernel_data,
+        };
+    }
+    if (vms->firmware_initrd_data) {
+        files[count++] = (MMIXFWCfgFile) {
+            "opt/mmix/initrd", vms->firmware_initrd_data,
+        };
+    }
+    if (vms->firmware_cmdline_data) {
+        files[count++] = (MMIXFWCfgFile) {
+            "opt/mmix/cmdline", vms->firmware_cmdline_data,
+        };
+    }
+    return count;
+}
+
+static bool mmix_virt_validate_fw_cfg_files(MMIXVirtMachineState *vms,
+                                            Error **errp)
+{
+    MMIXFWCfgFile files[4];
+    size_t count = mmix_virt_fw_cfg_files(vms, files);
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        size_t j;
+
+        if (strlen(files[i].name) >= FW_CFG_MAX_FILE_PATH) {
+            error_setg(errp, "MMIX fw_cfg file name '%s' is too long",
+                       files[i].name);
+            return false;
+        }
+        if (g_bytes_get_size(files[i].data) >= UINT32_MAX) {
+            error_setg(errp, "MMIX fw_cfg file '%s' is too large",
+                       files[i].name);
+            return false;
+        }
+        for (j = 0; j < i; j++) {
+            if (!strcmp(files[i].name, files[j].name)) {
+                error_setg(errp, "duplicate MMIX fw_cfg file name '%s'",
+                           files[i].name);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void mmix_virt_create_fw_cfg(MMIXVirtMachineState *vms)
+{
+    MachineState *machine = MACHINE(vms);
+    MMIXFWCfgFile files[4];
+    FWCfgState *fw_cfg = fw_cfg_init_mem_dma(MMIX_VIRT_FW_CFG_BASE,
+                                             &address_space_memory);
+    size_t count = mmix_virt_fw_cfg_files(vms, files);
+    size_t i;
+
+    fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, machine->smp.cpus);
+    for (i = 0; i < count; i++) {
+        gsize size;
+        void *data = (void *)g_bytes_get_data(files[i].data, &size);
+
+        fw_cfg_add_file(fw_cfg, files[i].name, data, size);
+    }
+}
+
 static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
                                           Error **errp)
 {
@@ -300,6 +421,30 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
             error_propagate(errp, local_err);
             return false;
         }
+        if (!mmix_virt_load_firmware_input(machine->kernel_filename,
+                                           "kernel payload",
+                                           &vms->firmware_kernel_data,
+                                           errp)) {
+            return false;
+        }
+    }
+    if (firmware && machine->initrd_filename &&
+        !mmix_virt_load_firmware_input(machine->initrd_filename,
+                                       "initrd payload",
+                                       &vms->firmware_initrd_data, errp)) {
+        return false;
+    }
+    if (firmware && machine->kernel_cmdline && machine->kernel_cmdline[0]) {
+        size_t size = strlen(machine->kernel_cmdline);
+
+        if (size > MMIX_FDT_COMMAND_LINE_MAX) {
+            error_setg(errp, "MMIX firmware command line is too long: got "
+                       "%zu bytes, maximum is %u",
+                       size, MMIX_FDT_COMMAND_LINE_MAX);
+            return false;
+        }
+        vms->firmware_cmdline_data =
+            g_bytes_new(machine->kernel_cmdline, size + 1);
     }
 
     vms->boot_mode = firmware ? MMIX_BOOT_MODE_FIRMWARE :
@@ -656,6 +801,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
             .has_framebuffer = true,
             .framebuffer = framebuffer->content,
             .has_flash = true,
+            .has_fw_cfg = true,
             .linux_direct = true,
             .has_initrd = has_initrd,
             .initrd_size = has_initrd ?
@@ -839,6 +985,7 @@ static bool mmix_virt_prepare_dump_fdt(MMIXVirtMachineState *vms,
             .end = vms->framebuffer_base + vms->framebuffer_size,
         },
         .has_flash = true,
+        .has_fw_cfg = true,
     };
     unsigned int i;
 
@@ -1318,7 +1465,8 @@ static void mmix_virt_init(MachineState *machine)
                             argument_count, argument_size, linux_info_ptr,
                             elf_source,
                             &error_fatal) ||
-        !mmix_virt_prepare_dump_fdt(vms, &error_fatal)) {
+        !mmix_virt_prepare_dump_fdt(vms, &error_fatal) ||
+        !mmix_virt_validate_fw_cfg_files(vms, &error_fatal)) {
         return;
     }
     memory_region_add_subregion(get_system_memory(), vms->ram.start,
@@ -1359,6 +1507,8 @@ static void mmix_virt_init(MachineState *machine)
             vms, i, vms->pflash_backend[i], i == 0 ? vms->bios_data : NULL);
     }
     g_clear_pointer(&vms->bios_data, g_bytes_unref);
+
+    mmix_virt_create_fw_cfg(vms);
 
     for (i = 0; i < machine->smp.cpus; i++) {
         mmix_virt_create_cpu(vms, i);
@@ -1566,6 +1716,9 @@ static void mmix_virt_instance_finalize(Object *obj)
     g_clear_pointer(&vms->argument_data, g_bytes_unref);
     g_clear_pointer(&vms->fdt, g_bytes_unref);
     g_clear_pointer(&vms->bios_data, g_bytes_unref);
+    g_clear_pointer(&vms->firmware_kernel_data, g_bytes_unref);
+    g_clear_pointer(&vms->firmware_initrd_data, g_bytes_unref);
+    g_clear_pointer(&vms->firmware_cmdline_data, g_bytes_unref);
     mmix_sparse_memory_free(vms->mmo_memory);
     mmix_mmo_hosted_plan_free(vms->mmo_hosted_plan);
     mmix_mmo_plan_free(vms->mmo_plan);

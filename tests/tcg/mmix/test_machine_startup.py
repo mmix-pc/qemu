@@ -237,6 +237,46 @@ def test_firmware_preflight_rejects_mmo_payload(qemu, workdir):
     assert "firmware boot does not accept an MMO -kernel payload" in result.stderr
 
 
+@pytest.mark.parametrize("role", ("kernel", "initrd"))
+def test_firmware_preflight_rejects_unreadable_payload(
+    qemu, workdir, role
+):
+    files = _firmware_files(workdir, f"missing-{role}")
+    files[role].unlink()
+    args = _firmware_args(files, bios=True, payloads=True)
+
+    result = _run_preflight_failure(qemu, args)
+
+    assert result.returncode != 0
+    assert str(files[role]) in result.stderr
+
+
+def test_firmware_preflight_rejects_command_line_overflow(qemu, workdir):
+    files = _firmware_files(workdir, "long-command-line")
+    args = (
+        "-bios", str(files["bios"]),
+        "-kernel", str(files["kernel"]),
+        "-append", "x" * 4096,
+    )
+
+    result = _run_preflight_failure(qemu, args)
+
+    assert result.returncode != 0
+    assert "firmware command line is too long" in result.stderr
+
+
+def test_firmware_preflight_rejects_fw_cfg_size_limit(qemu, workdir):
+    files = _firmware_files(workdir, "oversized-initrd")
+    with files["initrd"].open("r+b") as stream:
+        stream.truncate(1 << 32)
+    args = _firmware_args(files, bios=True, payloads=True)
+
+    result = _run_preflight_failure(qemu, args)
+
+    assert result.returncode != 0
+    assert "fw_cfg files must be smaller" in result.stderr
+
+
 def test_user_dtb_is_rejected(qemu, workdir):
     dtb = workdir / "unsupported.dtb"
     dtb.write_bytes(b"not a device tree")

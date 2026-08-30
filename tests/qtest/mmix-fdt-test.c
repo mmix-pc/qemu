@@ -422,6 +422,12 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
                       MMIX_FLASH1_BASE, MMIX_FLASH_BANK_SIZE);
     assert_u32(fdt, flash, "bank-width", 4);
 
+    assert_string(fdt, "/fw-cfg@1000014000000", "compatible",
+                  "qemu,fw-cfg-mmio");
+    assert_range(fdt, "/fw-cfg@1000014000000",
+                 UINT64_C(0x0001000014000000), 0x18);
+    assert_empty(fdt, "/fw-cfg@1000014000000", "dma-coherent");
+
     framebuffer_phandle = get_u32(fdt, memory, "phandle");
     assert_string(fdt, memory, "compatible",
                   "qemu,mmix-framebuffer-memory");
@@ -452,8 +458,6 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
     }
     g_assert_cmpint(fdt_path_offset(fdt,
                                    "/soc/virtio_mmio@1000040200000"), ==,
-                    -FDT_ERR_NOTFOUND);
-    g_assert_cmpint(fdt_path_offset(fdt, "/fw-cfg@1000014000000"), ==,
                     -FDT_ERR_NOTFOUND);
     g_assert_cmpint(fdt_path_offset(fdt, "/pcie@1000100000000"), ==,
                     -FDT_ERR_NOTFOUND);
