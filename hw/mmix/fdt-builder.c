@@ -528,6 +528,94 @@ static bool mmix_fdt_add_uart_node(void *fdt,
                                "serial0:115200n8", errp);
 }
 
+static bool mmix_fdt_add_rtc_node(void *fdt,
+                                  const MMIXFDTConfig *config,
+                                  Error **errp)
+{
+    const MMIXPhysRange range = {
+        .start = MMIX_VIRT_RTC_BASE,
+        .end = MMIX_VIRT_RTC_BASE + MMIX_VIRT_RTC_REGISTER_SIZE,
+    };
+    g_autofree char *name = g_strdup_printf(
+        "rtc@%" PRIx64, MMIX_VIRT_RTC_BASE);
+    int node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
+                                 name, errp);
+
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "google,goldfish-rtc", errp) &&
+           mmix_fdt_set_u64_range(fdt, node, "reg", &range, errp) &&
+           mmix_fdt_set_u32(fdt, node, "interrupts",
+                            MMIX_VIRT_RTC_IRQ, errp) &&
+           mmix_fdt_set_u32(fdt, node, "interrupt-parent",
+                            mmix_fdt_intc_phandle(config), errp);
+}
+
+static bool mmix_fdt_add_watchdog_node(void *fdt,
+                                       const MMIXFDTConfig *config,
+                                       Error **errp)
+{
+    const MMIXPhysRange ranges[] = {
+        {
+            .start = MMIX_VIRT_WATCHDOG_CONTROL_BASE,
+            .end = MMIX_VIRT_WATCHDOG_CONTROL_BASE +
+                   MMIX_VIRT_WATCHDOG_REGISTER_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_WATCHDOG_REFRESH_BASE,
+            .end = MMIX_VIRT_WATCHDOG_REFRESH_BASE +
+                   MMIX_VIRT_WATCHDOG_REGISTER_SIZE,
+        },
+    };
+    g_autofree char *name = g_strdup_printf(
+        "watchdog@%" PRIx64, MMIX_VIRT_WATCHDOG_CONTROL_BASE);
+    int node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
+                                 name, errp);
+
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "arm,sbsa-gwdt", errp) &&
+           mmix_fdt_set_u64_ranges(fdt, node, "reg", ranges,
+                                   G_N_ELEMENTS(ranges), errp) &&
+           mmix_fdt_set_u32(fdt, node, "interrupts",
+                            MMIX_VIRT_WATCHDOG_IRQ, errp) &&
+           mmix_fdt_set_u32(fdt, node, "interrupt-parent",
+                            mmix_fdt_intc_phandle(config), errp) &&
+           mmix_fdt_set_u32(fdt, node, "clock-frequency",
+                            MMIX_VIRT_WATCHDOG_CLOCK_FREQUENCY, errp);
+}
+
+static bool mmix_fdt_add_power_node(void *fdt, Error **errp)
+{
+    static const char compatible[] = "qemu,mmix-virt-syscon\0syscon";
+    const MMIXPhysRange range = {
+        .start = MMIX_VIRT_POWER_BASE,
+        .end = MMIX_VIRT_POWER_BASE + MMIX_VIRT_POWER_REGISTER_SIZE,
+    };
+    g_autofree char *name = g_strdup_printf(
+        "syscon@%" PRIx64, MMIX_VIRT_POWER_BASE);
+    int node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
+                                 name, errp);
+
+    return node >= 0 &&
+           !mmix_fdt_error(fdt_setprop(fdt, node, "compatible",
+                                       compatible, sizeof(compatible)),
+                           "compatible", errp) &&
+           mmix_fdt_set_u64_range(fdt, node, "reg", &range, errp) &&
+           mmix_fdt_set_empty(fdt, node, "big-endian", errp);
+}
+
+static bool mmix_fdt_add_fixed_services(void *fdt,
+                                        const MMIXFDTConfig *config,
+                                        Error **errp)
+{
+    /* Reverse address order preserves ascending /soc node order. */
+    return mmix_fdt_add_power_node(fdt, errp) &&
+           mmix_fdt_add_watchdog_node(fdt, config, errp) &&
+           mmix_fdt_add_rtc_node(fdt, config, errp) &&
+           mmix_fdt_add_uart_node(fdt, config, errp);
+}
+
 static bool mmix_fdt_add_framebuffer_nodes(void *fdt,
                                            const MMIXFDTConfig *config,
                                            Error **errp)
@@ -617,7 +705,7 @@ static bool mmix_fdt_add_active_devices(void *fdt,
 {
     return mmix_fdt_add_virtio_mmio_nodes(fdt, config, errp) &&
            mmix_fdt_add_framebuffer_nodes(fdt, config, errp) &&
-           mmix_fdt_add_uart_node(fdt, config, errp);
+           mmix_fdt_add_fixed_services(fdt, config, errp);
 }
 
 static bool mmix_fdt_add_flash_node(void *fdt,

@@ -25,12 +25,18 @@ enum {
     MMIX_FRAMEBUFFER_STRIDE = 4096,
     MMIX_INTC_SOURCE_COUNT = 8192,
     MMIX_UART_IRQ = 1,
+    MMIX_RTC_IRQ = 2,
+    MMIX_WATCHDOG_IRQ = 3,
     MMIX_TIMER_IRQ_BASE = 16,
     MMIX_VIRTIO_IRQ_BASE = 2048,
     MMIX_VIRTIO_COUNT = 32,
 };
 
 #define MMIX_UART_BASE UINT64_C(0x0001000010000000)
+#define MMIX_RTC_BASE UINT64_C(0x0001000010010000)
+#define MMIX_WATCHDOG_REFRESH_BASE UINT64_C(0x0001000010020000)
+#define MMIX_WATCHDOG_CONTROL_BASE UINT64_C(0x0001000010030000)
+#define MMIX_POWER_BASE UINT64_C(0x0001000010040000)
 #define MMIX_FLASH0_BASE UINT64_C(0x0001000000000000)
 #define MMIX_FLASH1_BASE UINT64_C(0x0001000004000000)
 #define MMIX_FLASH_BANK_SIZE UINT64_C(0x4000000)
@@ -73,6 +79,39 @@ static void assert_string(const void *fdt, const char *path,
     g_assert_nonnull(actual);
     g_assert_cmpint(length, ==, strlen(expected) + 1);
     g_assert_cmpstr(actual, ==, expected);
+}
+
+static void assert_string_list(const void *fdt, const char *path,
+                               const char *name, const char *const *expected,
+                               size_t count)
+{
+    int node = node_offset(fdt, path);
+    size_t i;
+
+    g_assert_cmpint(fdt_stringlist_count(fdt, node, name), ==, count);
+    for (i = 0; i < count; i++) {
+        int length;
+        const char *actual = fdt_stringlist_get(fdt, node, name, i,
+                                                &length);
+
+        g_assert_nonnull(actual);
+        g_assert_cmpint(length, ==, strlen(expected[i]));
+        g_assert_cmpstr(actual, ==, expected[i]);
+    }
+}
+
+static void assert_compatible_count(const void *fdt, const char *compatible,
+                                    unsigned int expected)
+{
+    unsigned int count = 0;
+    int node = -1;
+
+    while ((node = fdt_node_offset_by_compatible(fdt, node,
+                                                  compatible)) >= 0) {
+        count++;
+    }
+    g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
+    g_assert_cmpuint(count, ==, expected);
 }
 
 static uint32_t get_u32(const void *fdt, const char *path,
@@ -392,8 +431,15 @@ static void assert_interrupt_topology(QTestState *qts, const void *fdt,
 static void assert_active_devices(QTestState *qts, const void *fdt,
                                   uint32_t intc_phandle)
 {
+    static const char *const power_compatible[] = {
+        "qemu,mmix-virt-syscon",
+        "syscon",
+    };
     const char *flash = "/flash@1000000000000";
     const char *uart = "/soc/serial@1000010000000";
+    const char *rtc = "/soc/rtc@1000010010000";
+    const char *watchdog = "/soc/watchdog@1000010030000";
+    const char *power = "/soc/syscon@1000010040000";
     const char *control = "/soc/framebuffer@1000018000000";
     uint64_t framebuffer = qtest_readq(
         qts, MMIX_FRAMEBUFFER_CONTROL_BASE +
@@ -415,6 +461,38 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
     assert_u32(fdt, uart, "interrupt-parent", intc_phandle);
     assert_string(fdt, "/aliases", "serial0", uart);
     assert_string(fdt, "/chosen", "stdout-path", "serial0:115200n8");
+
+    assert_string(fdt, rtc, "compatible", "google,goldfish-rtc");
+    assert_range(fdt, rtc, MMIX_RTC_BASE, 0x24);
+    assert_u32(fdt, rtc, "interrupts", MMIX_RTC_IRQ);
+    assert_u32(fdt, rtc, "interrupt-parent", intc_phandle);
+    assert_absent(fdt, rtc, "little-endian");
+    assert_absent(fdt, rtc, "big-endian");
+    assert_absent(fdt, rtc, "native-endian");
+
+    assert_string(fdt, watchdog, "compatible", "arm,sbsa-gwdt");
+    assert_two_ranges(fdt, watchdog,
+                      MMIX_WATCHDOG_CONTROL_BASE, 0x1000,
+                      MMIX_WATCHDOG_REFRESH_BASE, 0x1000);
+    assert_u32(fdt, watchdog, "interrupts", MMIX_WATCHDOG_IRQ);
+    assert_u32(fdt, watchdog, "interrupt-parent", intc_phandle);
+    assert_u32(fdt, watchdog, "clock-frequency", 1000000000);
+    assert_absent(fdt, watchdog, "little-endian");
+    assert_absent(fdt, watchdog, "big-endian");
+    assert_absent(fdt, watchdog, "native-endian");
+
+    assert_string_list(fdt, power, "compatible", power_compatible,
+                       G_N_ELEMENTS(power_compatible));
+    assert_range(fdt, power, MMIX_POWER_BASE, 0x100);
+    assert_empty(fdt, power, "big-endian");
+    assert_absent(fdt, power, "little-endian");
+    assert_absent(fdt, power, "native-endian");
+    assert_absent(fdt, power, "interrupts");
+    assert_absent(fdt, power, "interrupt-parent");
+
+    assert_compatible_count(fdt, "google,goldfish-rtc", 1);
+    assert_compatible_count(fdt, "arm,sbsa-gwdt", 1);
+    assert_compatible_count(fdt, "qemu,mmix-virt-syscon", 1);
 
     assert_string(fdt, flash, "compatible", "cfi-flash");
     assert_two_ranges(fdt, flash,
