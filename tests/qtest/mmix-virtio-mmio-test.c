@@ -11,6 +11,8 @@
 #include "standard-headers/linux/virtio_blk.h"
 #include "standard-headers/linux/virtio_ids.h"
 #include "standard-headers/linux/virtio_ring.h"
+#include "qobject/qdict.h"
+#include "qobject/qlist.h"
 
 #define MMIX_VIRTIO_BASE              UINT64_C(0x0001000040000000)
 #define MMIX_VIRTIO_STRIDE            UINT64_C(0x10000)
@@ -18,6 +20,7 @@
 #define MMIX_VIRTIO_ACTIVE_SLOTS      32
 #define MMIX_VIRTIO_SLOT_CAPACITY     4096
 #define MMIX_DISCOVERABLE_BASE        UINT64_C(0x0001000050000000)
+#define MMIX_DISCOVERABLE_SLOT_CAPACITY 4096
 
 #define MMIX_INTC_BASE                UINT64_C(0x0001000030000000)
 #define MMIX_INTC_PENDING_BASE        0x1000
@@ -45,6 +48,50 @@ typedef struct MMIXVirtioBlkReq {
 static uint64_t mmix_virtio_slot(unsigned int slot)
 {
     return MMIX_VIRTIO_BASE + slot * MMIX_VIRTIO_STRIDE;
+}
+
+static char *mmix_qom_child_by_type(QTestState *qts, const char *path,
+                                    const char *type)
+{
+    g_autoptr(QDict) response = qtest_qmp(
+        qts,
+        "{ 'execute': 'qom-list', 'arguments': { 'path': %s } }", path);
+    QList *properties = qobject_to(QList, qdict_get(response, "return"));
+    QListEntry *entry;
+
+    QLIST_FOREACH_ENTRY(properties, entry) {
+        QDict *property = qobject_to(QDict, qlist_entry_obj(entry));
+
+        if (g_str_equal(qdict_get_str(property, "type"), type)) {
+            return g_strdup(qdict_get_str(property, "name"));
+        }
+    }
+    return NULL;
+}
+
+static void mmix_assert_transport_owner(QTestState *qts, unsigned int slot,
+                                        const char *device_type)
+{
+    g_autofree char *transport = g_strdup_printf(
+        "/machine/virtio-mmio[%u]", slot);
+    g_autofree char *bus_name = mmix_qom_child_by_type(
+        qts, transport, "child<virtio-mmio-bus>");
+    g_autofree char *bus = NULL;
+    g_autofree char *link_type = NULL;
+    g_autofree char *device = NULL;
+
+    g_assert_nonnull(bus_name);
+    bus = g_strdup_printf("%s/%s", transport, bus_name);
+    if (device_type) {
+        link_type = g_strdup_printf("link<%s>", device_type);
+        device = mmix_qom_child_by_type(qts, bus, link_type);
+        g_assert_cmpstr(device, ==, "child[0]");
+    } else {
+        g_assert_null(mmix_qom_child_by_type(qts, bus,
+                                             "link<virtio-blk-device>"));
+        g_assert_null(mmix_qom_child_by_type(qts, bus,
+                                             "link<virtio-rng-device>"));
+    }
 }
 
 static uint64_t mmix_intc_source_bit(unsigned int source)
@@ -181,6 +228,7 @@ static void test_mmix_virtio_slots_and_boundaries(void)
 {
     static const unsigned int active[] = { 0, 1, 31 };
     QTestState *qts = qtest_init("-machine virt");
+    unsigned int slot;
     unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(active); i++) {
@@ -203,35 +251,103 @@ static void test_mmix_virtio_slots_and_boundaries(void)
     g_assert_cmphex(qtest_readb(qts, mmix_virtio_slot(31) +
                                 MMIX_VIRTIO_STRIDE - 1), !=, 0x5a);
 
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(32) +
-                                QVIRTIO_MMIO_MAGIC_VALUE), !=, 0x74726976);
-    g_assert_cmphex(qtest_readl(qts,
-                                mmix_virtio_slot(
-                                    MMIX_VIRTIO_SLOT_CAPACITY - 1) +
-                                QVIRTIO_MMIO_MAGIC_VALUE), !=, 0x74726976);
-    g_assert_cmphex(qtest_readl(qts, MMIX_DISCOVERABLE_BASE +
-                                QVIRTIO_MMIO_MAGIC_VALUE), !=, 0x74726976);
+    for (slot = MMIX_VIRTIO_ACTIVE_SLOTS;
+         slot < MMIX_VIRTIO_SLOT_CAPACITY; slot++) {
+        g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(slot) +
+                                    QVIRTIO_MMIO_MAGIC_VALUE), !=,
+                        0x74726976);
+    }
+    for (slot = 0; slot < MMIX_DISCOVERABLE_SLOT_CAPACITY; slot++) {
+        uint64_t base = MMIX_DISCOVERABLE_BASE + slot * MMIX_VIRTIO_STRIDE;
+
+        g_assert_cmphex(qtest_readl(qts, base +
+                                    QVIRTIO_MMIO_MAGIC_VALUE), !=,
+                        0x74726976);
+    }
 
     qtest_quit(qts);
 }
 
-static void test_mmix_virtio_attachment_order(void)
+static void mmix_test_virtio_attachment_order(bool rng_first)
 {
-    QTestState *qts = qtest_init(
+    const char *devices = rng_first ?
+        "-device virtio-rng-device,id=rngdev,rng=rng0 "
+        "-device virtio-blk-device,id=blkdev,drive=blk0" :
+        "-device virtio-blk-device,id=blkdev,drive=blk0 "
+        "-device virtio-rng-device,id=rngdev,rng=rng0";
+    g_autofree char *args = g_strdup_printf(
         "-machine virt "
         "-drive file=null-co://,if=none,format=raw,id=blk0 "
-        "-object rng-builtin,id=rng0 "
-        "-device virtio-blk-device,drive=blk0 "
-        "-device virtio-rng-device,rng=rng0");
+        "-object rng-builtin,id=rng0 %s", devices);
+    QTestState *qts = qtest_init(args);
 
     g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(0) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_BLOCK);
+                                QVIRTIO_MMIO_DEVICE_ID), ==,
+                    rng_first ? VIRTIO_ID_RNG : VIRTIO_ID_BLOCK);
     g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(1) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
+                                QVIRTIO_MMIO_DEVICE_ID), ==,
+                    rng_first ? VIRTIO_ID_BLOCK : VIRTIO_ID_RNG);
     g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(2) +
                                 QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+    mmix_assert_transport_owner(qts, 0, rng_first ?
+                                "virtio-rng-device" :
+                                "virtio-blk-device");
+    mmix_assert_transport_owner(qts, 1, rng_first ?
+                                "virtio-blk-device" :
+                                "virtio-rng-device");
+    mmix_assert_transport_owner(qts, 2, NULL);
 
     qtest_quit(qts);
+}
+
+static void test_mmix_virtio_attachment_block_rng(void)
+{
+    mmix_test_virtio_attachment_order(false);
+}
+
+static void test_mmix_virtio_attachment_rng_block(void)
+{
+    mmix_test_virtio_attachment_order(true);
+}
+
+static void test_mmix_virtio_transport_exhaustion(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+    g_autoptr(GPtrArray) argv = g_ptr_array_new();
+    int wait_status;
+    unsigned int i;
+
+    g_ptr_array_add(argv, (void *)qtest_qemu_binary(NULL));
+    g_ptr_array_add(argv, (void *)"-machine");
+    g_ptr_array_add(argv, (void *)"virt");
+    g_ptr_array_add(argv, (void *)"-display");
+    g_ptr_array_add(argv, (void *)"none");
+    g_ptr_array_add(argv, (void *)"-monitor");
+    g_ptr_array_add(argv, (void *)"none");
+    g_ptr_array_add(argv, (void *)"-serial");
+    g_ptr_array_add(argv, (void *)"none");
+    for (i = 0; i <= MMIX_VIRTIO_ACTIVE_SLOTS; i++) {
+        g_ptr_array_add(argv, (void *)"-device");
+        g_ptr_array_add(argv,
+                        g_strdup_printf("virtio-serial-device,id=serial%u",
+                                        i));
+    }
+    g_ptr_array_add(argv, NULL);
+
+    g_assert_true(g_spawn_sync(NULL, (char **)argv->pdata, NULL,
+                               G_SPAWN_STDOUT_TO_DEV_NULL,
+                               NULL, NULL, NULL, &stderr_text,
+                               &wait_status, &error));
+    g_assert_no_error(error);
+    g_assert_cmpint(wait_status, !=, 0);
+    g_assert_nonnull(strstr(stderr_text,
+                           "A 'virtio-bus' bus was found but is full"));
+    g_assert_nonnull(strstr(stderr_text, "serial32"));
+
+    for (i = 10; i + 1 < argv->len; i += 2) {
+        g_free(g_ptr_array_index(argv, i));
+    }
 }
 
 static void test_mmix_virtio_first_slot_irq_and_dma(void)
@@ -362,8 +478,12 @@ int main(int argc, char **argv)
 
     qtest_add_func("/mmix/virtio-mmio/slots-and-boundaries",
                    test_mmix_virtio_slots_and_boundaries);
-    qtest_add_func("/mmix/virtio-mmio/attachment-order",
-                   test_mmix_virtio_attachment_order);
+    qtest_add_func("/mmix/virtio-mmio/attachment-order/block-rng",
+                   test_mmix_virtio_attachment_block_rng);
+    qtest_add_func("/mmix/virtio-mmio/attachment-order/rng-block",
+                   test_mmix_virtio_attachment_rng_block);
+    qtest_add_func("/mmix/virtio-mmio/transport-exhaustion",
+                   test_mmix_virtio_transport_exhaustion);
     qtest_add_func("/mmix/virtio-mmio/first-slot-irq-and-dma",
                    test_mmix_virtio_first_slot_irq_and_dma);
     qtest_add_func("/mmix/virtio-mmio/shared-irq-retrigger",

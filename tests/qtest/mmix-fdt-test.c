@@ -428,6 +428,30 @@ static void assert_interrupt_topology(QTestState *qts, const void *fdt,
     }
 }
 
+static void assert_virtio_node_order(const void *fdt)
+{
+    unsigned int slot = 0;
+    int soc = node_offset(fdt, "/soc");
+    int node;
+
+    fdt_for_each_subnode(node, fdt, soc) {
+        const fdt64_t *reg;
+        int length;
+
+        if (fdt_node_check_compatible(fdt, node, "virtio,mmio") != 0) {
+            continue;
+        }
+        g_assert_cmpuint(slot, <, MMIX_VIRTIO_COUNT);
+        reg = fdt_getprop(fdt, node, "reg", &length);
+        g_assert_nonnull(reg);
+        g_assert_cmpint(length, ==, 2 * sizeof(*reg));
+        g_assert_cmphex(fdt64_to_cpu(reg[0]), ==,
+                        MMIX_VIRTIO_BASE + slot * MMIX_CONTEXT_STRIDE);
+        slot++;
+    }
+    g_assert_cmpuint(slot, ==, MMIX_VIRTIO_COUNT);
+}
+
 static void assert_active_devices(QTestState *qts, const void *fdt,
                                   uint32_t intc_phandle)
 {
@@ -539,6 +563,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
                     -FDT_ERR_NOTFOUND);
     g_assert_cmpint(fdt_path_offset(fdt, "/pcie@1000100000000"), ==,
                     -FDT_ERR_NOTFOUND);
+    assert_virtio_node_order(fdt);
 }
 
 static void assert_foundation(const void *fdt, size_t size,
