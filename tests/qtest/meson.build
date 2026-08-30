@@ -310,6 +310,7 @@ qtests_mmix = [
   'mmix-ipi-test',
   'mmix-platform-test',
   'mmix-physical-layout-test',
+  'mmix-power-test',
   'mmix-rtc-test',
   'mmix-timer-test',
   'mmix-virtio-mmio-test',

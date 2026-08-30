@@ -20,6 +20,7 @@
 #include "hw/core/loader.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
+#include "hw/misc/virt_ctrl.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
@@ -1429,6 +1430,7 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *framebuffer;
     DeviceState *rtc;
     DeviceState *watchdog;
+    DeviceState *power;
     DeviceState *hosted_state;
     MMIXKernelLoadInfo image_info;
     const MMIXKernelLoadInfo *image_info_ptr = NULL;
@@ -1561,6 +1563,11 @@ static void mmix_virt_init(MachineState *machine)
                     MMIX_VIRT_WATCHDOG_CONTROL_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(watchdog), 0,
                        qdev_get_gpio_in(intc, MMIX_VIRT_WATCHDOG_IRQ));
+
+    power = qdev_new(TYPE_VIRT_CTRL);
+    object_property_add_child(OBJECT(machine), "power-control", OBJECT(power));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(power), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(power), 0, MMIX_VIRT_POWER_BASE);
 
     framebuffer = qdev_new(TYPE_MMIX_FRAMEBUFFER);
     object_property_add_child(OBJECT(machine), "framebuffer",
