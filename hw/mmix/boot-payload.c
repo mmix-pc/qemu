@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "system/memory.h"
 #include "boot-payload.h"
 
 typedef struct MMIXBootPayloadEntry {
@@ -128,6 +129,53 @@ bool mmix_boot_payload_commit(const MMIXBootPayload *payload, void *ram,
 
         memcpy(destination, data, data_size);
         memset(destination + data_size, 0, entry->memory_size - data_size);
+    }
+    return true;
+}
+
+bool mmix_boot_payload_commit_address_space(const MMIXBootPayload *payload,
+                                            AddressSpace *address_space,
+                                            uint64_t ram_size, Error **errp)
+{
+    unsigned int i;
+
+    g_return_val_if_fail(payload != NULL, false);
+    g_return_val_if_fail(address_space != NULL, false);
+
+    if (ram_size != payload->ram_size) {
+        error_setg(errp, "MMIX boot payload RAM size changed before commit");
+        return false;
+    }
+
+    /* All entry ranges were validated before publication. */
+    for (i = 0; i < payload->entries->len; i++) {
+        const MMIXBootPayloadEntry *entry =
+            g_ptr_array_index(payload->entries, i);
+        gsize data_size;
+        const void *data = g_bytes_get_data(entry->data, &data_size);
+        MemTxResult result;
+
+        if (data_size != 0) {
+            result = address_space_write(address_space, entry->address,
+                                         MEMTXATTRS_UNSPECIFIED, data,
+                                         data_size);
+            if (result != MEMTX_OK) {
+                error_setg(errp, "could not write MMIX boot payload '%s'",
+                           entry->name);
+                return false;
+            }
+        }
+        if (data_size != entry->memory_size) {
+            result = address_space_set(address_space,
+                                       entry->address + data_size, 0,
+                                       entry->memory_size - data_size,
+                                       MEMTXATTRS_UNSPECIFIED);
+            if (result != MEMTX_OK) {
+                error_setg(errp, "could not clear MMIX boot payload '%s'",
+                           entry->name);
+                return false;
+            }
+        }
     }
     return true;
 }

@@ -7,6 +7,7 @@
 #ifndef HW_MMIX_BOOT_PAYLOAD_H
 #define HW_MMIX_BOOT_PAYLOAD_H
 
+#include "qemu/typedefs.h"
 #include "qapi/error.h"
 
 typedef struct MMIXBootPayload MMIXBootPayload;
@@ -23,5 +24,8 @@ bool mmix_boot_payload_add_zero(MMIXBootPayload *payload, const char *name,
 
 bool mmix_boot_payload_commit(const MMIXBootPayload *payload, void *ram,
                               uint64_t ram_size, Error **errp);
+bool mmix_boot_payload_commit_address_space(const MMIXBootPayload *payload,
+                                            AddressSpace *address_space,
+                                            uint64_t ram_size, Error **errp);
 
 #endif

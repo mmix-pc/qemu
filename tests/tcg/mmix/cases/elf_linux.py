@@ -29,6 +29,17 @@ class MMIXLinuxSMPEntryTest:
     qemu_args: tuple[str, ...]
 
 
+@dataclasses.dataclass(frozen=True)
+class MMIXLinuxStateTest:
+    name: str
+    image: bytes
+    initrd: bytes
+    entry: int
+    idle_pcs: tuple[int, ...]
+    bss: int
+    qemu_args: tuple[str, ...]
+
+
 LINUX_ENTRY_STATE_TESTS = [
     MMIXLinuxEntryStateTest(
         "elf-linux-one-cpu",
@@ -184,6 +195,44 @@ def linux_smp_entry_program():
 
 
 LINUX_SMP_ENTRY_TESTS = [linux_smp_entry_program()]
+
+
+def linux_state_program():
+    entry = 0x1000
+    bss = 0x4000
+    program = SMPProgram()
+
+    program.emit(
+        insn(ADDI, R32, R0, 0),
+        insn(ADDI, R33, R32, 0x40),
+    )
+    program.emit_branch(BZ, R32, "boot_idle")
+    program.mark("secondary_idle")
+    program.emit_branch(BZ, R254, "secondary_idle")
+    program.mark("boot_idle")
+    program.emit_branch(BZ, R254, "boot_idle")
+
+    return MMIXLinuxStateTest(
+        name="elf-linux-reset-and-snapshot-state",
+        image=elf64_image(entry, program.build(), entry=entry,
+                          mem_size=bss - entry + 8),
+        initrd=b"MMIX Linux reset and snapshot initrd\n",
+        entry=entry,
+        idle_pcs=(
+            program.address("boot_idle", base=entry),
+            program.address("secondary_idle", base=entry),
+        ),
+        bss=bss,
+        qemu_args=(
+            "-smp", "2",
+            "-accel", "tcg,thread=multi",
+            *LINUX_MACHINE,
+            "-initrd", "$INITRD",
+        ),
+    )
+
+
+LINUX_STATE_TESTS = [linux_state_program()]
 
 
 LINUX_PREFLIGHT_REJECTION_TESTS = [

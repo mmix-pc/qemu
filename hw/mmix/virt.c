@@ -734,6 +734,16 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         return;
     }
 
+    if (linux_info &&
+        !mmix_boot_payload_commit_address_space(
+            vms->boot_payload, &address_space_memory, machine->ram_size,
+            &local_err)) {
+        error_reportf_err(local_err,
+                          "could not restore MMIX Linux boot payload: ");
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_ERROR);
+        return;
+    }
+
     if (vms->argument_data) {
         gsize size;
         const void *data = g_bytes_get_data(vms->argument_data, &size);
@@ -745,7 +755,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     }
 
     for (i = 0; i < machine->smp.cpus; i++) {
-        if (!vms->mmo_memory) {
+        if (!vms->mmo_memory && !linux_info) {
             MemTxResult result = address_space_set(
                 &address_space_memory, vms->initial_stacks[i], 0,
                 MMIX_VIRT_INITIAL_STACK_SIZE, MEMTXATTRS_UNSPECIFIED);
@@ -1067,8 +1077,8 @@ static void mmix_virt_init(MachineState *machine)
                                 machine->ram);
 
     if (linux_info_ptr) {
-        if (!mmix_boot_payload_commit(
-                vms->boot_payload, memory_region_get_ram_ptr(machine->ram),
+        if (!mmix_boot_payload_commit_address_space(
+                vms->boot_payload, &address_space_memory,
                 machine->ram_size, &error_fatal)) {
             return;
         }

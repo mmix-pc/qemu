@@ -9,6 +9,7 @@ import json
 import re
 import select
 import socket
+import struct
 import subprocess
 import time
 
@@ -646,6 +647,230 @@ def _qtest_readq(qtest, address):
 
 def _qtest_writeq(qtest, address, value):
     _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+
+
+def _qtest_read(qtest, address, size):
+    response = _qtest_command(qtest, f"read {address:#x} {size:#x}")
+    return bytes.fromhex(response[1][2:])
+
+
+def _qtest_write(qtest, address, data):
+    _qtest_command(
+        qtest, f"write {address:#x} {len(data):#x} 0x{data.hex()}"
+    )
+
+
+def _fdt_property(fdt, node_path, property_name):
+    header = struct.unpack_from(">10I", fdt)
+    structure_offset = header[2]
+    strings_offset = header[3]
+    strings_size = header[8]
+    strings = fdt[strings_offset:strings_offset + strings_size]
+    offset = structure_offset
+    nodes = []
+
+    while offset + 4 <= len(fdt):
+        token = struct.unpack_from(">I", fdt, offset)[0]
+        offset += 4
+        if token == 1:
+            end = fdt.index(0, offset)
+            nodes.append(fdt[offset:end].decode("ascii"))
+            offset = (end + 4) & ~3
+        elif token == 2:
+            nodes.pop()
+        elif token == 3:
+            size, name_offset = struct.unpack_from(">II", fdt, offset)
+            offset += 8
+            end = strings.index(0, name_offset)
+            name = strings[name_offset:end].decode("ascii")
+            value = fdt[offset:offset + size]
+            offset = (offset + size + 3) & ~3
+            path = "/" + "/".join(filter(None, nodes))
+            if path == node_path and name == property_name:
+                return value
+        elif token == 4:
+            continue
+        elif token == 9:
+            break
+        else:
+            raise AssertionError(f"invalid FDT token {token}")
+    raise AssertionError(f"missing FDT property {node_path}:{property_name}")
+
+
+def _wait_for_cpu_pcs(process, expected):
+    deadline = time.monotonic() + 5
+
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+        _qmp_command(process, "stop")
+        dumps = [_hmp_register_dump(process, cpu)
+                 for cpu in range(len(expected))]
+        if all(_hmp_register_value(dump, "pc=0x") == pc
+               for dump, pc in zip(dumps, expected)):
+            return dumps
+        _qmp_command(process, "cont")
+    raise AssertionError("CPUs did not reach their expected PCs")
+
+
+def run_linux_state_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    initrd = workdir / f"{test.name}.initrd"
+    snapshot = workdir / f"{test.name}.qcow2"
+    qtest_path = workdir / f"{test.name}.sock"
+    qemu_img = qemu.with_name("qemu-img")
+    saved_code = bytes.fromhex("1020304050607080")
+    saved_bss = bytes.fromhex("8877665544332211")
+    saved_fdt = bytes.fromhex("a5a55a5af0f00f0f")
+    saved_initrd = bytes.fromhex("0123456789abcdef")
+    saved_stacks = (
+        bytes.fromhex("1122334455667788"),
+        bytes.fromhex("99aabbccddeeff00"),
+    )
+
+    image.write_bytes(test.image)
+    initrd.write_bytes(test.initrd)
+    for path in (snapshot, qtest_path):
+        if path.exists():
+            path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot, "1M"),
+        check=True,
+        timeout=10,
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    qemu_args = tuple(
+        str(initrd) if arg == "$INITRD" else arg for arg in test.qemu_args
+    )
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(
+            *qemu_args,
+            "-S",
+            "-qmp", "stdio",
+            "-qtest", f"unix:{qtest_path}",
+            "-qtest-log", "/dev/null",
+            "-drive", f"file={snapshot},format=qcow2,if=none",
+        ),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+
+        stacks = tuple(
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(2)
+        )
+        dump = _hmp_register_dump(process, 0)
+        fdt_address = _hmp_register_value(dump, "r1  =0x")
+        fdt_header = _qtest_read(qtest, fdt_address, 8)
+        fdt_size = struct.unpack_from(">I", fdt_header, 4)[0]
+        original_fdt = _qtest_read(qtest, fdt_address, fdt_size)
+        initrd_address = struct.unpack(
+            ">Q", _fdt_property(original_fdt, "/chosen",
+                                 "linux,initrd-start")
+        )[0]
+        original_code = _qtest_read(qtest, test.entry, len(saved_code))
+        original_initrd = _qtest_read(qtest, initrd_address,
+                                      len(test.initrd))
+        assert original_initrd == test.initrd
+        assert _qtest_read(qtest, test.bss, len(saved_bss)) == bytes(8)
+        for stack in stacks:
+            assert _qtest_read(qtest, stack, 8) == bytes(8)
+
+        _qmp_command(process, "cont")
+        saved_dumps = _wait_for_cpu_pcs(process, test.idle_pcs)
+        for cpu, dump in enumerate(saved_dumps):
+            assert _hmp_register_value(dump, "r32 =0x") == cpu
+            assert _hmp_register_value(dump, "r33 =0x") == 0x40 + cpu
+
+        _qtest_write(qtest, test.entry, saved_code)
+        _qtest_write(qtest, test.bss, saved_bss)
+        _qtest_write(qtest, fdt_address + 16, saved_fdt)
+        _qtest_write(qtest, initrd_address, saved_initrd)
+        for stack, value in zip(stacks, saved_stacks):
+            _qtest_write(qtest, stack, value)
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "savevm linux-loader-state"},
+        )
+        assert not result, result
+
+        _qmp_command(process, "system_reset")
+        for cpu in range(2):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == test.entry
+            assert _hmp_register_value(dump, "r0  =0x") == cpu
+            assert _hmp_register_value(dump, "r1  =0x") == fdt_address
+            assert _hmp_register_value(dump, "rO=0x") == stacks[cpu]
+            assert _hmp_register_value(dump, "rS=0x") == stacks[cpu]
+        assert _qtest_read(qtest, test.entry, 8) == original_code
+        assert _qtest_read(qtest, test.bss, 8) == bytes(8)
+        assert _qtest_read(qtest, fdt_address, fdt_size) == original_fdt
+        assert _qtest_read(qtest, initrd_address,
+                           len(test.initrd)) == original_initrd
+        for stack in stacks:
+            assert _qtest_read(qtest, stack, 8) == bytes(8)
+
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "loadvm linux-loader-state"},
+        )
+        assert not result, result
+        for cpu, expected_pc in enumerate(test.idle_pcs):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == expected_pc
+            assert _hmp_register_value(dump, "r32 =0x") == cpu
+            assert _hmp_register_value(dump, "r33 =0x") == 0x40 + cpu
+            assert _hmp_register_value(dump, "r1  =0x") == fdt_address
+        assert _qtest_read(qtest, test.entry, 8) == saved_code
+        assert _qtest_read(qtest, test.bss, 8) == saved_bss
+        assert _qtest_read(qtest, fdt_address + 16, 8) == saved_fdt
+        assert _qtest_read(qtest, initrd_address, 8) == saved_initrd
+        for stack, value in zip(stacks, saved_stacks):
+            assert _qtest_read(qtest, stack, 8) == value
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (snapshot, qtest_path):
+            if path.exists():
+                path.unlink()
 
 
 def _wait_for_pc(process, expected):
