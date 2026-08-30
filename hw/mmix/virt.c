@@ -20,6 +20,8 @@
 #include "hw/core/sysbus.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
+#include "system/block-backend-global-state.h"
+#include "system/blockdev.h"
 #include "system/reset.h"
 #include "system/runstate.h"
 #include "system/system.h"
@@ -50,6 +52,12 @@ typedef enum MMIXELFStartupABI {
     MMIX_ELF_STARTUP_ABI_LINUX,
 } MMIXELFStartupABI;
 
+typedef enum MMIXBootMode {
+    MMIX_BOOT_MODE_ERASED_FLASH,
+    MMIX_BOOT_MODE_DIRECT_IMAGE,
+    MMIX_BOOT_MODE_FIRMWARE,
+} MMIXBootMode;
+
 enum {
     MMIX_LINUX_COMMAND_LINE_MAX = 4095,
 };
@@ -68,6 +76,8 @@ struct MMIXVirtMachineState {
     GBytes *fdt;
     uint64_t argument_base;
     uint64_t argument_count;
+    MMIXBootMode boot_mode;
+    char *pflash_backend_name[2];
     MMIXELFStartupABI elf_startup_abi;
     bool elf_startup_abi_explicit;
     MMIXMMOPlan *mmo_plan;
@@ -81,6 +91,75 @@ struct MMIXVirtMachineState {
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
+
+static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
+                                             unsigned int bank,
+                                             bool *present, Error **errp)
+{
+    const char *name = vms->pflash_backend_name[bank];
+    DriveInfo *legacy = drive_get(IF_PFLASH, 0, bank);
+
+    if (name && legacy) {
+        error_setg(errp,
+                   "MMIX pflash%u cannot be supplied by both the machine "
+                   "property and -drive if=pflash,unit=%u",
+                   bank, bank);
+        return false;
+    }
+    if (name && !blk_by_name(name)) {
+        error_setg(errp, "MMIX pflash%u cannot find block backend '%s'",
+                   bank, name);
+        return false;
+    }
+
+    *present = name || legacy;
+    return true;
+}
+
+static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
+                                          Error **errp)
+{
+    MachineState *machine = MACHINE(vms);
+    bool has_bios = machine->firmware &&
+                    strcmp(machine->firmware, "none");
+    bool has_pflash[2];
+    bool firmware;
+
+    if (!mmix_virt_resolve_pflash_backend(vms, 0, &has_pflash[0], errp) ||
+        !mmix_virt_resolve_pflash_backend(vms, 1, &has_pflash[1], errp)) {
+        return false;
+    }
+    if (has_bios && has_pflash[0]) {
+        error_setg(errp, "MMIX executable firmware cannot be supplied by "
+                   "both -bios and pflash0");
+        return false;
+    }
+
+    firmware = has_bios || has_pflash[0];
+    if (has_pflash[1] && !firmware) {
+        error_setg(errp, "MMIX pflash1 requires executable firmware from "
+                   "-bios or pflash0");
+        return false;
+    }
+    if (firmware && machine->kernel_filename) {
+        Error *local_err = NULL;
+
+        if (mmix_kernel_is_mmo(machine->kernel_filename, &local_err)) {
+            error_setg(errp, "MMIX firmware boot does not accept an MMO "
+                       "-kernel payload");
+            return false;
+        }
+        if (local_err) {
+            error_propagate(errp, local_err);
+            return false;
+        }
+    }
+
+    vms->boot_mode = firmware ? MMIX_BOOT_MODE_FIRMWARE :
+        machine->kernel_filename ? MMIX_BOOT_MODE_DIRECT_IMAGE :
+        MMIX_BOOT_MODE_ERASED_FLASH;
+    return true;
+}
 
 static bool mmix_virt_hosted_validate(void *opaque, uint64_t address,
                                      size_t size, size_t alignment,
@@ -830,7 +909,7 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
             .has_initrd = machine->initrd_filename != NULL,
             .has_explicit_elf_startup_abi =
                 vms->elf_startup_abi_explicit,
-            .has_firmware = machine->firmware != NULL,
+            .has_firmware = false,
             .linux_handoff = false,
         };
         if (!mmix_mmo_plan_parse(machine->kernel_filename, &mmo_plan,
@@ -1049,11 +1128,12 @@ static void mmix_virt_init(MachineState *machine)
                    "MMIX virt does not accept a user-supplied DTB");
         return;
     }
-    if (!mmix_virt_validate_memory(machine, &error_fatal) ||
+    if (!mmix_virt_preflight_boot_mode(vms, &error_fatal) ||
+        !mmix_virt_validate_memory(machine, &error_fatal) ||
         !mmix_virt_build_ram(vms, &error_fatal)) {
         return;
     }
-    if (machine->kernel_filename) {
+    if (vms->boot_mode == MMIX_BOOT_MODE_DIRECT_IMAGE) {
         if (!mmix_virt_prepare_kernel(vms, &image_info, &image_ranges,
                                       &arguments, &argument_count,
                                       &argument_size, &linux_info,
@@ -1222,6 +1302,47 @@ static void mmix_virt_set_elf_startup_abi(Object *obj, const char *value,
     vms->elf_startup_abi_explicit = true;
 }
 
+static char *mmix_virt_get_pflash_backend(Object *obj, Error **errp,
+                                          unsigned int bank)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    (void)errp;
+    return g_strdup(vms->pflash_backend_name[bank]);
+}
+
+static void mmix_virt_set_pflash_backend(Object *obj, const char *value,
+                                         Error **errp, unsigned int bank)
+{
+    MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    (void)errp;
+    g_free(vms->pflash_backend_name[bank]);
+    vms->pflash_backend_name[bank] = value[0] ? g_strdup(value) : NULL;
+}
+
+static char *mmix_virt_get_pflash0(Object *obj, Error **errp)
+{
+    return mmix_virt_get_pflash_backend(obj, errp, 0);
+}
+
+static void mmix_virt_set_pflash0(Object *obj, const char *value,
+                                  Error **errp)
+{
+    mmix_virt_set_pflash_backend(obj, value, errp, 0);
+}
+
+static char *mmix_virt_get_pflash1(Object *obj, Error **errp)
+{
+    return mmix_virt_get_pflash_backend(obj, errp, 1);
+}
+
+static void mmix_virt_set_pflash1(Object *obj, const char *value,
+                                  Error **errp)
+{
+    mmix_virt_set_pflash_backend(obj, value, errp, 1);
+}
+
 static void mmix_virt_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -1244,12 +1365,21 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(
         oc, "elf-startup-abi",
         "Set the ELF startup ABI (bare, argc-argv, or linux)");
+    object_class_property_add_str(oc, "pflash0", mmix_virt_get_pflash0,
+                                  mmix_virt_set_pflash0);
+    object_class_property_set_description(
+        oc, "pflash0", "Block backend for executable firmware flash");
+    object_class_property_add_str(oc, "pflash1", mmix_virt_get_pflash1,
+                                  mmix_virt_set_pflash1);
+    object_class_property_set_description(
+        oc, "pflash1", "Block backend for firmware variable flash");
 }
 
 static void mmix_virt_instance_init(Object *obj)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
 
+    vms->boot_mode = MMIX_BOOT_MODE_ERASED_FLASH;
     vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BARE;
 }
 
@@ -1264,6 +1394,8 @@ static void mmix_virt_instance_finalize(Object *obj)
     mmix_sparse_memory_free(vms->mmo_memory);
     mmix_mmo_hosted_plan_free(vms->mmo_hosted_plan);
     mmix_mmo_plan_free(vms->mmo_plan);
+    g_free(vms->pflash_backend_name[0]);
+    g_free(vms->pflash_backend_name[1]);
 }
 
 static const TypeInfo mmix_virt_machine_typeinfo = {

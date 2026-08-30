@@ -378,6 +378,44 @@ def _qmp_command(process, command, arguments=None, timeout=5):
     raise AssertionError(f"timed out waiting for QMP {command}")
 
 
+def run_paused_machine(qemu, *, machine="virt", qemu_args=()):
+    command = [
+        str(qemu),
+        "-machine", machine,
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", "none",
+        *qemu_args,
+        "-S",
+        "-qmp", "stdio",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        _qmp_command(process, "quit")
+        _, stderr = process.communicate(timeout=5)
+        if process.returncode != 0:
+            raise AssertionError(
+                "paused QEMU failed: "
+                f"{stderr.decode('utf-8', errors='replace')}"
+            )
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
 def run_mttcg_elf_test(qemu, workdir, test):
     image = workdir / f"{test.name}.elf"
     log = workdir / f"{test.name}.log"

@@ -5,11 +5,179 @@
 import struct
 import subprocess
 
-from lib.execution import run_no_image_mttcg_test
+import pytest
+
+from lib.execution import run_no_image_mttcg_test, run_paused_machine
+
+
+MMO_PREAMBLE = bytes((0x98, 0x09, 0x01, 0x01))
+
+
+def _pflash_drive(path, unit):
+    return ("-drive", f"if=pflash,unit={unit},format=raw,file={path}")
+
+
+def _firmware_files(workdir, name):
+    files = {}
+
+    for role in ("bios", "pflash0", "pflash1", "kernel", "initrd"):
+        path = workdir / f"firmware-preflight-{name}-{role}.bin"
+        contents = f"{name}-{role}".encode("ascii")
+        path.write_bytes(contents)
+        files[role] = path
+    return files
+
+
+def _firmware_args(files, *, bios=False, bios_none=False, pflash0=False,
+                   pflash1=False, payloads=False):
+    args = []
+
+    if bios:
+        args.extend(("-bios", str(files["bios"])))
+    elif bios_none:
+        args.extend(("-bios", "none"))
+    if pflash0:
+        args.extend(_pflash_drive(files["pflash0"], 0))
+    if pflash1:
+        args.extend(_pflash_drive(files["pflash1"], 1))
+    if payloads:
+        args.extend((
+            "-kernel", str(files["kernel"]),
+            "-initrd", str(files["initrd"]),
+            "-append", "opaque firmware command line",
+        ))
+    return tuple(args)
+
+
+def _machine_pflash_configuration(files, *, bios_none=False, pflash1=False):
+    properties = ["virt", "pflash0=code"]
+    args = [
+        "-drive", f"if=none,id=code,format=raw,file={files['pflash0']}",
+    ]
+
+    if bios_none:
+        args.extend(("-bios", "none"))
+    if pflash1:
+        properties.append("pflash1=vars")
+        args.extend((
+            "-drive", f"if=none,id=vars,format=raw,file={files['pflash1']}",
+        ))
+    return ",".join(properties), tuple(args)
+
+
+def _run_preflight_failure(qemu, args):
+    return subprocess.run(
+        [qemu, "-machine", "virt", "-display", "none", "-monitor", "none",
+         "-serial", "none", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
 
 
 def test_no_image_mttcg_startup(qemu):
     run_no_image_mttcg_test(qemu)
+
+
+@pytest.mark.parametrize(
+    "name,options",
+    (
+        ("bios", {"bios": True}),
+        ("bios-payloads", {"bios": True, "payloads": True}),
+    ),
+)
+def test_firmware_preflight_accepts_valid_inputs(qemu, workdir, name, options):
+    files = _firmware_files(workdir, name)
+    before = {role: path.read_bytes() for role, path in files.items()}
+
+    run_paused_machine(qemu, qemu_args=_firmware_args(files, **options))
+
+    assert {role: path.read_bytes() for role, path in files.items()} == before
+
+
+@pytest.mark.parametrize(
+    "name,options",
+    (
+        ("pflash0", {}),
+        ("bios-none-pflash0", {"bios_none": True}),
+        ("pflash0-pflash1", {"pflash1": True}),
+    ),
+)
+def test_firmware_preflight_accepts_machine_pflash_properties(
+    qemu, workdir, name, options
+):
+    files = _firmware_files(workdir, name)
+    before = {role: path.read_bytes() for role, path in files.items()}
+    machine, args = _machine_pflash_configuration(files, **options)
+
+    run_paused_machine(qemu, machine=machine, qemu_args=args)
+
+    assert {role: path.read_bytes() for role, path in files.items()} == before
+
+
+def test_firmware_preflight_accepts_bios_with_machine_pflash1(qemu, workdir):
+    files = _firmware_files(workdir, "bios-pflash1")
+    before = {role: path.read_bytes() for role, path in files.items()}
+    args = (
+        "-drive", f"if=none,id=vars,format=raw,file={files['pflash1']}",
+        "-bios", str(files["bios"]),
+    )
+
+    run_paused_machine(qemu, machine="virt,pflash1=vars", qemu_args=args)
+
+    assert {role: path.read_bytes() for role, path in files.items()} == before
+
+
+@pytest.mark.parametrize(
+    "name,options,diagnostic",
+    (
+        (
+            "bios-pflash0",
+            {"bios": True, "pflash0": True},
+            "executable firmware cannot be supplied by both -bios and "
+            "pflash0",
+        ),
+        (
+            "pflash1-only",
+            {"pflash1": True},
+            "pflash1 requires executable firmware from -bios or pflash0",
+        ),
+        (
+            "bios-none-pflash1",
+            {"bios_none": True, "pflash1": True},
+            "pflash1 requires executable firmware from -bios or pflash0",
+        ),
+        (
+            "bios-pflash0-pflash1",
+            {"bios": True, "pflash0": True, "pflash1": True},
+            "executable firmware cannot be supplied by both -bios and "
+            "pflash0",
+        ),
+    ),
+)
+def test_firmware_preflight_rejects_conflicts(
+    qemu, workdir, name, options, diagnostic
+):
+    files = _firmware_files(workdir, name)
+    before = {role: path.read_bytes() for role, path in files.items()}
+
+    result = _run_preflight_failure(qemu, _firmware_args(files, **options))
+
+    assert result.returncode != 0
+    assert diagnostic in result.stderr
+    assert {role: path.read_bytes() for role, path in files.items()} == before
+
+
+def test_firmware_preflight_rejects_mmo_payload(qemu, workdir):
+    files = _firmware_files(workdir, "mmo-payload")
+    files["kernel"].write_bytes(MMO_PREAMBLE)
+    args = _firmware_args(files, bios=True, payloads=True)
+
+    result = _run_preflight_failure(qemu, args)
+
+    assert result.returncode != 0
+    assert "firmware boot does not accept an MMO -kernel payload" in result.stderr
 
 
 def test_user_dtb_is_rejected(qemu, workdir):
