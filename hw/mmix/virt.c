@@ -21,6 +21,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysbus.h"
 #include "hw/nvram/fw_cfg.h"
+#include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "semihosting/semihost.h"
 #include "system/block-backend-global-state.h"
@@ -1425,6 +1426,7 @@ static void mmix_virt_init(MachineState *machine)
     DeviceState *ipi;
     DeviceState *timer;
     DeviceState *framebuffer;
+    DeviceState *rtc;
     DeviceState *hosted_state;
     MMIXKernelLoadInfo image_info;
     const MMIXKernelLoadInfo *image_info_ptr = NULL;
@@ -1538,6 +1540,13 @@ static void mmix_virt_init(MachineState *machine)
                    qdev_get_gpio_in(intc, MMIX_VIRT_UART0_IRQ),
                    MMIX_VIRT_UART0_BAUD_BASE, serial_hd(0),
                    DEVICE_BIG_ENDIAN);
+
+    rtc = qdev_new(TYPE_GOLDFISH_RTC);
+    object_property_add_child(OBJECT(machine), "rtc", OBJECT(rtc));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(rtc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(rtc), 0, MMIX_VIRT_RTC_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(rtc), 0,
+                       qdev_get_gpio_in(intc, MMIX_VIRT_RTC_IRQ));
 
     framebuffer = qdev_new(TYPE_MMIX_FRAMEBUFFER);
     object_property_add_child(OBJECT(machine), "framebuffer",
