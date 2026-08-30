@@ -5,4 +5,5 @@ config MMIX_VIRT
     select DEVICE_TREE
     select SERIAL_MM
     select FRAMEBUFFER
+    select PFLASH_CFI01
     select VIRTIO_MMIO

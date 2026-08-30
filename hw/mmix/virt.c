@@ -11,6 +11,7 @@
 #include "qemu/host-utils.h"
 #include "qemu/option.h"
 #include "system/address-spaces.h"
+#include "hw/block/flash.h"
 #include "hw/char/serial-mm.h"
 #include "hw/core/boards.h"
 #include "hw/core/cpu.h"
@@ -72,6 +73,7 @@ struct MMIXVirtMachineState {
     MMIXPhysicalRAM ram;
     MMIXBootPlan *boot_plan;
     MMIXBootPayload *boot_payload;
+    PFlashCFI01 *flash[MMIX_VIRT_FLASH_BANK_COUNT];
     GBytes *argument_data;
     GBytes *fdt;
     uint64_t argument_base;
@@ -91,6 +93,41 @@ struct MMIXVirtMachineState {
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
+
+static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
+                                           unsigned int bank)
+{
+    static const uint64_t bases[MMIX_VIRT_FLASH_BANK_COUNT] = {
+        MMIX_VIRT_FLASH0_BASE,
+        MMIX_VIRT_FLASH1_BASE,
+    };
+    DeviceState *dev = qdev_new(TYPE_PFLASH_CFI01);
+    MemoryRegion *memory;
+    g_autofree char *name = g_strdup_printf("mmix.flash%u", bank);
+
+    g_assert(bank < MMIX_VIRT_FLASH_BANK_COUNT);
+    qdev_prop_set_uint32(dev, "num-blocks",
+                         MMIX_VIRT_FLASH_BANK_SIZE /
+                         MMIX_VIRT_FLASH_SECTOR_SIZE);
+    qdev_prop_set_uint64(dev, "sector-length",
+                         MMIX_VIRT_FLASH_SECTOR_SIZE);
+    qdev_prop_set_uint8(dev, "width", 4);
+    qdev_prop_set_uint8(dev, "device-width", 2);
+    qdev_prop_set_bit(dev, "big-endian", false);
+    qdev_prop_set_uint16(dev, "id0", 0x89);
+    qdev_prop_set_uint16(dev, "id1", 0x18);
+    qdev_prop_set_uint16(dev, "id2", 0x00);
+    qdev_prop_set_uint16(dev, "id3", 0x00);
+    qdev_prop_set_string(dev, "name", name);
+
+    object_property_add_child(OBJECT(vms), name, OBJECT(dev));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    memory = pflash_cfi01_get_memory(PFLASH_CFI01(dev));
+    memset(memory_region_get_ram_ptr(memory), 0xff,
+           MMIX_VIRT_FLASH_BANK_SIZE);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, bases[bank]);
+    return PFLASH_CFI01(dev);
+}
 
 static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
                                              unsigned int bank,
@@ -1184,6 +1221,10 @@ static void mmix_virt_init(MachineState *machine)
         default:
             g_assert_not_reached();
         }
+    }
+
+    for (i = 0; i < MMIX_VIRT_FLASH_BANK_COUNT; i++) {
+        vms->flash[i] = mmix_virt_create_flash(vms, i);
     }
 
     for (i = 0; i < machine->smp.cpus; i++) {

@@ -304,6 +304,7 @@ qtests_hexagon = ['boot-serial-test']
 qtests_mmix = [
   'mmix-fdt-test',
   'mmix-framebuffer-test',
+  'mmix-flash-test',
   'mmix-intc-test',
   'mmix-ipi-test',
   'mmix-platform-test',
