@@ -9,6 +9,7 @@
 #include "qemu/bswap.h"
 #include "libqos/virtio-mmio.h"
 #include "standard-headers/linux/virtio_blk.h"
+#include "standard-headers/linux/virtio_config.h"
 #include "standard-headers/linux/virtio_ids.h"
 #include "standard-headers/linux/virtio_ring.h"
 #include "qobject/qdict.h"
@@ -350,6 +351,74 @@ static void test_mmix_virtio_transport_exhaustion(void)
     }
 }
 
+static void test_mmix_virtio_reset_state(void)
+{
+    QTestState *qts = qtest_init(
+        "-machine virt -object rng-builtin,id=rng0 "
+        "-device virtio-rng-device,rng=rng0");
+
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
+    qtest_writel(qts, MMIX_VIRTIO_BASE + QVIRTIO_MMIO_DEVICE_STATUS,
+                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_STATUS), ==,
+                    VIRTIO_CONFIG_S_ACKNOWLEDGE);
+
+    qtest_system_reset(qts);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
+    mmix_assert_transport_owner(qts, 0, "virtio-rng-device");
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_virtio_migration_state(void)
+{
+    static const char *args =
+        "-machine virt -object rng-builtin,id=rng0 "
+        "-device virtio-rng-device,rng=rng0";
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-virtio-mmio-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    QTestState *from;
+    QTestState *to;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    incoming = g_strdup_printf("%s -incoming %s", args, uri);
+    from = qtest_init(args);
+    to = qtest_init(incoming);
+
+    qtest_writel(from, MMIX_VIRTIO_BASE + QVIRTIO_MMIO_DEVICE_STATUS,
+                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    qtest_qmp_assert_success(from,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_eventwait(from, "STOP");
+    qtest_qmp_eventwait(to, "RESUME");
+
+    g_assert_cmphex(qtest_readl(to, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
+    g_assert_cmphex(qtest_readl(to, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_STATUS), ==,
+                    VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    mmix_assert_transport_owner(to, 0, "virtio-rng-device");
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
 static void test_mmix_virtio_first_slot_irq_and_dma(void)
 {
     const unsigned int source = MMIX_VIRTIO_IRQ_BASE;
@@ -484,6 +553,10 @@ int main(int argc, char **argv)
                    test_mmix_virtio_attachment_rng_block);
     qtest_add_func("/mmix/virtio-mmio/transport-exhaustion",
                    test_mmix_virtio_transport_exhaustion);
+    qtest_add_func("/mmix/virtio-mmio/reset-state",
+                   test_mmix_virtio_reset_state);
+    qtest_add_func("/mmix/virtio-mmio/migration-state",
+                   test_mmix_virtio_migration_state);
     qtest_add_func("/mmix/virtio-mmio/first-slot-irq-and-dma",
                    test_mmix_virtio_first_slot_irq_and_dma);
     qtest_add_func("/mmix/virtio-mmio/shared-irq-retrigger",

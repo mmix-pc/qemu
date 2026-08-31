@@ -14,6 +14,7 @@ from cases.common import (
     MMIX_DATA_SEGMENT_BASE,
     MMIX_HOSTED_LIMIT,
     MMIX_POOL_SEGMENT_BASE,
+    MMIX_RAW_ENTRY,
     MMIX_STACK_SEGMENT_BASE,
 )
 from cases.elf_bare import BARE_ELF_TESTS, BARE_ENTRY, BARE_PROGRAM
@@ -21,7 +22,7 @@ from cases.mmo_hosted import (
     mmo_hosted_debug_image,
     mmo_hosted_open_file_debug_image,
 )
-from cases.raw_loader import RAW_DIRECT_ISA_TESTS, RAW_ENTRY
+from cases.raw_loader import RAW_DIRECT_ISA_TESTS
 from lib.gdb_remote import GDBRemote
 from lib.mmix_asm import halt
 from lib.qemu import build_kernel_command, read_log
@@ -434,8 +435,10 @@ def test_mmo_hosted_snapshot_rejects_open_file(qemu, workdir):
             "raw-debug-memory",
             ".bin",
             RAW_DIRECT_ISA_TESTS[0].program,
-            RAW_ENTRY,
-            RAW_DIRECT_ISA_TESTS[0].program[RAW_ENTRY:RAW_ENTRY + 4],
+            MMIX_RAW_ENTRY,
+            RAW_DIRECT_ISA_TESTS[0].program[
+                MMIX_RAW_ENTRY:MMIX_RAW_ENTRY + 4
+            ],
         ),
         (
             "elf-debug-memory",

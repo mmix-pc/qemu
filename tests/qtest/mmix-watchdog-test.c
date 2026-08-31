@@ -34,6 +34,7 @@
 #define MMIX_INTC_CONTEXT_ENABLE 0x00
 #define MMIX_INTC_CONTEXT_CLAIM 0x800
 #define MMIX_INTC_CONTEXT_COMPLETE 0x808
+#define MMIX_INTC_CONTEXT_STRIDE 0x10000
 
 #define MMIX_INTC_QOM_PATH "/machine/intc"
 #define MMIX_WATCHDOG_QOM_PATH "/machine/watchdog"
@@ -74,9 +75,10 @@ static void mmix_watchdog_refresh(QTestState *qts)
                          MMIX_WATCHDOG_WRR, 0);
 }
 
-static uint64_t mmix_intc_context_reg(uint64_t reg)
+static uint64_t mmix_intc_context_reg(unsigned int cpu, uint64_t reg)
 {
-    return MMIX_INTC_BASE + MMIX_INTC_CONTEXT_BASE + reg;
+    return MMIX_INTC_BASE + MMIX_INTC_CONTEXT_BASE +
+           cpu * MMIX_INTC_CONTEXT_STRIDE + reg;
 }
 
 static uint64_t mmix_watchdog_irq_mask(void)
@@ -84,9 +86,10 @@ static uint64_t mmix_watchdog_irq_mask(void)
     return UINT64_C(1) << MMIX_WATCHDOG_IRQ;
 }
 
-static void mmix_intc_enable_watchdog(QTestState *qts)
+static void mmix_intc_enable_watchdog(QTestState *qts, unsigned int cpu)
 {
-    qtest_writeq(qts, mmix_intc_context_reg(MMIX_INTC_CONTEXT_ENABLE),
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(cpu, MMIX_INTC_CONTEXT_ENABLE),
                  mmix_watchdog_irq_mask());
 }
 
@@ -103,13 +106,20 @@ static QTestState *mmix_watchdog_start(const char *action)
     return qtest_initf("-machine virt -watchdog-action %s", action);
 }
 
-static QTestState *mmix_watchdog_start_intc(const char *action)
+static QTestState *mmix_watchdog_start_intc_cpus(const char *action,
+                                                 unsigned int cpus)
 {
-    QTestState *qts = mmix_watchdog_start(action);
+    QTestState *qts = qtest_initf(
+        "-machine virt -smp %u -watchdog-action %s", cpus, action);
 
     qtest_irq_intercept_out_named(qts, MMIX_INTC_QOM_PATH,
                                   MMIX_SYSBUS_OUTPUT_IRQ);
     return qts;
+}
+
+static QTestState *mmix_watchdog_start_intc(const char *action)
+{
+    return mmix_watchdog_start_intc_cpus(action, 1);
 }
 
 static QTestState *mmix_watchdog_start_output(const char *action)
@@ -170,7 +180,7 @@ static void test_mmix_watchdog_first_stage_irq(void)
 {
     QTestState *qts = mmix_watchdog_start_intc("none");
 
-    mmix_intc_enable_watchdog(qts);
+    mmix_intc_enable_watchdog(qts, 0);
     mmix_watchdog_program(qts, 10);
     g_assert_false(qtest_get_irq(qts, 0));
 
@@ -182,21 +192,71 @@ static void test_mmix_watchdog_first_stage_irq(void)
     g_assert_true(qtest_get_irq(qts, 0));
     g_assert_cmpuint(qtest_readq(
                          qts,
-                         mmix_intc_context_reg(MMIX_INTC_CONTEXT_CLAIM)), ==,
+                         mmix_intc_context_reg(
+                             0, MMIX_INTC_CONTEXT_CLAIM)), ==,
                      MMIX_WATCHDOG_IRQ);
     g_assert_false(qtest_get_irq(qts, 0));
 
-    qtest_writeq(qts, mmix_intc_context_reg(MMIX_INTC_CONTEXT_COMPLETE),
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(0, MMIX_INTC_CONTEXT_COMPLETE),
                  MMIX_WATCHDOG_IRQ);
     g_assert_true(qtest_get_irq(qts, 0));
     mmix_watchdog_refresh(qts);
-    qtest_writeq(qts, mmix_intc_context_reg(MMIX_INTC_CONTEXT_COMPLETE),
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(0, MMIX_INTC_CONTEXT_COMPLETE),
                  MMIX_WATCHDOG_IRQ);
     g_assert_cmphex(mmix_watchdog_control_readl(qts, MMIX_WATCHDOG_WCS), ==,
                     MMIX_WATCHDOG_WCS_EN);
     g_assert_cmphex(qtest_readq(qts, MMIX_INTC_BASE + MMIX_INTC_PENDING), ==,
                     0);
     g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_watchdog_shared_irq_routing(void)
+{
+    QTestState *qts = mmix_watchdog_start_intc_cpus("none", 2);
+
+    mmix_watchdog_program(qts, 10);
+    qtest_clock_step(qts, 10);
+    g_assert_cmphex(qtest_readq(qts, MMIX_INTC_BASE + MMIX_INTC_PENDING), ==,
+                    mmix_watchdog_irq_mask());
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_enable_watchdog(qts, 0);
+    mmix_intc_enable_watchdog(qts, 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts,
+                         mmix_intc_context_reg(
+                             1, MMIX_INTC_CONTEXT_CLAIM)), ==,
+                     MMIX_WATCHDOG_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts,
+                         mmix_intc_context_reg(
+                             0, MMIX_INTC_CONTEXT_CLAIM)), ==, 0);
+
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(1, MMIX_INTC_CONTEXT_COMPLETE),
+                 MMIX_WATCHDOG_IRQ);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts,
+                         mmix_intc_context_reg(
+                             0, MMIX_INTC_CONTEXT_CLAIM)), ==,
+                     MMIX_WATCHDOG_IRQ);
+    mmix_watchdog_refresh(qts);
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(0, MMIX_INTC_CONTEXT_COMPLETE),
+                 MMIX_WATCHDOG_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
 
     qtest_quit(qts);
 }
@@ -343,6 +403,8 @@ int main(int argc, char **argv)
                    test_mmix_watchdog_reset_and_bounds);
     qtest_add_func("/mmix/watchdog/migration",
                    test_mmix_watchdog_migration);
+    qtest_add_func("/mmix/watchdog/shared-irq-routing",
+                   test_mmix_watchdog_shared_irq_routing);
 
     return g_test_run();
 }

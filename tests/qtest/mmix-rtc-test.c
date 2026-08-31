@@ -62,9 +62,10 @@ static void mmix_rtc_write_alarm(QTestState *qts, uint64_t value)
     mmix_rtc_writel(qts, MMIX_RTC_ALARM_LOW, value);
 }
 
-static uint64_t mmix_intc_context_reg(uint64_t reg)
+static uint64_t mmix_intc_context_reg(unsigned int cpu, uint64_t reg)
 {
-    return MMIX_VIRT_INTC_BASE + MMIX_VIRT_INTC_CONTEXT_BASE + reg;
+    return MMIX_VIRT_INTC_BASE + MMIX_VIRT_INTC_CONTEXT_BASE +
+           cpu * MMIX_VIRT_RTC_RESERVATION_SIZE + reg;
 }
 
 static uint64_t mmix_rtc_irq_mask(void)
@@ -72,20 +73,27 @@ static uint64_t mmix_rtc_irq_mask(void)
     return UINT64_C(1) << MMIX_VIRT_RTC_IRQ;
 }
 
-static void mmix_intc_enable_rtc(QTestState *qts)
+static void mmix_intc_enable_rtc(QTestState *qts, unsigned int cpu)
 {
     qtest_writeq(qts,
-                 mmix_intc_context_reg(MMIX_VIRT_INTC_CONTEXT_ENABLE),
+                 mmix_intc_context_reg(cpu,
+                                       MMIX_VIRT_INTC_CONTEXT_ENABLE),
                  mmix_rtc_irq_mask());
 }
 
-static QTestState *mmix_rtc_start(void)
+static QTestState *mmix_rtc_start_cpus(unsigned int cpus)
 {
-    QTestState *qts = qtest_init("-machine virt -rtc clock=vm");
+    QTestState *qts = qtest_initf("-machine virt -rtc clock=vm -smp %u",
+                                  cpus);
 
     qtest_irq_intercept_out_named(qts, MMIX_INTC_QOM_PATH,
                                   MMIX_INTC_OUTPUT_IRQ);
     return qts;
+}
+
+static QTestState *mmix_rtc_start(void)
+{
+    return mmix_rtc_start_cpus(1);
 }
 
 static void mmix_assert_unassigned(QTestState *qts, uint64_t address)
@@ -131,7 +139,7 @@ static void test_mmix_rtc_time_and_alarm(void)
     uint64_t before = mmix_rtc_read_time(qts);
     uint64_t deadline = before + 1000;
 
-    mmix_intc_enable_rtc(qts);
+    mmix_intc_enable_rtc(qts, 0);
     mmix_rtc_writel(qts, MMIX_RTC_IRQ_ENABLED, 1);
     mmix_rtc_write_alarm(qts, deadline);
     g_assert_cmpuint(mmix_rtc_readl(qts, MMIX_RTC_ALARM_STATUS), ==, 1);
@@ -145,13 +153,14 @@ static void test_mmix_rtc_time_and_alarm(void)
     g_assert_true(qtest_get_irq(qts, 0));
     g_assert_cmpuint(qtest_readq(
                          qts,
-                         mmix_intc_context_reg(
+                         mmix_intc_context_reg(0,
                              MMIX_VIRT_INTC_CONTEXT_CLAIM)), ==,
                      MMIX_VIRT_RTC_IRQ);
     g_assert_false(qtest_get_irq(qts, 0));
 
     qtest_writeq(qts,
-                 mmix_intc_context_reg(MMIX_VIRT_INTC_CONTEXT_COMPLETE),
+                 mmix_intc_context_reg(0,
+                                       MMIX_VIRT_INTC_CONTEXT_COMPLETE),
                  MMIX_VIRT_RTC_IRQ);
     g_assert_true(qtest_get_irq(qts, 0));
     mmix_rtc_writel(qts, MMIX_RTC_CLEAR_INTERRUPT, 0);
@@ -181,7 +190,7 @@ static void test_mmix_rtc_reset(void)
     QTestState *qts = mmix_rtc_start();
     uint64_t now = mmix_rtc_read_time(qts);
 
-    mmix_intc_enable_rtc(qts);
+    mmix_intc_enable_rtc(qts, 0);
     mmix_rtc_writel(qts, MMIX_RTC_IRQ_ENABLED, 1);
     mmix_rtc_write_alarm(qts, now);
     g_assert_true(qtest_get_irq(qts, 0));
@@ -205,24 +214,34 @@ static void test_mmix_rtc_migration(void)
     g_autofree char *incoming = NULL;
     QTestState *from;
     QTestState *to;
-    uint64_t deadline;
+    uint64_t alarm;
 
     g_assert_no_error(error);
     g_assert_nonnull(tmpdir);
     socket = g_build_filename(tmpdir, "migration.sock", NULL);
     uri = g_strdup_printf("unix:%s", socket);
-    incoming = g_strdup_printf("-machine virt -rtc clock=vm -incoming %s",
-                               uri);
+    incoming = g_strdup_printf(
+        "-machine virt -rtc clock=vm -smp 2 -incoming %s", uri);
 
-    from = mmix_rtc_start();
+    from = mmix_rtc_start_cpus(2);
     to = qtest_init(incoming);
     qtest_irq_intercept_out_named(to, MMIX_INTC_QOM_PATH,
                                   MMIX_INTC_OUTPUT_IRQ);
 
-    mmix_intc_enable_rtc(from);
+    mmix_intc_enable_rtc(from, 0);
+    mmix_intc_enable_rtc(from, 1);
     mmix_rtc_writel(from, MMIX_RTC_IRQ_ENABLED, 1);
-    deadline = mmix_rtc_read_time(from) + 1000;
-    mmix_rtc_write_alarm(from, deadline);
+    alarm = mmix_rtc_read_time(from);
+    mmix_rtc_write_alarm(from, alarm);
+    g_assert_true(qtest_get_irq(from, 0));
+    g_assert_true(qtest_get_irq(from, 1));
+    g_assert_cmpuint(qtest_readq(
+                         from,
+                         mmix_intc_context_reg(
+                             1, MMIX_VIRT_INTC_CONTEXT_CLAIM)), ==,
+                     MMIX_VIRT_RTC_IRQ);
+    g_assert_false(qtest_get_irq(from, 0));
+    g_assert_false(qtest_get_irq(from, 1));
 
     qtest_qmp_assert_success(from,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
@@ -231,19 +250,82 @@ static void test_mmix_rtc_migration(void)
 
     g_assert_cmpuint(mmix_rtc_readl(to, MMIX_RTC_IRQ_ENABLED), ==, 1);
     g_assert_cmphex(mmix_rtc_readl(to, MMIX_RTC_ALARM_LOW), ==,
-                    deadline & UINT32_MAX);
+                    alarm & UINT32_MAX);
     g_assert_cmphex(mmix_rtc_readl(to, MMIX_RTC_ALARM_HIGH), ==,
-                    deadline >> 32);
-    qtest_clock_step(to, 1000);
-    g_assert_true(qtest_get_irq(to, 0));
+                    alarm >> 32);
+    g_assert_cmphex(qtest_readq(to, MMIX_VIRT_INTC_BASE +
+                                   MMIX_VIRT_INTC_PENDING), ==,
+                    0);
+    g_assert_false(qtest_get_irq(to, 0));
+    g_assert_false(qtest_get_irq(to, 1));
+    qtest_writeq(to,
+                 mmix_intc_context_reg(1,
+                                       MMIX_VIRT_INTC_CONTEXT_COMPLETE),
+                 MMIX_VIRT_RTC_IRQ);
     g_assert_cmphex(qtest_readq(to, MMIX_VIRT_INTC_BASE +
                                    MMIX_VIRT_INTC_PENDING), ==,
                     mmix_rtc_irq_mask());
+    g_assert_true(qtest_get_irq(to, 0));
+    g_assert_true(qtest_get_irq(to, 1));
+    mmix_rtc_writel(to, MMIX_RTC_CLEAR_INTERRUPT, 0);
+    g_assert_false(qtest_get_irq(to, 0));
+    g_assert_false(qtest_get_irq(to, 1));
 
     qtest_quit(from);
     qtest_quit(to);
     g_unlink(socket);
     g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
+static void test_mmix_rtc_shared_irq_routing(void)
+{
+    QTestState *qts = mmix_rtc_start_cpus(2);
+    uint64_t now = mmix_rtc_read_time(qts);
+
+    mmix_rtc_writel(qts, MMIX_RTC_IRQ_ENABLED, 1);
+    mmix_rtc_write_alarm(qts, now);
+    g_assert_cmphex(qtest_readq(qts, MMIX_VIRT_INTC_BASE +
+                                    MMIX_VIRT_INTC_PENDING), ==,
+                    mmix_rtc_irq_mask());
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    mmix_intc_enable_rtc(qts, 0);
+    mmix_intc_enable_rtc(qts, 1);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts,
+                         mmix_intc_context_reg(
+                             1, MMIX_VIRT_INTC_CONTEXT_CLAIM)), ==,
+                     MMIX_VIRT_RTC_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts,
+                         mmix_intc_context_reg(
+                             0, MMIX_VIRT_INTC_CONTEXT_CLAIM)), ==, 0);
+
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(1,
+                                       MMIX_VIRT_INTC_CONTEXT_COMPLETE),
+                 MMIX_VIRT_RTC_IRQ);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts,
+                         mmix_intc_context_reg(
+                             0, MMIX_VIRT_INTC_CONTEXT_CLAIM)), ==,
+                     MMIX_VIRT_RTC_IRQ);
+    mmix_rtc_writel(qts, MMIX_RTC_CLEAR_INTERRUPT, 0);
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(0,
+                                       MMIX_VIRT_INTC_CONTEXT_COMPLETE),
+                 MMIX_VIRT_RTC_IRQ);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    qtest_quit(qts);
 }
 
 int main(int argc, char **argv)
@@ -257,6 +339,8 @@ int main(int argc, char **argv)
                    test_mmix_rtc_bounds_and_access_width);
     qtest_add_func("/mmix/rtc/reset", test_mmix_rtc_reset);
     qtest_add_func("/mmix/rtc/migration", test_mmix_rtc_migration);
+    qtest_add_func("/mmix/rtc/shared-irq-routing",
+                   test_mmix_rtc_shared_irq_routing);
 
     return g_test_run();
 }

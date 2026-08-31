@@ -8,6 +8,9 @@
 #include "libqtest.h"
 #include "qemu/bswap.h"
 #include "qobject/qdict.h"
+#include "standard-headers/linux/virtio_config.h"
+#include "standard-headers/linux/virtio_ids.h"
+#include "standard-headers/linux/virtio_mmio.h"
 
 #define MMIX_POWER_BASE UINT64_C(0x0001000010040000)
 #define MMIX_POWER_REGISTER_SIZE 0x100
@@ -17,6 +20,13 @@
 #define MMIX_POWER_COMMAND 0x04
 
 #define MMIX_POWER_FEATURE_CONTROL 0x1
+
+#define MMIX_RTC_BASE UINT64_C(0x0001000010010000)
+#define MMIX_RTC_IRQ_ENABLED 0x10
+#define MMIX_WATCHDOG_CONTROL_BASE UINT64_C(0x0001000010030000)
+#define MMIX_WATCHDOG_WCS 0x00
+#define MMIX_WATCHDOG_WCS_EN 0x1
+#define MMIX_VIRTIO_BASE UINT64_C(0x0001000040000000)
 
 enum MMIXPowerCommand {
     MMIX_POWER_COMMAND_NOOP,
@@ -39,6 +49,22 @@ static void mmix_power_writel(QTestState *qts, uint64_t reg, uint32_t value)
 
     stl_be_p(bytes, value);
     qtest_memwrite(qts, MMIX_POWER_BASE + reg, bytes, sizeof(bytes));
+}
+
+static uint32_t mmix_readl_le(QTestState *qts, uint64_t address)
+{
+    uint8_t bytes[sizeof(uint32_t)];
+
+    qtest_memread(qts, address, bytes, sizeof(bytes));
+    return ldl_le_p(bytes);
+}
+
+static void mmix_writel_le(QTestState *qts, uint64_t address, uint32_t value)
+{
+    uint8_t bytes[sizeof(uint32_t)];
+
+    stl_le_p(bytes, value);
+    qtest_memwrite(qts, address, bytes, sizeof(bytes));
 }
 
 static void mmix_assert_unassigned(QTestState *qts, uint64_t address)
@@ -97,15 +123,38 @@ static void test_mmix_power_mapping_and_commands(void)
 
 static void test_mmix_power_reset(void)
 {
-    QTestState *qts = qtest_init("-machine virt -no-shutdown");
+    QTestState *qts = qtest_init(
+        "-machine virt -no-shutdown "
+        "-object rng-builtin,id=rng0 "
+        "-device virtio-rng-device,rng=rng0");
     QDict *event;
+    unsigned int reset;
 
-    mmix_power_writel(qts, MMIX_POWER_COMMAND, MMIX_POWER_COMMAND_RESET);
-    event = qtest_qmp_eventwait_ref(qts, "RESET");
-    mmix_assert_event_reason(event, "guest-reset");
-    qobject_unref(event);
-    g_assert_cmphex(mmix_power_readl(qts, MMIX_POWER_FEATURES), ==,
-                    MMIX_POWER_FEATURE_CONTROL);
+    for (reset = 0; reset < 2; reset++) {
+        mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_IRQ_ENABLED, 1);
+        mmix_writel_le(qts, MMIX_WATCHDOG_CONTROL_BASE + MMIX_WATCHDOG_WCS,
+                       MMIX_WATCHDOG_WCS_EN);
+        qtest_writel(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
+                     VIRTIO_CONFIG_S_ACKNOWLEDGE);
+
+        mmix_power_writel(qts, MMIX_POWER_COMMAND, MMIX_POWER_COMMAND_RESET);
+        event = qtest_qmp_eventwait_ref(qts, "RESET");
+        mmix_assert_event_reason(event, "guest-reset");
+        qobject_unref(event);
+        g_assert_null(qtest_qmp_event_ref(qts, "RESET"));
+        g_assert_cmphex(mmix_power_readl(qts, MMIX_POWER_FEATURES), ==,
+                        MMIX_POWER_FEATURE_CONTROL);
+        g_assert_cmphex(mmix_readl_le(
+                            qts, MMIX_RTC_BASE + MMIX_RTC_IRQ_ENABLED), ==, 0);
+        g_assert_cmphex(mmix_readl_le(
+                            qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                 MMIX_WATCHDOG_WCS), ==, 0);
+        g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                    VIRTIO_MMIO_DEVICE_ID), ==,
+                        VIRTIO_ID_RNG);
+        g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                    VIRTIO_MMIO_STATUS), ==, 0);
+    }
 
     qtest_quit(qts);
 }

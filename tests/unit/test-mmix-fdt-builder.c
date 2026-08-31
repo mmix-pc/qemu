@@ -69,6 +69,18 @@ static void assert_string(const void *fdt, const char *path,
     g_assert_cmpstr(actual, ==, expected);
 }
 
+static void assert_string_list_contains(const void *fdt, const char *path,
+                                        const char *name,
+                                        const char *expected)
+{
+    int length;
+    const char *actual = fdt_getprop(fdt, node_offset(fdt, path), name,
+                                     &length);
+
+    g_assert_nonnull(actual);
+    g_assert_cmpint(fdt_stringlist_contains(actual, length, expected), ==, 1);
+}
+
 static void assert_u32(const void *fdt, const char *path,
                        const char *name, uint32_t expected)
 {
@@ -315,9 +327,32 @@ static void assert_active_devices(const void *fdt,
                                   const MMIXPhysRange *framebuffer)
 {
     const char *uart_path = "/soc/serial@1000010000000";
+    const char *rtc_path = "/soc/rtc@1000010010000";
+    const char *watchdog_path = "/soc/watchdog@1000010030000";
+    const char *power_path = "/soc/syscon@1000010040000";
     const MMIXPhysRange uart = {
         .start = MMIX_VIRT_UART0_BASE,
         .end = MMIX_VIRT_UART0_BASE + MMIX_VIRT_UART0_REGISTER_SIZE,
+    };
+    const MMIXPhysRange rtc = {
+        .start = MMIX_VIRT_RTC_BASE,
+        .end = MMIX_VIRT_RTC_BASE + MMIX_VIRT_RTC_REGISTER_SIZE,
+    };
+    const MMIXPhysRange watchdog[] = {
+        {
+            .start = MMIX_VIRT_WATCHDOG_CONTROL_BASE,
+            .end = MMIX_VIRT_WATCHDOG_CONTROL_BASE +
+                   MMIX_VIRT_WATCHDOG_REGISTER_SIZE,
+        },
+        {
+            .start = MMIX_VIRT_WATCHDOG_REFRESH_BASE,
+            .end = MMIX_VIRT_WATCHDOG_REFRESH_BASE +
+                   MMIX_VIRT_WATCHDOG_REGISTER_SIZE,
+        },
+    };
+    const MMIXPhysRange power = {
+        .start = MMIX_VIRT_POWER_BASE,
+        .end = MMIX_VIRT_POWER_BASE + MMIX_VIRT_POWER_REGISTER_SIZE,
     };
     const unsigned int reserved_slots[] = {
         MMIX_VIRT_VIRTIO_MMIO_COUNT,
@@ -342,6 +377,34 @@ static void assert_active_devices(const void *fdt,
     assert_u32(fdt, uart_path, "interrupt-parent", intc_phandle);
     assert_string(fdt, "/aliases", "serial0", uart_path);
     assert_string(fdt, "/chosen", "stdout-path", "serial0:115200n8");
+
+    assert_string(fdt, rtc_path, "compatible", "google,goldfish-rtc");
+    assert_range(fdt, rtc_path, &rtc);
+    assert_u32(fdt, rtc_path, "interrupts", MMIX_VIRT_RTC_IRQ);
+    assert_u32(fdt, rtc_path, "interrupt-parent", intc_phandle);
+    assert_absent(fdt, rtc_path, "little-endian");
+    assert_absent(fdt, rtc_path, "big-endian");
+    assert_absent(fdt, rtc_path, "native-endian");
+
+    assert_string(fdt, watchdog_path, "compatible", "arm,sbsa-gwdt");
+    assert_ranges(fdt, watchdog_path, watchdog, G_N_ELEMENTS(watchdog));
+    assert_u32(fdt, watchdog_path, "interrupts", MMIX_VIRT_WATCHDOG_IRQ);
+    assert_u32(fdt, watchdog_path, "interrupt-parent", intc_phandle);
+    assert_u32(fdt, watchdog_path, "clock-frequency",
+               MMIX_VIRT_WATCHDOG_CLOCK_FREQUENCY);
+    assert_absent(fdt, watchdog_path, "little-endian");
+    assert_absent(fdt, watchdog_path, "big-endian");
+    assert_absent(fdt, watchdog_path, "native-endian");
+
+    assert_string_list_contains(fdt, power_path, "compatible",
+                                "qemu,mmix-virt-syscon");
+    assert_string_list_contains(fdt, power_path, "compatible", "syscon");
+    assert_range(fdt, power_path, &power);
+    assert_empty(fdt, power_path, "big-endian");
+    assert_absent(fdt, power_path, "little-endian");
+    assert_absent(fdt, power_path, "native-endian");
+    assert_absent(fdt, power_path, "interrupts");
+    assert_absent(fdt, power_path, "interrupt-parent");
 
     for (i = 0; i < MMIX_VIRT_VIRTIO_MMIO_COUNT; i++) {
         uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
@@ -380,7 +443,7 @@ static void assert_active_devices(const void *fdt,
     g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
     g_assert_cmpuint(virtio_slot, ==, MMIX_VIRT_VIRTIO_MMIO_COUNT);
     g_assert_cmpuint(child_count, ==,
-                     1 + 3 + MMIX_VIRT_VIRTIO_MMIO_COUNT +
+                     1 + 3 + 3 + MMIX_VIRT_VIRTIO_MMIO_COUNT +
                      (framebuffer != NULL));
     assert_node_absent(fdt, "/flash@1000000000000");
     assert_node_absent(fdt, "/pcie@1000100000000");
