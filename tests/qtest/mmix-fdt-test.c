@@ -30,6 +30,9 @@ enum {
     MMIX_TIMER_IRQ_BASE = 16,
     MMIX_VIRTIO_IRQ_BASE = 2048,
     MMIX_VIRTIO_COUNT = 32,
+    MMIX_PCIE_INTX_IRQ_BASE = 6144,
+    MMIX_PCIE_SLOT_COUNT = 32,
+    MMIX_PCIE_PIN_COUNT = 4,
 };
 
 #define MMIX_UART_BASE UINT64_C(0x0001000010000000)
@@ -48,6 +51,10 @@ enum {
 #define MMIX_INTC_BASE UINT64_C(0x0001000030000000)
 #define MMIX_INTC_CONTEXT_BASE UINT64_C(0x0001000034000000)
 #define MMIX_VIRTIO_BASE UINT64_C(0x0001000040000000)
+#define MMIX_PCIE_ECAM_BASE UINT64_C(0x0001000100000000)
+#define MMIX_PCIE_MMIO32_BASE UINT64_C(0x0001000200000000)
+#define MMIX_PCIE_MMIO64_BASE UINT64_C(0x0001010000000000)
+#define MMIX_PCIE_MMIO64_BUS_BASE UINT64_C(0x0000010000000000)
 
 #define MMIX_CONTEXT_STRIDE UINT64_C(0x10000)
 #define MMIX_FRAMEBUFFER_BASE_REGISTER 0x20
@@ -191,6 +198,79 @@ static void assert_two_ranges(const void *fdt, const char *path,
     g_assert_cmphex(fdt64_to_cpu(reg[1]), ==, size0);
     g_assert_cmphex(fdt64_to_cpu(reg[2]), ==, base1);
     g_assert_cmphex(fdt64_to_cpu(reg[3]), ==, size1);
+}
+
+static void assert_u32_array(const void *fdt, const char *path,
+                             const char *name, const uint32_t *expected,
+                             size_t count)
+{
+    const fdt32_t *actual;
+    int length;
+    size_t i;
+
+    actual = fdt_getprop(fdt, node_offset(fdt, path), name, &length);
+    g_assert_nonnull(actual);
+    g_assert_cmpint(length, ==, count * sizeof(*actual));
+    for (i = 0; i < count; i++) {
+        g_assert_cmpuint(fdt32_to_cpu(actual[i]), ==, expected[i]);
+    }
+}
+
+static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
+{
+    const char *path = "/pcie@1000100000000";
+    const uint32_t bus_range[] = { 0, 255 };
+    const uint32_t ranges[] = {
+        0x02000000, 0, 0,
+        MMIX_PCIE_MMIO32_BASE >> 32, (uint32_t)MMIX_PCIE_MMIO32_BASE,
+        1, 0,
+        0x43000000,
+        MMIX_PCIE_MMIO64_BUS_BASE >> 32,
+        (uint32_t)MMIX_PCIE_MMIO64_BUS_BASE,
+        MMIX_PCIE_MMIO64_BASE >> 32, (uint32_t)MMIX_PCIE_MMIO64_BASE,
+        UINT64_C(0x0000100000000000) >> 32, 0,
+    };
+    const uint32_t mask[] = { 0xf800, 0, 0, 0x7 };
+    const fdt32_t *map;
+    int length;
+    unsigned int slot;
+    unsigned int pin;
+    size_t cell = 0;
+
+    assert_string(fdt, path, "compatible", "pci-host-ecam-generic");
+    assert_string(fdt, path, "device_type", "pci");
+    assert_u32(fdt, path, "#address-cells", 3);
+    assert_u32(fdt, path, "#size-cells", 2);
+    assert_u32(fdt, path, "#interrupt-cells", 1);
+    assert_u32_array(fdt, path, "bus-range", bus_range,
+                     G_N_ELEMENTS(bus_range));
+    assert_range(fdt, path, MMIX_PCIE_ECAM_BASE, 0x10000000);
+    assert_empty(fdt, path, "dma-coherent");
+    assert_u32_array(fdt, path, "ranges", ranges, G_N_ELEMENTS(ranges));
+    assert_u32_array(fdt, path, "interrupt-map-mask", mask,
+                     G_N_ELEMENTS(mask));
+    map = fdt_getprop(fdt, node_offset(fdt, path), "interrupt-map",
+                      &length);
+    g_assert_nonnull(map);
+    g_assert_cmpint(length, ==, MMIX_PCIE_SLOT_COUNT *
+                                MMIX_PCIE_PIN_COUNT * 6 * sizeof(*map));
+    for (slot = 0; slot < MMIX_PCIE_SLOT_COUNT; slot++) {
+        for (pin = 0; pin < MMIX_PCIE_PIN_COUNT; pin++, cell += 6) {
+            g_assert_cmpuint(fdt32_to_cpu(map[cell]), ==, slot << 11);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 1]), ==, 0);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 2]), ==, 0);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 3]), ==, pin + 1);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 4]), ==,
+                             intc_phandle);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 5]), ==,
+                             MMIX_PCIE_INTX_IRQ_BASE +
+                             (slot + pin) % MMIX_PCIE_PIN_COUNT);
+        }
+    }
+    assert_absent(fdt, path, "msi-parent");
+    assert_absent(fdt, path, "dma-ranges");
+    assert_absent(fdt, path, "iommu-map");
+    assert_compatible_count(fdt, "pci-host-ecam-generic", 1);
 }
 
 static uint64_t hmp_register_value(const char *registers, const char *name)
@@ -561,8 +641,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
     g_assert_cmpint(fdt_path_offset(fdt,
                                    "/soc/virtio_mmio@1000040200000"), ==,
                     -FDT_ERR_NOTFOUND);
-    g_assert_cmpint(fdt_path_offset(fdt, "/pcie@1000100000000"), ==,
-                    -FDT_ERR_NOTFOUND);
+    assert_pcie_host(fdt, intc_phandle);
     assert_virtio_node_order(fdt);
 }
 

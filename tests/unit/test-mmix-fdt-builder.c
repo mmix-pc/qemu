@@ -9,9 +9,11 @@
 #include "hw/mmix/fdt-validator.h"
 #include "hw/mmix/physical-layout.h"
 #include "hw/mmix/virt.h"
+#include "hw/pci/pci.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
 #include "qemu/units.h"
+#include "system/device_tree.h"
 #include <libfdt.h>
 
 static const MMIXPhysRange default_stack = {
@@ -160,6 +162,124 @@ static void assert_u32_array(const void *fdt, const char *path,
     g_assert_cmpint(length, ==, count * sizeof(*actual));
     for (i = 0; i < count; i++) {
         g_assert_cmpuint(be32_to_cpu(actual[i]), ==, expected[i]);
+    }
+}
+
+static void assert_compatible_count(const void *fdt,
+                                    const char *compatible,
+                                    unsigned int expected)
+{
+    unsigned int count = 0;
+    int node = -1;
+
+    while ((node = fdt_node_offset_by_compatible(fdt, node,
+                                                  compatible)) >= 0) {
+        count++;
+    }
+    g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
+    g_assert_cmpuint(count, ==, expected);
+}
+
+static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
+{
+    const char *path = "/pcie@1000100000000";
+    const MMIXPhysRange ecam = {
+        .start = MMIX_VIRT_PCIE_ECAM_BASE,
+        .end = MMIX_VIRT_PCIE_ECAM_BASE + MMIX_VIRT_PCIE_ECAM_SIZE,
+    };
+    const uint32_t bus_range[] = { 0, MMIX_VIRT_PCIE_BUS_COUNT - 1 };
+    const uint32_t ranges[] = {
+        FDT_PCI_RANGE_MMIO, 0, 0,
+        MMIX_VIRT_PCIE_MMIO32_BASE >> 32,
+        (uint32_t)MMIX_VIRT_PCIE_MMIO32_BASE,
+        MMIX_VIRT_PCIE_MMIO32_SIZE >> 32,
+        (uint32_t)MMIX_VIRT_PCIE_MMIO32_SIZE,
+        FDT_PCI_RANGE_MMIO_64BIT | FDT_PCI_RANGE_PREFETCHABLE,
+        MMIX_VIRT_PCIE_MMIO64_BUS_BASE >> 32,
+        (uint32_t)MMIX_VIRT_PCIE_MMIO64_BUS_BASE,
+        MMIX_VIRT_PCIE_MMIO64_BASE >> 32,
+        (uint32_t)MMIX_VIRT_PCIE_MMIO64_BASE,
+        MMIX_VIRT_PCIE_MMIO64_SIZE >> 32,
+        (uint32_t)MMIX_VIRT_PCIE_MMIO64_SIZE,
+    };
+    const uint32_t mask[] = { PCI_DEVFN(31, 0) << 8, 0, 0, 0x7 };
+    const fdt32_t *map;
+    int length;
+    unsigned int slot;
+    unsigned int pin;
+    size_t cell = 0;
+
+    assert_string(fdt, path, "compatible", "pci-host-ecam-generic");
+    assert_string(fdt, path, "device_type", "pci");
+    assert_u32(fdt, path, "#address-cells", 3);
+    assert_u32(fdt, path, "#size-cells", 2);
+    assert_u32(fdt, path, "#interrupt-cells", 1);
+    assert_u32_array(fdt, path, "bus-range", bus_range,
+                     G_N_ELEMENTS(bus_range));
+    assert_range(fdt, path, &ecam);
+    assert_empty(fdt, path, "dma-coherent");
+    assert_u32_array(fdt, path, "ranges", ranges, G_N_ELEMENTS(ranges));
+    assert_u32_array(fdt, path, "interrupt-map-mask", mask,
+                     G_N_ELEMENTS(mask));
+
+    map = fdt_getprop(fdt, node_offset(fdt, path), "interrupt-map",
+                      &length);
+    g_assert_nonnull(map);
+    g_assert_cmpint(length, ==, PCI_SLOT_MAX * PCI_NUM_PINS * 6 *
+                                sizeof(*map));
+    for (slot = 0; slot < PCI_SLOT_MAX; slot++) {
+        for (pin = 0; pin < PCI_NUM_PINS; pin++, cell += 6) {
+            g_assert_cmpuint(fdt32_to_cpu(map[cell]), ==,
+                             PCI_DEVFN(slot, 0) << 8);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 1]), ==, 0);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 2]), ==, 0);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 3]), ==, pin + 1);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 4]), ==,
+                             intc_phandle);
+            g_assert_cmpuint(fdt32_to_cpu(map[cell + 5]), ==,
+                             MMIX_VIRT_PCIE_INTX_IRQ_BASE +
+                             (slot + pin) % PCI_NUM_PINS);
+        }
+    }
+    assert_absent(fdt, path, "msi-parent");
+    assert_absent(fdt, path, "dma-ranges");
+    assert_absent(fdt, path, "iommu-map");
+    assert_compatible_count(fdt, "pci-host-ecam-generic", 1);
+}
+
+static void assert_pcie_properties_equal(const void *left,
+                                         const void *right)
+{
+    static const char *const properties[] = {
+        "compatible",
+        "device_type",
+        "#address-cells",
+        "#size-cells",
+        "#interrupt-cells",
+        "bus-range",
+        "reg",
+        "dma-coherent",
+        "ranges",
+        "interrupt-map-mask",
+        "interrupt-map",
+    };
+    const char *path = "/pcie@1000100000000";
+    size_t i;
+
+    for (i = 0; i < G_N_ELEMENTS(properties); i++) {
+        const void *left_value;
+        const void *right_value;
+        int left_length;
+        int right_length;
+
+        left_value = fdt_getprop(left, node_offset(left, path),
+                                 properties[i], &left_length);
+        right_value = fdt_getprop(right, node_offset(right, path),
+                                  properties[i], &right_length);
+        g_assert_nonnull(left_value);
+        g_assert_nonnull(right_value);
+        g_assert_cmpint(left_length, ==, right_length);
+        g_assert_cmpmem(left_value, left_length, right_value, right_length);
     }
 }
 
@@ -446,7 +566,7 @@ static void assert_active_devices(const void *fdt,
                      1 + 3 + 3 + MMIX_VIRT_VIRTIO_MMIO_COUNT +
                      (framebuffer != NULL));
     assert_node_absent(fdt, "/flash@1000000000000");
-    assert_node_absent(fdt, "/pcie@1000100000000");
+    assert_pcie_host(fdt, intc_phandle);
 
     for (i = 0; i < G_N_ELEMENTS(reserved_slots); i++) {
         uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
@@ -562,6 +682,19 @@ static void test_firmware_visible_devices(void)
                   "qemu,fw-cfg-mmio");
     assert_range(fdt, "/fw-cfg@1000014000000", &fw_cfg);
     assert_empty(fdt, "/fw-cfg@1000014000000", "dma-coherent");
+    assert_pcie_host(fdt, 3);
+}
+
+static void test_pcie_direct_firmware_equivalence(void)
+{
+    MMIXFDTConfig config = default_config(MMIX_VIRT_RAM_MIN_SIZE, "");
+    g_autoptr(GBytes) firmware = build_configured_fdt(&config);
+    g_autoptr(GBytes) direct;
+
+    config.linux_direct = true;
+    direct = build_configured_fdt(&config);
+    assert_pcie_properties_equal(g_bytes_get_data(direct, NULL),
+                                 g_bytes_get_data(firmware, NULL));
 }
 
 static void test_single_cpu_with_framebuffer(void)
@@ -772,6 +905,7 @@ static void test_invalid_serialized_fdt(void)
     g_autofree void *invalid_cells = mutable_fdt(blob);
     g_autofree void *truncated_reg = mutable_fdt(blob);
     g_autofree void *overlap = mutable_fdt(blob);
+    g_autofree void *invalid_pcie_map = mutable_fdt(blob);
     fdt32_t value;
     int node;
 
@@ -803,6 +937,15 @@ static void test_invalid_serialized_fdt(void)
     g_assert_cmpint(fdt_add_mem_rsv(overlap, 0x4000000, 0x2000), ==, 0);
     g_assert_cmpint(fdt_add_mem_rsv(overlap, 0x4001000, 0x2000), ==, 0);
     assert_invalid_fdt(overlap, "reservations 0 and 1 overlap");
+
+    node = node_offset(invalid_pcie_map, "/pcie@1000100000000");
+    value = cpu_to_fdt32(0xdead);
+    g_assert_cmpint(fdt_setprop_inplace_namelen_partial(
+                        invalid_pcie_map, node, "interrupt-map",
+                        strlen("interrupt-map"), 0, &value,
+                        sizeof(value)), ==, 0);
+    assert_invalid_fdt(invalid_pcie_map,
+                       "PCI interrupt-map is invalid");
 }
 
 static void test_oversized_serialized_fdt(void)
@@ -927,6 +1070,8 @@ int main(int argc, char **argv)
                     test_deterministic_output);
     g_test_add_func("/mmix/fdt-builder/firmware-visible-devices",
                     test_firmware_visible_devices);
+    g_test_add_func("/mmix/fdt-builder/pcie-direct-firmware-equivalence",
+                    test_pcie_direct_firmware_equivalence);
     g_test_add_func("/mmix/fdt-builder/single-cpu-framebuffer",
                     test_single_cpu_with_framebuffer);
     g_test_add_func("/mmix/fdt-builder/maximum-cpu-topology",

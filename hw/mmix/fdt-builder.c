@@ -7,6 +7,8 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
+#include "hw/pci/pci.h"
+#include "system/device_tree.h"
 #include <libfdt.h>
 #include "fdt-builder.h"
 #include "fdt-validator.h"
@@ -761,6 +763,97 @@ static bool mmix_fdt_add_fw_cfg_node(void *fdt,
            mmix_fdt_set_empty(fdt, node, "dma-coherent", errp);
 }
 
+static uint32_t mmix_fdt_u64_high(uint64_t value)
+{
+    return value >> 32;
+}
+
+static uint32_t mmix_fdt_u64_low(uint64_t value)
+{
+    return value;
+}
+
+static bool mmix_fdt_add_pcie_node(void *fdt,
+                                   const MMIXFDTConfig *config,
+                                   Error **errp)
+{
+    enum {
+        MMIX_FDT_PCIE_RANGE_CELLS = 7,
+        MMIX_FDT_PCIE_MAP_ENTRY_CELLS = 6,
+        MMIX_FDT_PCIE_MAP_ENTRY_COUNT = PCI_SLOT_MAX * PCI_NUM_PINS,
+    };
+    const MMIXPhysRange ecam = {
+        .start = MMIX_VIRT_PCIE_ECAM_BASE,
+        .end = MMIX_VIRT_PCIE_ECAM_BASE + MMIX_VIRT_PCIE_ECAM_SIZE,
+    };
+    const uint32_t bus_range[] = {
+        0, MMIX_VIRT_PCIE_BUS_COUNT - 1,
+    };
+    const uint32_t ranges[] = {
+        FDT_PCI_RANGE_MMIO,
+        mmix_fdt_u64_high(MMIX_VIRT_PCIE_MMIO32_BUS_BASE),
+        mmix_fdt_u64_low(MMIX_VIRT_PCIE_MMIO32_BUS_BASE),
+        mmix_fdt_u64_high(MMIX_VIRT_PCIE_MMIO32_BASE),
+        mmix_fdt_u64_low(MMIX_VIRT_PCIE_MMIO32_BASE),
+        mmix_fdt_u64_high(MMIX_VIRT_PCIE_MMIO32_SIZE),
+        mmix_fdt_u64_low(MMIX_VIRT_PCIE_MMIO32_SIZE),
+        FDT_PCI_RANGE_MMIO_64BIT | FDT_PCI_RANGE_PREFETCHABLE,
+        mmix_fdt_u64_high(MMIX_VIRT_PCIE_MMIO64_BUS_BASE),
+        mmix_fdt_u64_low(MMIX_VIRT_PCIE_MMIO64_BUS_BASE),
+        mmix_fdt_u64_high(MMIX_VIRT_PCIE_MMIO64_BASE),
+        mmix_fdt_u64_low(MMIX_VIRT_PCIE_MMIO64_BASE),
+        mmix_fdt_u64_high(MMIX_VIRT_PCIE_MMIO64_SIZE),
+        mmix_fdt_u64_low(MMIX_VIRT_PCIE_MMIO64_SIZE),
+    };
+    const uint32_t interrupt_map_mask[] = {
+        PCI_DEVFN(PCI_SLOT_MAX - 1, 0) << 8, 0, 0, 0x7,
+    };
+    g_autofree uint32_t *interrupt_map =
+        g_new(uint32_t, MMIX_FDT_PCIE_MAP_ENTRY_COUNT *
+                        MMIX_FDT_PCIE_MAP_ENTRY_CELLS);
+    g_autofree char *name = g_strdup_printf(
+        "pcie@%" PRIx64, MMIX_VIRT_PCIE_ECAM_BASE);
+    uint32_t intc_phandle = mmix_fdt_intc_phandle(config);
+    unsigned int slot;
+    unsigned int pin;
+    size_t cell = 0;
+    int node;
+
+    QEMU_BUILD_BUG_ON(G_N_ELEMENTS(ranges) !=
+                      2 * MMIX_FDT_PCIE_RANGE_CELLS);
+    for (slot = 0; slot < PCI_SLOT_MAX; slot++) {
+        for (pin = 0; pin < PCI_NUM_PINS; pin++) {
+            interrupt_map[cell++] = PCI_DEVFN(slot, 0) << 8;
+            interrupt_map[cell++] = 0;
+            interrupt_map[cell++] = 0;
+            interrupt_map[cell++] = pin + 1;
+            interrupt_map[cell++] = intc_phandle;
+            interrupt_map[cell++] = MMIX_VIRT_PCIE_INTX_IRQ_BASE +
+                                    (slot + pin) % PCI_NUM_PINS;
+        }
+    }
+
+    node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/"), name, errp);
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "pci-host-ecam-generic", errp) &&
+           mmix_fdt_set_string(fdt, node, "device_type", "pci", errp) &&
+           mmix_fdt_set_u32(fdt, node, "#address-cells", 3, errp) &&
+           mmix_fdt_set_u32(fdt, node, "#size-cells", 2, errp) &&
+           mmix_fdt_set_u32(fdt, node, "#interrupt-cells", 1, errp) &&
+           mmix_fdt_set_u32_array(fdt, node, "bus-range", bus_range,
+                                  G_N_ELEMENTS(bus_range), errp) &&
+           mmix_fdt_set_u64_range(fdt, node, "reg", &ecam, errp) &&
+           mmix_fdt_set_empty(fdt, node, "dma-coherent", errp) &&
+           mmix_fdt_set_u32_array(fdt, node, "ranges", ranges,
+                                  G_N_ELEMENTS(ranges), errp) &&
+           mmix_fdt_set_u32_array(fdt, node, "interrupt-map-mask",
+                                  interrupt_map_mask,
+                                  G_N_ELEMENTS(interrupt_map_mask), errp) &&
+           mmix_fdt_set_u32_array(fdt, node, "interrupt-map",
+                                  interrupt_map, cell, errp);
+}
+
 static bool mmix_fdt_add_foundation(void *fdt,
                                     const MMIXFDTConfig *config,
                                     Error **errp)
@@ -842,8 +935,9 @@ static bool mmix_fdt_add_foundation(void *fdt,
         !mmix_fdt_add_active_devices(fdt, config, errp)) {
         return false;
     }
-    /* Reverse insertion keeps the lower-address flash node first. */
-    return mmix_fdt_add_fw_cfg_node(fdt, config, errp) &&
+    /* Reverse insertion keeps top-level device nodes in address order. */
+    return mmix_fdt_add_pcie_node(fdt, config, errp) &&
+           mmix_fdt_add_fw_cfg_node(fdt, config, errp) &&
            mmix_fdt_add_flash_node(fdt, config, errp);
 }
 

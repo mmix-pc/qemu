@@ -6,10 +6,12 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "hw/pci/pci.h"
 #include <libfdt.h>
 #include "fdt-builder.h"
 #include "fdt-validator.h"
 #include "physical-layout.h"
+#include "virt.h"
 
 static bool mmix_fdt_validate_cell(const void *fdt, const char *path,
                                    const char *name, uint32_t expected,
@@ -269,6 +271,76 @@ static bool mmix_fdt_validate_nodes(const void *fdt, GHashTable *phandles,
     return true;
 }
 
+static bool mmix_fdt_validate_pcie(const void *fdt,
+                                   GHashTable *phandles, Error **errp)
+{
+    const char *path = "/pcie@1000100000000";
+    const fdt32_t *values;
+    uint32_t intc_phandle;
+    int intc_node;
+    int length;
+    int node = fdt_path_offset(fdt, path);
+    unsigned int slot;
+    unsigned int pin;
+    size_t cell = 0;
+
+    if (node < 0) {
+        error_setg(errp, "MMIX FDT is missing PCI host node");
+        return false;
+    }
+    if (fdt_node_check_compatible(fdt, node,
+                                  "pci-host-ecam-generic") != 0) {
+        error_setg(errp, "MMIX FDT PCI host compatible is invalid");
+        return false;
+    }
+    if (!mmix_fdt_validate_cell(fdt, path, "#address-cells", 3, errp) ||
+        !mmix_fdt_validate_cell(fdt, path, "#size-cells", 2, errp) ||
+        !mmix_fdt_validate_cell(fdt, path, "#interrupt-cells", 1, errp)) {
+        return false;
+    }
+
+    values = fdt_getprop(fdt, node, "interrupt-map-mask", &length);
+    if (!values || length != 4 * sizeof(*values) ||
+        fdt32_to_cpu(values[0]) != (PCI_DEVFN(31, 0) << 8) ||
+        fdt32_to_cpu(values[1]) != 0 || fdt32_to_cpu(values[2]) != 0 ||
+        fdt32_to_cpu(values[3]) != 0x7) {
+        error_setg(errp, "MMIX FDT PCI interrupt-map-mask is invalid");
+        return false;
+    }
+
+    values = fdt_getprop(fdt, node, "interrupt-map", &length);
+    if (!values || length != PCI_SLOT_MAX * PCI_NUM_PINS * 6 *
+                             sizeof(*values)) {
+        error_setg(errp, "MMIX FDT PCI interrupt-map has invalid length");
+        return false;
+    }
+    intc_phandle = fdt32_to_cpu(values[4]);
+    intc_node = fdt_path_offset(
+        fdt, "/soc/interrupt-controller@1000030000000");
+    if (!g_hash_table_contains(phandles, GUINT_TO_POINTER(intc_phandle)) ||
+        fdt_node_offset_by_phandle(fdt, intc_phandle) != intc_node) {
+        error_setg(errp, "MMIX FDT PCI interrupt-map parent is invalid");
+        return false;
+    }
+    for (slot = 0; slot < PCI_SLOT_MAX; slot++) {
+        for (pin = 0; pin < PCI_NUM_PINS; pin++, cell += 6) {
+            if (fdt32_to_cpu(values[cell]) !=
+                    (PCI_DEVFN(slot, 0) << 8) ||
+                fdt32_to_cpu(values[cell + 1]) != 0 ||
+                fdt32_to_cpu(values[cell + 2]) != 0 ||
+                fdt32_to_cpu(values[cell + 3]) != pin + 1 ||
+                fdt32_to_cpu(values[cell + 4]) != intc_phandle ||
+                fdt32_to_cpu(values[cell + 5]) !=
+                    MMIX_VIRT_PCIE_INTX_IRQ_BASE +
+                    (slot + pin) % PCI_NUM_PINS) {
+                error_setg(errp, "MMIX FDT PCI interrupt-map is invalid");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool mmix_fdt_append_reservation(GArray *ranges, uint64_t address,
                                         uint64_t size, Error **errp)
 {
@@ -411,6 +483,7 @@ bool mmix_fdt_validate(const void *fdt, size_t size, Error **errp)
             fdt, "/soc/interrupt-controller@1000030000000",
             "#interrupt-cells", 1, errp) ||
         !mmix_fdt_collect_phandles(fdt, phandles, errp) ||
+        !mmix_fdt_validate_pcie(fdt, phandles, errp) ||
         !mmix_fdt_validate_nodes(fdt, phandles, errp) ||
         !mmix_fdt_validate_reservations(fdt, errp)) {
         return false;
