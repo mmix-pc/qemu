@@ -35,9 +35,14 @@ static bool mmix_intc_source_active(unsigned int source)
         source < MMIX_VIRT_TIMER_IRQ_BASE + MMIX_VIRT_MAX_CPUS) {
         return true;
     }
-    return source >= MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE &&
-           source < MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE +
-                    MMIX_VIRT_VIRTIO_MMIO_COUNT;
+    if (source >= MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE &&
+        source < MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE +
+                 MMIX_VIRT_VIRTIO_MMIO_COUNT) {
+        return true;
+    }
+    return source >= MMIX_VIRT_PCIE_INTX_IRQ_BASE &&
+           source < MMIX_VIRT_PCIE_INTX_IRQ_BASE +
+                    MMIX_VIRT_PCIE_INTX_IRQ_COUNT;
 }
 
 static bool mmix_intc_source_fixed(unsigned int source, uint32_t *cpu)

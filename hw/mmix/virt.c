@@ -23,6 +23,7 @@
 #include "hw/misc/virt_ctrl.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/pci-host/gpex.h"
+#include "hw/pci/msi.h"
 #include "hw/pci/pcie_host.h"
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
@@ -165,16 +166,21 @@ static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
     return PFLASH_CFI01(dev);
 }
 
-static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms)
+static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
+                                       DeviceState *intc)
 {
     DeviceState *dev = qdev_new(TYPE_GPEX_HOST);
     MemoryRegion *mmio;
     MMIXPhysRange range;
+    unsigned int i;
 
     QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_ECAM_SIZE != PCIE_MMCFG_SIZE_MAX);
     QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_ECAM_SIZE !=
                       MMIX_VIRT_PCIE_BUS_COUNT * PCIE_MMCFG_SIZE_MIN);
+    QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_INTX_IRQ_COUNT != PCI_NUM_PINS);
 
+    /* MSI-capable endpoints may exist, but the machine exposes no MSI target. */
+    msi_nonbroken = true;
     object_property_add_child(OBJECT(vms), "pcie", OBJECT(dev));
     object_property_set_uint(OBJECT(dev), PCI_HOST_ECAM_BASE,
                              MMIX_VIRT_PCIE_ECAM_BASE, &error_fatal);
@@ -222,6 +228,16 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms)
     memory_region_add_subregion(get_system_memory(),
                                 MMIX_VIRT_PCIE_MMIO64_BASE,
                                 &vms->pcie_mmio64);
+
+    for (i = 0; i < MMIX_VIRT_PCIE_INTX_IRQ_COUNT; i++) {
+        unsigned int source = MMIX_VIRT_PCIE_INTX_IRQ_BASE + i;
+        int ret;
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), i,
+                           qdev_get_gpio_in(intc, source));
+        ret = gpex_set_irq_num(GPEX_HOST(dev), i, source);
+        g_assert(ret == 0);
+    }
 
     vms->pcie_host = GPEX_HOST(dev);
     vms->pcie_host->gpex_cfg.bus = PCI_HOST_BRIDGE(dev)->bus;
@@ -1667,7 +1683,7 @@ static void mmix_virt_init(MachineState *machine)
                                            MMIX_VIRT_TIMER_IRQ_BASE + i));
     }
 
-    mmix_virt_create_pcie_host(vms);
+    mmix_virt_create_pcie_host(vms, intc);
 
     /*
      * Realization prepends each bus to QEMU's default-bus search order.

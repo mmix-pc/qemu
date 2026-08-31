@@ -41,6 +41,7 @@
 #define MMIX_IRQ_WATCHDOG            3
 #define MMIX_IRQ_TIMER_BASE          16
 #define MMIX_IRQ_VIRTIO_BASE         2048
+#define MMIX_IRQ_PCIE_INTX_BASE      6144
 
 #define MMIX_INTC_QOM_PATH           "/machine/intc"
 #define MMIX_INTC_OUTPUT_IRQ         "sysbus-irq"
@@ -249,10 +250,11 @@ static void test_mmix_intc_source_namespace(void)
         MMIX_IRQ_TIMER_BASE, 63, 64,
         MMIX_IRQ_TIMER_BASE + 63,
         MMIX_IRQ_VIRTIO_BASE, MMIX_IRQ_VIRTIO_BASE + 31,
+        MMIX_IRQ_PCIE_INTX_BASE, MMIX_IRQ_PCIE_INTX_BASE + 3,
     };
     static const unsigned int reserved[] = {
         0, 15, 80, 1024, MMIX_IRQ_VIRTIO_BASE - 1,
-        MMIX_IRQ_VIRTIO_BASE + 32, 6144, 8191,
+        MMIX_IRQ_VIRTIO_BASE + 32, MMIX_IRQ_PCIE_INTX_BASE + 4, 8191,
     };
     QTestState *qts = mmix_intc_start(64);
     unsigned int i;
