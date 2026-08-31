@@ -390,8 +390,8 @@ static void test_mmix_platform_deferred_apertures(void)
         MMIX_DISCOVERABLE_BASE,
         UINT64_C(0x0001000080000000),
         UINT64_C(0x0001000110000000),
-        UINT64_C(0x0001000200000000),
-        UINT64_C(0x0001010000000000),
+        UINT64_C(0x0001000300000000),
+        UINT64_C(0x0001110000000000),
     };
     QTestState *qts = qtest_init("-machine virt");
     size_t i;
@@ -418,6 +418,9 @@ static void test_mmix_platform_nonoverlapping_extents(void)
         { MMIX_INTC_BASE, MMIX_CONTEXT_STRIDE },
         { MMIX_VIRTIO_BASE,
           MMIX_VIRTIO_ACTIVE_SLOTS * MMIX_VIRTIO_STRIDE },
+        { UINT64_C(0x0001000100000000), UINT64_C(0x10000000) },
+        { UINT64_C(0x0001000200000000), UINT64_C(0x100000000) },
+        { UINT64_C(0x0001010000000000), UINT64_C(0x100000000000) },
     };
     unsigned int i;
     unsigned int j;

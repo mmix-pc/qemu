@@ -12,6 +12,12 @@
 
 #define MMIX_PCIE_ECAM_BASE UINT64_C(0x0001000100000000)
 #define MMIX_PCIE_ECAM_SIZE UINT64_C(0x10000000)
+#define MMIX_PCIE_MMIO32_BASE UINT64_C(0x0001000200000000)
+#define MMIX_PCIE_MMIO32_SIZE UINT64_C(0x0000000100000000)
+#define MMIX_PCIE_MMIO32_BUS_BASE UINT64_C(0)
+#define MMIX_PCIE_MMIO64_BASE UINT64_C(0x0001010000000000)
+#define MMIX_PCIE_MMIO64_SIZE UINT64_C(0x0000100000000000)
+#define MMIX_PCIE_MMIO64_BUS_BASE UINT64_C(0x0000010000000000)
 #define MMIX_PCIE_BUS_SIZE UINT64_C(0x100000)
 #define MMIX_PCIE_DEVICE_SIZE UINT64_C(0x8000)
 #define MMIX_PCIE_FUNCTION_SIZE UINT64_C(0x1000)
@@ -58,6 +64,46 @@ static void test_mmix_pcie_ecam_mapping(void)
     qtest_quit(qts);
 }
 
+static void mmix_assert_mapping(const char *mtree, uint64_t base,
+                                uint64_t size, uint64_t bus_base)
+{
+    g_autofree char *mapping;
+
+    if (bus_base) {
+        mapping = g_strdup_printf(
+            "%016" PRIx64 "-%016" PRIx64
+            " (prio 0, container): gpex_mmio_window @%016" PRIx64,
+            base, base + size - 1, bus_base);
+    } else {
+        mapping = g_strdup_printf(
+            "%016" PRIx64 "-%016" PRIx64
+            " (prio 0, container): gpex_mmio_window",
+            base, base + size - 1);
+    }
+
+    g_assert_nonnull(strstr(mtree, mapping));
+}
+
+static void test_mmix_pcie_memory_mappings(void)
+{
+    QTestState *qts = qtest_init("-machine virt");
+    g_autofree char *mtree = qtest_hmp(qts, "info mtree -f");
+
+    mmix_assert_mapping(mtree, MMIX_PCIE_MMIO32_BASE,
+                        MMIX_PCIE_MMIO32_SIZE,
+                        MMIX_PCIE_MMIO32_BUS_BASE);
+    mmix_assert_mapping(mtree, MMIX_PCIE_MMIO64_BASE,
+                        MMIX_PCIE_MMIO64_SIZE,
+                        MMIX_PCIE_MMIO64_BUS_BASE);
+    mmix_assert_unassigned(qts, MMIX_PCIE_MMIO32_BASE - 8);
+    mmix_assert_unassigned(qts,
+                           MMIX_PCIE_MMIO32_BASE + MMIX_PCIE_MMIO32_SIZE);
+    mmix_assert_unassigned(qts, MMIX_PCIE_MMIO64_BASE - 8);
+    mmix_assert_unassigned(qts,
+                           MMIX_PCIE_MMIO64_BASE + MMIX_PCIE_MMIO64_SIZE);
+    qtest_quit(qts);
+}
+
 static void test_mmix_pcie_root_config(void)
 {
     QTestState *qts = qtest_init("-machine virt");
@@ -98,6 +144,8 @@ int main(int argc, char **argv)
                    test_mmix_pcie_ecam_mapping);
     qtest_add_func("/mmix/pcie/root-config",
                    test_mmix_pcie_root_config);
+    qtest_add_func("/mmix/pcie/memory-mappings",
+                   test_mmix_pcie_memory_mappings);
     qtest_add_func("/mmix/pcie/ecam-boundaries",
                    test_mmix_pcie_ecam_boundaries);
 

@@ -109,6 +109,8 @@ struct MMIXVirtMachineState {
     uint64_t framebuffer_base;
     uint64_t framebuffer_size;
     GPEXHost *pcie_host;
+    MemoryRegion pcie_mmio32;
+    MemoryRegion pcie_mmio64;
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
@@ -166,6 +168,8 @@ static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
 static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms)
 {
     DeviceState *dev = qdev_new(TYPE_GPEX_HOST);
+    MemoryRegion *mmio;
+    MMIXPhysRange range;
 
     QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_ECAM_SIZE != PCIE_MMCFG_SIZE_MAX);
     QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_ECAM_SIZE !=
@@ -177,12 +181,47 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms)
     object_property_set_int(OBJECT(dev), PCI_HOST_ECAM_SIZE,
                             MMIX_VIRT_PCIE_ECAM_SIZE, &error_fatal);
     object_property_set_int(OBJECT(dev), PCI_HOST_PIO_SIZE, 0, &error_fatal);
-    object_property_set_int(OBJECT(dev), PCI_HOST_BELOW_4G_MMIO_SIZE, 0,
-                            &error_fatal);
-    object_property_set_int(OBJECT(dev), PCI_HOST_ABOVE_4G_MMIO_SIZE, 0,
-                            &error_fatal);
+    object_property_set_uint(OBJECT(dev), PCI_HOST_BELOW_4G_MMIO_BASE,
+                             MMIX_VIRT_PCIE_MMIO32_BASE, &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_BELOW_4G_MMIO_SIZE,
+                            MMIX_VIRT_PCIE_MMIO32_SIZE, &error_fatal);
+    object_property_set_uint(OBJECT(dev), PCI_HOST_ABOVE_4G_MMIO_BASE,
+                             MMIX_VIRT_PCIE_MMIO64_BASE, &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_ABOVE_4G_MMIO_SIZE,
+                            MMIX_VIRT_PCIE_MMIO64_SIZE, &error_fatal);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, MMIX_VIRT_PCIE_ECAM_BASE);
+
+    g_assert(mmix_phys_range_init(&range, MMIX_VIRT_PCIE_MMIO32_BASE,
+                                  MMIX_VIRT_PCIE_MMIO32_SIZE));
+    g_assert(range.start ==
+             mmix_virt_phys_regions[MMIX_VIRT_PHYS_PCIE_32BIT].start);
+    g_assert(range.end ==
+             mmix_virt_phys_regions[MMIX_VIRT_PHYS_PCIE_32BIT].end);
+    g_assert(mmix_phys_range_init(&range, MMIX_VIRT_PCIE_MMIO64_BASE,
+                                  MMIX_VIRT_PCIE_MMIO64_SIZE));
+    g_assert(range.start ==
+             mmix_virt_phys_regions[MMIX_VIRT_PHYS_PCIE_64BIT].start);
+    g_assert(range.end ==
+             mmix_virt_phys_regions[MMIX_VIRT_PHYS_PCIE_64BIT].end);
+    g_assert(mmix_phys_range_init(&range, MMIX_VIRT_PCIE_MMIO32_BUS_BASE,
+                                  MMIX_VIRT_PCIE_MMIO32_SIZE));
+    g_assert(mmix_phys_range_init(&range, MMIX_VIRT_PCIE_MMIO64_BUS_BASE,
+                                  MMIX_VIRT_PCIE_MMIO64_SIZE));
+
+    mmio = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 1);
+    memory_region_init_alias(&vms->pcie_mmio32, OBJECT(dev), "pcie-mmio32",
+                             mmio, MMIX_VIRT_PCIE_MMIO32_BUS_BASE,
+                             MMIX_VIRT_PCIE_MMIO32_SIZE);
+    memory_region_add_subregion(get_system_memory(),
+                                MMIX_VIRT_PCIE_MMIO32_BASE,
+                                &vms->pcie_mmio32);
+    memory_region_init_alias(&vms->pcie_mmio64, OBJECT(dev), "pcie-mmio64",
+                             mmio, MMIX_VIRT_PCIE_MMIO64_BUS_BASE,
+                             MMIX_VIRT_PCIE_MMIO64_SIZE);
+    memory_region_add_subregion(get_system_memory(),
+                                MMIX_VIRT_PCIE_MMIO64_BASE,
+                                &vms->pcie_mmio64);
 
     vms->pcie_host = GPEX_HOST(dev);
     vms->pcie_host->gpex_cfg.bus = PCI_HOST_BRIDGE(dev)->bus;
