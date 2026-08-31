@@ -37,8 +37,11 @@
 #define MMIX_PCIE_RESERVED_IRQ_END 7168
 
 #define MMIX_EDU_BAR_SIZE UINT64_C(0x100000)
+#define MMIX_EDU_ID UINT32_C(0x010000ed)
 #define MMIX_EDU_IRQ_RAISE 0x60
 #define MMIX_EDU_IRQ_ACK 0x64
+
+#define MMIX_TESTDEV_BAR_SIZE UINT64_C(0x100000)
 
 static uint64_t mmix_pcie_ecam_address(unsigned int bus,
                                        unsigned int device,
@@ -56,6 +59,22 @@ static uint32_t mmix_pcie_readl(QTestState *qts, uint64_t address)
 
     qtest_memread(qts, address, bytes, sizeof(bytes));
     return ldl_le_p(bytes);
+}
+
+static uint16_t mmix_pcie_readw(QTestState *qts, uint64_t address)
+{
+    uint8_t bytes[sizeof(uint16_t)];
+
+    qtest_memread(qts, address, bytes, sizeof(bytes));
+    return lduw_le_p(bytes);
+}
+
+static uint8_t mmix_pcie_readb(QTestState *qts, uint64_t address)
+{
+    uint8_t value;
+
+    qtest_memread(qts, address, &value, sizeof(value));
+    return value;
 }
 
 static void mmix_pcie_writew(QTestState *qts, uint64_t address,
@@ -141,6 +160,62 @@ static uint64_t mmix_edu_configure(QTestState *qts, unsigned int slot,
     mmix_pcie_writel(qts, config + PCI_BASE_ADDRESS_0, pci_address);
     mmix_pcie_writew(qts, config + PCI_COMMAND, PCI_COMMAND_MEMORY);
     return MMIX_PCIE_MMIO32_BASE + pci_address;
+}
+
+static void mmix_testdev_configure_bar2(QTestState *qts,
+                                        unsigned int slot,
+                                        uint64_t pci_address)
+{
+    uint64_t config = mmix_pcie_ecam_address(0, slot, 0, 0);
+
+    g_assert_cmphex(pci_address % MMIX_TESTDEV_BAR_SIZE, ==, 0);
+    mmix_pcie_writel(qts, config + PCI_BASE_ADDRESS_2,
+                     pci_address | PCI_BASE_ADDRESS_MEM_TYPE_64 |
+                     PCI_BASE_ADDRESS_MEM_PREFETCH);
+    mmix_pcie_writel(qts, config + PCI_BASE_ADDRESS_3,
+                     pci_address >> 32);
+    mmix_pcie_writew(qts, config + PCI_COMMAND, PCI_COMMAND_MEMORY);
+}
+
+static unsigned int mmix_pcie_find_capability(QTestState *qts,
+                                               uint64_t config,
+                                               uint8_t capability)
+{
+    uint8_t offset = mmix_pcie_readb(qts, config + PCI_CAPABILITY_LIST);
+    unsigned int remaining = 48;
+
+    while (offset && remaining--) {
+        offset &= ~0x3;
+        if (mmix_pcie_readb(qts, config + offset) == capability) {
+            return offset;
+        }
+        offset = mmix_pcie_readb(qts, config + offset + 1);
+    }
+    return 0;
+}
+
+static void mmix_assert_edu_config(QTestState *qts, unsigned int slot,
+                                   unsigned int function,
+                                   bool multifunction)
+{
+    uint64_t config = mmix_pcie_ecam_address(0, slot, function, 0);
+    unsigned int msi;
+
+    g_assert_cmphex(mmix_pcie_readl(qts, config), ==,
+                    0x11e8 << 16 | PCI_VENDOR_ID_QEMU);
+    g_assert_cmphex(mmix_pcie_readl(qts, config + PCI_CLASS_REVISION), ==,
+                    PCI_CLASS_OTHERS << 16 | 0x10);
+    g_assert_cmphex(mmix_pcie_readb(qts, config + PCI_HEADER_TYPE), ==,
+                    PCI_HEADER_TYPE_NORMAL |
+                    (multifunction ? PCI_HEADER_TYPE_MULTI_FUNCTION : 0));
+    g_assert_cmpuint(mmix_pcie_readb(qts, config + PCI_INTERRUPT_PIN), ==,
+                     1);
+    g_assert_cmphex(mmix_pcie_readw(qts, config + PCI_STATUS) &
+                    PCI_STATUS_CAP_LIST, ==, PCI_STATUS_CAP_LIST);
+    msi = mmix_pcie_find_capability(qts, config, PCI_CAP_ID_MSI);
+    g_assert_cmpuint(msi, !=, 0);
+    g_assert_cmphex(mmix_pcie_readw(qts, config + msi + PCI_MSI_FLAGS) &
+                    PCI_MSI_FLAGS_ENABLE, ==, 0);
 }
 
 static void mmix_edu_set_irq(QTestState *qts, uint64_t bar,
@@ -244,6 +319,150 @@ static void test_mmix_pcie_ecam_boundaries(void)
     g_assert_cmphex(mmix_pcie_readl(
                         qts, mmix_pcie_ecam_address(255, 31, 7, 0xffc)), ==,
                     UINT32_MAX);
+    qtest_quit(qts);
+}
+
+static void test_mmix_pcie_device_enumeration(void)
+{
+    static const char *const device_orders[] = {
+        "-device edu,bus=pcie.0,addr=5.0 "
+        "-device edu,bus=pcie.0,addr=2.0,multifunction=on "
+        "-device edu,bus=pcie.0,addr=2.1 "
+        "-device pci-testdev,bus=pcie.0,addr=7.0,membar=1M",
+        "-device pci-testdev,bus=pcie.0,addr=7.0,membar=1M "
+        "-device edu,bus=pcie.0,addr=2.0,multifunction=on "
+        "-device edu,bus=pcie.0,addr=2.1 "
+        "-device edu,bus=pcie.0,addr=5.0",
+    };
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(device_orders); i++) {
+        QTestState *qts = qtest_initf("-machine virt %s",
+                                      device_orders[i]);
+        uint64_t testdev = mmix_pcie_ecam_address(0, 7, 0, 0);
+
+        mmix_assert_edu_config(qts, 2, 0, true);
+        mmix_assert_edu_config(qts, 2, 1, false);
+        mmix_assert_edu_config(qts, 5, 0, false);
+        g_assert_cmphex(mmix_pcie_readl(qts, testdev), ==,
+                        PCI_DEVICE_ID_REDHAT_TEST << 16 |
+                        PCI_VENDOR_ID_REDHAT);
+        g_assert_cmphex(mmix_pcie_readl(
+                            qts, testdev + PCI_CLASS_REVISION), ==,
+                        PCI_CLASS_OTHERS << 16);
+        g_assert_cmpuint(mmix_pcie_readb(
+                             qts, testdev + PCI_INTERRUPT_PIN), ==, 0);
+        g_assert_cmphex(mmix_pcie_readl(
+                            qts, testdev + PCI_BASE_ADDRESS_2) &
+                        (PCI_BASE_ADDRESS_SPACE |
+                         PCI_BASE_ADDRESS_MEM_TYPE_MASK |
+                         PCI_BASE_ADDRESS_MEM_PREFETCH), ==,
+                        PCI_BASE_ADDRESS_MEM_TYPE_64 |
+                        PCI_BASE_ADDRESS_MEM_PREFETCH);
+        qtest_quit(qts);
+    }
+}
+
+static void test_mmix_pcie_bar_access(void)
+{
+    static const char devices[] =
+        "-device edu,bus=pcie.0,addr=1.0 "
+        "-device pci-testdev,bus=pcie.0,addr=6.0,membar=1M,"
+        "membar-backed=on "
+        "-device pci-testdev,bus=pcie.0,addr=7.0,membar=1M,"
+        "membar-backed=on";
+    const uint64_t edu_config = mmix_pcie_ecam_address(0, 1, 0, 0);
+    const uint64_t testdev6 = mmix_pcie_ecam_address(0, 6, 0, 0);
+    const uint64_t testdev7 = mmix_pcie_ecam_address(0, 7, 0, 0);
+    const uint64_t edu_pci32 = 0x00200000;
+    const uint64_t test_pci32 = 0x00400000;
+    const uint64_t test_pci64 = MMIX_PCIE_MMIO64_BUS_BASE + 0x00600000;
+    const uint64_t edu_cpu32 = MMIX_PCIE_MMIO32_BASE + edu_pci32;
+    const uint64_t test_cpu32 = MMIX_PCIE_MMIO32_BASE + test_pci32;
+    const uint64_t test_cpu64 = MMIX_PCIE_MMIO64_BASE + 0x00600000;
+    const uint64_t marker32 = UINT64_C(0x1122334455667788);
+    const uint64_t marker64 = UINT64_C(0x8877665544332211);
+    QTestState *qts = qtest_initf("-machine virt %s", devices);
+
+    mmix_pcie_writel(qts, edu_config + PCI_BASE_ADDRESS_0, UINT32_MAX);
+    g_assert_cmphex(mmix_pcie_readl(
+                        qts, edu_config + PCI_BASE_ADDRESS_0), ==,
+                    UINT32_MAX & ~(MMIX_EDU_BAR_SIZE - 1));
+    mmix_pcie_writel(qts, edu_config + PCI_BASE_ADDRESS_0,
+                     edu_pci32 + MMIX_EDU_BAR_SIZE / 2);
+    g_assert_cmphex(mmix_pcie_readl(
+                        qts, edu_config + PCI_BASE_ADDRESS_0), ==,
+                    edu_pci32);
+    mmix_pcie_writew(qts, edu_config + PCI_COMMAND, PCI_COMMAND_MEMORY);
+    g_assert_cmphex(qtest_readl(qts, edu_cpu32), ==, MMIX_EDU_ID);
+    mmix_pcie_writew(qts, edu_config + PCI_COMMAND, 0);
+    g_assert_cmphex(qtest_readl(qts, edu_cpu32), !=, MMIX_EDU_ID);
+    mmix_pcie_writew(qts, edu_config + PCI_COMMAND, PCI_COMMAND_MEMORY);
+
+    mmix_pcie_writel(qts, testdev6 + PCI_BASE_ADDRESS_2, UINT32_MAX);
+    mmix_pcie_writel(qts, testdev6 + PCI_BASE_ADDRESS_3, UINT32_MAX);
+    g_assert_cmphex(mmix_pcie_readl(
+                        qts, testdev6 + PCI_BASE_ADDRESS_2), ==,
+                    (UINT32_MAX & ~(MMIX_TESTDEV_BAR_SIZE - 1)) |
+                    PCI_BASE_ADDRESS_MEM_TYPE_64 |
+                    PCI_BASE_ADDRESS_MEM_PREFETCH);
+    g_assert_cmphex(mmix_pcie_readl(
+                        qts, testdev6 + PCI_BASE_ADDRESS_3), ==,
+                    UINT32_MAX);
+
+    mmix_testdev_configure_bar2(qts, 6, test_pci32);
+    mmix_testdev_configure_bar2(qts, 7, test_pci64);
+    qtest_writeq(qts, test_cpu32, marker32);
+    qtest_writeq(qts, test_cpu64, marker64);
+    g_assert_cmphex(qtest_readq(qts, test_cpu32), ==, marker32);
+    g_assert_cmphex(qtest_readq(qts, test_cpu64), ==, marker64);
+    g_assert_cmphex(qtest_readl(qts, edu_cpu32), ==, MMIX_EDU_ID);
+
+    mmix_pcie_writew(qts, testdev7 + PCI_COMMAND, 0);
+    mmix_assert_unassigned(qts, test_cpu64);
+    mmix_testdev_configure_bar2(
+        qts, 7, MMIX_PCIE_MMIO64_BUS_BASE + MMIX_PCIE_MMIO64_SIZE);
+    mmix_assert_unassigned(qts,
+                           MMIX_PCIE_MMIO64_BASE + MMIX_PCIE_MMIO64_SIZE);
+    qtest_quit(qts);
+}
+
+static void test_mmix_pcie_bridge_device(void)
+{
+    static const char devices[] =
+        "-device pcie-pci-bridge,id=bridge,bus=pcie.0,addr=4.0,msi=off "
+        "-device edu,bus=bridge,addr=1.0";
+    const uint64_t bridge = mmix_pcie_ecam_address(0, 4, 0, 0);
+    const uint64_t pci_address = 0x04000000;
+    const unsigned int source = MMIX_PCIE_INTX_IRQ_BASE + 1;
+    const uint64_t bit = mmix_intc_source_bit(source);
+    QTestState *qts = mmix_pcie_irq_start(1, devices);
+    uint64_t child;
+    uint64_t bar;
+
+    g_assert_cmphex(mmix_pcie_readl(qts, bridge), ==,
+                    PCI_DEVICE_ID_REDHAT_PCIE_BRIDGE << 16 |
+                    PCI_VENDOR_ID_REDHAT);
+    g_assert_cmphex(mmix_pcie_readl(qts, bridge + PCI_CLASS_REVISION) >> 16,
+                    ==, PCI_CLASS_BRIDGE_PCI);
+    g_assert_cmphex(mmix_pcie_readb(qts, bridge + PCI_HEADER_TYPE), ==,
+                    PCI_HEADER_TYPE_BRIDGE);
+
+    mmix_pcie_writel(qts, bridge + PCI_PRIMARY_BUS, 0x00010100);
+    mmix_pcie_writel(qts, bridge + PCI_MEMORY_BASE, 0x04f00400);
+    mmix_pcie_writew(qts, bridge + PCI_COMMAND, PCI_COMMAND_MEMORY);
+    child = mmix_pcie_ecam_address(1, 1, 0, 0);
+    g_assert_cmphex(mmix_pcie_readl(qts, child), ==,
+                    0x11e8 << 16 | PCI_VENDOR_ID_QEMU);
+    mmix_pcie_writel(qts, child + PCI_BASE_ADDRESS_0, pci_address);
+    mmix_pcie_writew(qts, child + PCI_COMMAND, PCI_COMMAND_MEMORY);
+    bar = MMIX_PCIE_MMIO32_BASE + pci_address;
+    g_assert_cmphex(qtest_readl(qts, bar), ==, MMIX_EDU_ID);
+
+    mmix_edu_set_irq(qts, bar, 1, true);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, bit);
+    mmix_edu_set_irq(qts, bar, 1, false);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
     qtest_quit(qts);
 }
 
@@ -352,6 +571,12 @@ int main(int argc, char **argv)
                    test_mmix_pcie_memory_mappings);
     qtest_add_func("/mmix/pcie/ecam-boundaries",
                    test_mmix_pcie_ecam_boundaries);
+    qtest_add_func("/mmix/pcie/device-enumeration",
+                   test_mmix_pcie_device_enumeration);
+    qtest_add_func("/mmix/pcie/bar-access",
+                   test_mmix_pcie_bar_access);
+    qtest_add_func("/mmix/pcie/bridge-device",
+                   test_mmix_pcie_bridge_device);
     qtest_add_func("/mmix/pcie/intx-swizzle",
                    test_mmix_pcie_intx_swizzle);
     qtest_add_func("/mmix/pcie/shared-intx",
