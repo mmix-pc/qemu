@@ -18,6 +18,10 @@
 #define MMIX_DEFAULT_RAM_SIZE (512 * MiB)
 #define MMIX_INITIAL_STACK_SIZE (32 * KiB)
 #define MMIX_INITIAL_STACK_ALIGN (8 * KiB)
+#define MMIX_RETIRED_BOOTINFO_BASE UINT64_C(0x0e800000)
+#define MMIX_RETIRED_BOOTINFO_MAGIC UINT64_C(0x4d4d4958424f4f54)
+#define MMIX_RETIRED_UART_SCRATCH UINT64_C(0x10000007)
+#define MMIX_UART_SCRATCH UINT64_C(0x0001000010000007)
 #define MMIX_FRAMEBUFFER_CONTROL_BASE UINT64_C(0x0001000018000000)
 #define MMIX_FRAMEBUFFER_REG_BASE 0x20
 
@@ -146,11 +150,27 @@ static void test_mmix_ram_exact_endpoint(gconstpointer opaque)
 
 static void test_mmix_ram_contiguous_default(void)
 {
-    static const uint64_t legacy_addresses[] = {
+    const uint8_t pattern[] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    };
+    QTestState *qts = qtest_init("-machine virt");
+
+    mmix_assert_ram_bytes(qts, 0, pattern, sizeof(pattern));
+    mmix_assert_ram_bytes(qts, 512 * MiB - sizeof(pattern), pattern,
+                          sizeof(pattern));
+
+    qtest_writeb(qts, 512 * MiB, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, 512 * MiB), !=, 0xa5);
+    qtest_quit(qts);
+}
+
+static void test_mmix_retired_fixed_addresses_are_ram(void)
+{
+    static const uint64_t retired_addresses[] = {
         0x06000000,
         0x06800000,
         0x0a800000,
-        0x0e800000,
+        MMIX_RETIRED_BOOTINFO_BASE,
         0x0f000000,
         0x10000000,
         0x10001000,
@@ -165,16 +185,14 @@ static void test_mmix_ram_contiguous_default(void)
     QTestState *qts = qtest_init("-machine virt");
     unsigned int i;
 
-    mmix_assert_ram_bytes(qts, 0, pattern, sizeof(pattern));
-    for (i = 0; i < ARRAY_SIZE(legacy_addresses); i++) {
-        mmix_assert_ram_bytes(qts, legacy_addresses[i], pattern,
+    qtest_writeb(qts, MMIX_UART_SCRATCH, 0x5a);
+    for (i = 0; i < ARRAY_SIZE(retired_addresses); i++) {
+        mmix_assert_ram_bytes(qts, retired_addresses[i], pattern,
                               sizeof(pattern));
     }
-    mmix_assert_ram_bytes(qts, 512 * MiB - sizeof(pattern), pattern,
-                          sizeof(pattern));
-
-    qtest_writeb(qts, 512 * MiB, 0xa5);
-    g_assert_cmphex(qtest_readb(qts, 512 * MiB), !=, 0xa5);
+    qtest_writeb(qts, MMIX_RETIRED_UART_SCRATCH, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, MMIX_RETIRED_UART_SCRATCH), ==, 0xa5);
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_SCRATCH), ==, 0x5a);
     qtest_quit(qts);
 }
 
@@ -630,6 +648,32 @@ static void test_mmix_bare_elf_load_and_reset(void)
     g_assert_cmpint(g_rmdir(directory), ==, 0);
 }
 
+static void test_mmix_retired_bootinfo_absent(void)
+{
+    const uint64_t ram_size = 8 * GiB;
+    uint8_t bootinfo_magic[sizeof(uint64_t)];
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory =
+        g_dir_make_tmp("mmix-retired-bootinfo-XXXXXX", &error);
+    g_autofree char *filename = NULL;
+    QTestState *qts;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(directory);
+    filename = mmix_create_bare_elf(directory, ram_size);
+    qts = qtest_initf("-machine virt,elf-startup-abi=linux -m 8G "
+                      "-kernel %s", filename);
+
+    qtest_memread(qts, MMIX_RETIRED_BOOTINFO_BASE, bootinfo_magic,
+                  sizeof(bootinfo_magic));
+    g_assert_cmphex(ldq_be_p(bootinfo_magic), !=,
+                    MMIX_RETIRED_BOOTINFO_MAGIC);
+    qtest_quit(qts);
+
+    g_assert_cmpint(g_unlink(filename), ==, 0);
+    g_assert_cmpint(g_rmdir(directory), ==, 0);
+}
+
 static char *mmix_create_hosted_elf(const char *directory)
 {
     enum { CODE_OFFSET = 0x100 };
@@ -869,6 +913,8 @@ int main(int argc, char **argv)
     }
     qtest_add_func("/mmix/ram/contiguous/default",
                    test_mmix_ram_contiguous_default);
+    qtest_add_func("/mmix/retired-abi/fixed-addresses-are-ram",
+                   test_mmix_retired_fixed_addresses_are_ram);
     qtest_add_func("/mmix/ram/contiguous/crosses-4g",
                    test_mmix_ram_crosses_4g);
     qtest_add_func("/mmix/ram/reset/cold", test_mmix_ram_survives_reset);
@@ -880,6 +926,8 @@ int main(int argc, char **argv)
                    test_mmix_raw_minimum_and_reset);
     qtest_add_func("/mmix/kernel/elf/bare-load-reset",
                    test_mmix_bare_elf_load_and_reset);
+    qtest_add_func("/mmix/retired-abi/bootinfo-absent",
+                   test_mmix_retired_bootinfo_absent);
     qtest_add_func("/mmix/kernel/elf/arguments-reset",
                    test_mmix_hosted_arguments_reset);
     qtest_add_func("/mmix/translation/flat-identity",

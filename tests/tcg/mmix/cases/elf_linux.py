@@ -237,6 +237,15 @@ LINUX_STATE_TESTS = [linux_state_program()]
 
 LINUX_PREFLIGHT_REJECTION_TESTS = [
     MMIXProcessFailure(
+        "elf-retired-bootinfo-startup-abi",
+        elf64_image(0, halt()),
+        ("-machine", "elf-startup-abi=bootinfo"),
+        (
+            "Invalid MMIX ELF startup ABI 'bootinfo'",
+            "Valid values are bare, argc-argv, and linux",
+        ),
+    ),
+    MMIXProcessFailure(
         "elf-invalid-startup-abi",
         elf64_image(0, halt()),
         ("-machine", "elf-startup-abi=invalid"),
