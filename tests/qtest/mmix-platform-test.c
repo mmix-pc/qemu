@@ -389,7 +389,7 @@ static void test_mmix_platform_deferred_apertures(void)
         UINT64_C(0x0001000018010000),
         MMIX_DISCOVERABLE_BASE,
         UINT64_C(0x0001000080000000),
-        UINT64_C(0x0001000100000000),
+        UINT64_C(0x0001000110000000),
         UINT64_C(0x0001000200000000),
         UINT64_C(0x0001010000000000),
     };

@@ -22,6 +22,8 @@
 #include "hw/core/sysbus.h"
 #include "hw/misc/virt_ctrl.h"
 #include "hw/nvram/fw_cfg.h"
+#include "hw/pci-host/gpex.h"
+#include "hw/pci/pcie_host.h"
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "hw/watchdog/sbsa_gwdt.h"
@@ -106,6 +108,7 @@ struct MMIXVirtMachineState {
     qemu_irq cpu_irqs[MMIX_VIRT_MAX_CPUS];
     uint64_t framebuffer_base;
     uint64_t framebuffer_size;
+    GPEXHost *pcie_host;
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
@@ -158,6 +161,31 @@ static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, bases[bank]);
     return PFLASH_CFI01(dev);
+}
+
+static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms)
+{
+    DeviceState *dev = qdev_new(TYPE_GPEX_HOST);
+
+    QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_ECAM_SIZE != PCIE_MMCFG_SIZE_MAX);
+    QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_ECAM_SIZE !=
+                      MMIX_VIRT_PCIE_BUS_COUNT * PCIE_MMCFG_SIZE_MIN);
+
+    object_property_add_child(OBJECT(vms), "pcie", OBJECT(dev));
+    object_property_set_uint(OBJECT(dev), PCI_HOST_ECAM_BASE,
+                             MMIX_VIRT_PCIE_ECAM_BASE, &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_ECAM_SIZE,
+                            MMIX_VIRT_PCIE_ECAM_SIZE, &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_PIO_SIZE, 0, &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_BELOW_4G_MMIO_SIZE, 0,
+                            &error_fatal);
+    object_property_set_int(OBJECT(dev), PCI_HOST_ABOVE_4G_MMIO_SIZE, 0,
+                            &error_fatal);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, MMIX_VIRT_PCIE_ECAM_BASE);
+
+    vms->pcie_host = GPEX_HOST(dev);
+    vms->pcie_host->gpex_cfg.bus = PCI_HOST_BRIDGE(dev)->bus;
 }
 
 static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
@@ -1599,6 +1627,8 @@ static void mmix_virt_init(MachineState *machine)
                            qdev_get_gpio_in(intc,
                                            MMIX_VIRT_TIMER_IRQ_BASE + i));
     }
+
+    mmix_virt_create_pcie_host(vms);
 
     /*
      * Realization prepends each bus to QEMU's default-bus search order.

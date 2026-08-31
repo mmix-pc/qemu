@@ -308,6 +308,7 @@ qtests_mmix = [
   'mmix-flash-test',
   'mmix-intc-test',
   'mmix-ipi-test',
+  'mmix-pcie-test',
   'mmix-platform-test',
   'mmix-physical-layout-test',
   'mmix-power-test',

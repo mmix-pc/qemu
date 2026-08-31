@@ -6,6 +6,7 @@ config MMIX_VIRT
     select SERIAL_MM
     select FRAMEBUFFER
     select GOLDFISH_RTC
+    select PCI_EXPRESS_GENERIC_BRIDGE
     select PFLASH_CFI01
     select VIRT_CTRL
     select VIRTIO_MMIO

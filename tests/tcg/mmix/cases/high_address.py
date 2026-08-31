@@ -53,6 +53,7 @@ def privileged_device_alias_program():
     ipi = negative | MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0]
     intc = negative | MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
     virtio = negative | MMIX_VIRT_MEMMAP[MMIX_VIRT_VIRTIO_MMIO][0]
+    pcie_ecam = negative | MMIX_VIRT_MEMMAP[MMIX_VIRT_PCIE_ECAM][0]
 
     program = [
         *set_octa(R1, uart),
@@ -68,6 +69,8 @@ def privileged_device_alias_program():
         insn(LDOUI, R24, R5, 0),
         *set_octa(R6, virtio),
         insn(LDTUI, R25, R6, 0),
+        *set_octa(R7, pcie_ecam),
+        insn(LDTUI, R26, R7, 0),
         halt(),
     ]
     return MMIXTest(
@@ -80,6 +83,8 @@ def privileged_device_alias_program():
             R23: 1,
             R24: MMIX_VIRT_INTC_IRQ_COUNT,
             R25: 0x74726976,
+            # LDTU observes PCI configuration space's little-endian bytes.
+            R26: 0x361B0800,
         },
     )
 
