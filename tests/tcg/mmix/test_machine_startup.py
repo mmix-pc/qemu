@@ -116,6 +116,7 @@ def test_no_image_mttcg_startup(qemu):
     run_no_image_mttcg_test(qemu)
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize("cpu_count", (1, 64))
 def test_firmware_cpu_entry_state(qemu, workdir, cpu_count):
     bios = workdir / f"firmware-entry-{cpu_count}.bin"
@@ -141,6 +142,7 @@ def test_firmware_executes_from_negative_flash_alias(qemu, workdir):
     )
 
 
+@pytest.mark.boot_integration
 def test_firmware_reset_and_snapshot_state(qemu, workdir):
     firmware = b"".join((
         insn(ADDI, R32, R0, 0x40),
@@ -158,6 +160,7 @@ def test_firmware_fixture_is_reproducible():
     )
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize(
     "cpu_count,memory,initrd,command_line",
     (
@@ -366,6 +369,7 @@ def test_canonical_dtb_dump_is_deterministic(qemu, workdir):
     assert len(blobs[0]) <= 2 * 1024 * 1024
 
 
+@pytest.mark.boot_integration
 def test_firmware_dtb_matches_other_boot_modes(qemu, workdir):
     bios = workdir / "firmware-fdt.bin"
     kernel = workdir / "direct-fdt.elf"

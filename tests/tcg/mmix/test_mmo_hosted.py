@@ -23,6 +23,7 @@ from lib.execution import (
 )
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize("test", MMO_HOSTED_TESTS, ids=case_id)
 def test_mmo_hosted(qemu, workdir, test):
     run_mmo_test(qemu, workdir, test)
@@ -38,6 +39,7 @@ def test_mmo_hosted_ram_budget(qemu, workdir, ram_size):
     run_mmo_test(qemu, workdir, test)
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize("test", MMO_HOSTED_FAILURE_TESTS, ids=case_id)
 def test_mmo_hosted_failure(qemu, workdir, test):
     run_loader_failure(qemu, workdir, test)

@@ -51,5 +51,13 @@ tests/tcg/mmix/run-mmix-tests.py \
     --workdir build/tests/tcg/mmix-softmmu/mmix-tests
 ```
 
+To run the integrated boot-mode selection:
+
+```sh
+build/pyvenv/bin/python -m pytest -m boot_integration \
+    tests/tcg/mmix --qemu build/qemu-system-mmix \
+    --workdir build/tests/tcg/mmix-softmmu/platform-migration
+```
+
 The `--workdir` directory is used for generated images, logs, serial output,
 and semihosting console output.

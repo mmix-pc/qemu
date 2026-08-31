@@ -452,6 +452,12 @@ MMO_HOSTED_TESTS = [
 
 MMO_HOSTED_FAILURE_TESTS = [
     MMIXLoaderFailure(
+        "mmo-hosted-smp",
+        _hosted_image([halt()]),
+        ("MMIX MMO hosted startup requires exactly one CPU",),
+        qemu_args=("-smp", "2"),
+    ),
+    MMIXLoaderFailure(
         "mmo-hosted-explicit-elf-abi",
         _hosted_image([halt()]),
         ("does not accept an explicit ELF startup ABI",),

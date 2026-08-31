@@ -19,21 +19,25 @@ from lib.execution import (
 )
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize("test", LINUX_ENTRY_STATE_TESTS, ids=case_id)
 def test_elf_linux_entry_state(qemu, workdir, test):
     run_linux_entry_state_test(qemu, workdir, test)
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize("test", LINUX_SMP_ENTRY_TESTS, ids=case_id)
 def test_elf_linux_smp_entry(qemu, workdir, test):
     run_linux_smp_entry_test(qemu, workdir, test)
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize("test", LINUX_STATE_TESTS, ids=case_id)
 def test_elf_linux_state(qemu, workdir, test):
     run_linux_state_test(qemu, workdir, test)
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize(
     "test", LINUX_PREFLIGHT_REJECTION_TESTS, ids=case_id
 )

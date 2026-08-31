@@ -134,6 +134,7 @@ def _qtest_command(stream, command):
     return response.split()
 
 
+@pytest.mark.boot_integration
 def test_mmo_hosted_debug_memory(qemu, workdir):
     physical_address = 0x01000000
     qemu_args = (
@@ -204,6 +205,7 @@ def test_mmo_hosted_debug_text_invalidation(qemu, workdir):
         assert result.pc == 0
 
 
+@pytest.mark.boot_integration
 def test_mmo_hosted_cold_reset(qemu, workdir):
     name = "mmo-hosted-cold-reset"
     qtest_path = workdir / f"{name}.qtest"
@@ -292,6 +294,7 @@ def test_mmo_hosted_cold_reset(qemu, workdir):
             qtest_path.unlink()
 
 
+@pytest.mark.boot_integration
 def test_mmo_hosted_snapshot(qemu, workdir):
     name = "mmo-hosted-snapshot"
     snapshot_path = workdir / f"{name}.qcow2"
@@ -428,6 +431,7 @@ def test_mmo_hosted_snapshot_rejects_open_file(qemu, workdir):
                 path.unlink()
 
 
+@pytest.mark.boot_integration
 @pytest.mark.parametrize(
     "name,suffix,image,address,expected",
     (
