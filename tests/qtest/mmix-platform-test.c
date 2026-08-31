@@ -10,7 +10,10 @@
 #include "hw/pci/pci.h"
 #include "libqtest.h"
 #include "qemu/bswap.h"
+#include "qemu/timer.h"
 #include "qemu/units.h"
+#include "standard-headers/linux/qemu_fw_cfg.h"
+#include "standard-headers/linux/virtio_config.h"
 #include "standard-headers/linux/virtio_ids.h"
 #include "standard-headers/linux/virtio_mmio.h"
 
@@ -24,33 +27,45 @@
 #define MMIX_UART_SIZE                 UINT64_C(0x8)
 #define MMIX_UART_LSR                  0x5
 #define MMIX_UART_LSR_THRE             0x20
+#define MMIX_UART_SCRATCH              0x7
 
 #define MMIX_RTC_BASE                  UINT64_C(0x0001000010010000)
 #define MMIX_RTC_SIZE                  UINT64_C(0x24)
 #define MMIX_RTC_IRQ_ENABLED           0x10
+#define MMIX_RTC_ALARM_LOW             0x08
+#define MMIX_RTC_ALARM_HIGH            0x0c
 #define MMIX_WATCHDOG_REFRESH_BASE     UINT64_C(0x0001000010020000)
 #define MMIX_WATCHDOG_CONTROL_BASE     UINT64_C(0x0001000010030000)
 #define MMIX_WATCHDOG_SIZE             UINT64_C(0x1000)
 #define MMIX_WATCHDOG_ID               0x1043b
 #define MMIX_WATCHDOG_IIDR             0xfcc
+#define MMIX_WATCHDOG_WCS              0x000
+#define MMIX_WATCHDOG_WOR              0x008
+#define MMIX_WATCHDOG_WCS_EN           0x1
 #define MMIX_POWER_BASE                UINT64_C(0x0001000010040000)
 #define MMIX_POWER_SIZE                UINT64_C(0x100)
 #define MMIX_POWER_FEATURES            0x00
 #define MMIX_POWER_FEATURE_CONTROL     0x1
 #define MMIX_FW_CFG_BASE               UINT64_C(0x0001000014000000)
 #define MMIX_FW_CFG_SIZE               UINT64_C(0x18)
+#define MMIX_FW_CFG_DATA               0x00
+#define MMIX_FW_CFG_SELECTOR           0x08
 
 #define MMIX_FRAMEBUFFER_BASE          UINT64_C(0x0001000018000000)
 #define MMIX_FRAMEBUFFER_SIZE          UINT64_C(0x1000)
 #define MMIX_FRAMEBUFFER_WIDTH         0x00
 #define MMIX_FRAMEBUFFER_WIDTH_VALUE   1024
+#define MMIX_FRAMEBUFFER_RAM_BASE      0x20
 
 #define MMIX_TIMER_BASE                UINT64_C(0x0001000020000000)
 #define MMIX_TIMER_CONTEXT_BASE        UINT64_C(0x0001000020010000)
+#define MMIX_TIMER_CONTEXT_COMPARE     0x00
 #define MMIX_TIMER_CONTEXT_CONTROL     0x08
+#define MMIX_TIMER_CONTROL_ENABLE      0x01
 
 #define MMIX_IPI_BASE                  UINT64_C(0x0001000024000000)
 #define MMIX_IPI_ACTIVE_TARGETS        0x00
+#define MMIX_IPI_SEND                  0x08
 #define MMIX_IPI_CONTEXT_BASE          UINT64_C(0x0001000024010000)
 #define MMIX_IPI_CONTEXT_STATUS        0x00
 
@@ -59,11 +74,39 @@
 #define MMIX_INTC_CONTEXT_COUNT        0x08
 #define MMIX_INTC_CONTEXT_BASE         UINT64_C(0x0001000034000000)
 #define MMIX_INTC_CONTEXT_ENABLE       0x00
+#define MMIX_INTC_CONTEXT_CLAIM        0x0800
+#define MMIX_INTC_CONTEXT_COMPLETE     0x0808
+#define MMIX_INTC_PENDING_BASE         0x1000
 #define MMIX_INTC_SOURCE_COUNT_VALUE   8192
 
 #define MMIX_VIRTIO_BASE               UINT64_C(0x0001000040000000)
 #define MMIX_DISCOVERABLE_BASE         UINT64_C(0x0001000050000000)
-#define MMIX_PCIE_ECAM_BASE             UINT64_C(0x0001000100000000)
+#define MMIX_PCIE_ECAM_BASE            UINT64_C(0x0001000100000000)
+#define MMIX_PCIE_MMIO32_BASE          UINT64_C(0x0001000200000000)
+#define MMIX_PCIE_DEVICE_SIZE          UINT64_C(0x8000)
+
+#define MMIX_PCIE_INTX_IRQ             6145
+#define MMIX_EDU_BAR_ADDRESS           UINT32_C(0x00200000)
+#define MMIX_EDU_BAR_SIZE              UINT64_C(0x100000)
+#define MMIX_EDU_ID                    UINT32_C(0x010000ed)
+#define MMIX_EDU_IRQ_RAISE             0x60
+#define MMIX_EDU_DMA_SRC               0x80
+#define MMIX_EDU_DMA_DST               0x88
+#define MMIX_EDU_DMA_COUNT             0x90
+#define MMIX_EDU_DMA_COMMAND           0x98
+#define MMIX_EDU_DMA_BUFFER            UINT64_C(0x40000)
+#define MMIX_EDU_DMA_RUN               UINT64_C(0x1)
+#define MMIX_EDU_DMA_TO_PCI            UINT64_C(0x2)
+#define MMIX_E1000_BAR_ADDRESS         UINT32_C(0x00800000)
+#define MMIX_E1000_ICR                 0x00c0
+#define MMIX_E1000_ICS                 0x00c8
+#define MMIX_E1000_IMS                 0x00d0
+#define MMIX_E1000_TEST_CAUSE          UINT32_C(0x1)
+
+#define MMIX_POPULATED_SOURCE_RAM      UINT64_C(0x00100000)
+#define MMIX_POPULATED_DEST_RAM        UINT64_C(0x00101000)
+#define MMIX_POPULATED_RAM_MARKER      UINT64_C(0x1122334455667788)
+#define MMIX_POPULATED_FB_MARKER       UINT64_C(0x8877665544332211)
 
 #define MMIX_CONTEXT_STRIDE            UINT64_C(0x10000)
 #define MMIX_CONTEXT_REGISTER_SIZE     UINT64_C(0x1000)
@@ -136,6 +179,85 @@ static uint32_t mmix_readl_le(QTestState *qts, uint64_t address)
 
     qtest_memread(qts, address, bytes, sizeof(bytes));
     return ldl_le_p(bytes);
+}
+
+static void mmix_writel_le(QTestState *qts, uint64_t address, uint32_t value)
+{
+    uint8_t bytes[sizeof(value)];
+
+    stl_le_p(bytes, value);
+    qtest_memwrite(qts, address, bytes, sizeof(bytes));
+}
+
+static void mmix_writew_le(QTestState *qts, uint64_t address, uint16_t value)
+{
+    uint8_t bytes[sizeof(value)];
+
+    stw_le_p(bytes, value);
+    qtest_memwrite(qts, address, bytes, sizeof(bytes));
+}
+
+static uint64_t mmix_pcie_ecam_address(unsigned int device,
+                                       unsigned int reg)
+{
+    return MMIX_PCIE_ECAM_BASE + device * MMIX_PCIE_DEVICE_SIZE + reg;
+}
+
+static uint64_t mmix_intc_source_address(uint64_t base, unsigned int source)
+{
+    return base + (source / 64) * sizeof(uint64_t);
+}
+
+static uint64_t mmix_intc_source_bit(unsigned int source)
+{
+    return UINT64_C(1) << (source % 64);
+}
+
+static void mmix_assert_fw_cfg_signature(QTestState *qts)
+{
+    uint8_t signature[4];
+    unsigned int i;
+
+    qtest_writew(qts, MMIX_FW_CFG_BASE + MMIX_FW_CFG_SELECTOR,
+                 FW_CFG_SIGNATURE);
+    for (i = 0; i < ARRAY_SIZE(signature); i++) {
+        signature[i] = qtest_readb(qts, MMIX_FW_CFG_BASE + MMIX_FW_CFG_DATA);
+    }
+    g_assert_cmpmem(signature, sizeof(signature), "QEMU", 4);
+}
+
+static void mmix_edu_dma_run(QTestState *qts, uint64_t bar,
+                             uint64_t source, uint64_t destination,
+                             uint64_t size, uint64_t command)
+{
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_SRC, source);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_DST, destination);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_COUNT, size);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_COMMAND,
+                 command | MMIX_EDU_DMA_RUN);
+    qtest_clock_step(qts, 100 * SCALE_MS);
+    g_assert_cmphex(qtest_readq(qts, bar + MMIX_EDU_DMA_COMMAND) &
+                    MMIX_EDU_DMA_RUN, ==, 0);
+}
+
+static uint64_t mmix_configure_edu(QTestState *qts)
+{
+    uint64_t config = mmix_pcie_ecam_address(1, 0);
+
+    mmix_writel_le(qts, config + PCI_BASE_ADDRESS_0,
+                   MMIX_EDU_BAR_ADDRESS);
+    mmix_writew_le(qts, config + PCI_COMMAND,
+                   PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    return MMIX_PCIE_MMIO32_BASE + MMIX_EDU_BAR_ADDRESS;
+}
+
+static void mmix_edu_dma_copy(QTestState *qts, uint64_t bar)
+{
+    mmix_edu_dma_run(qts, bar, MMIX_POPULATED_SOURCE_RAM,
+                     MMIX_EDU_DMA_BUFFER, sizeof(uint64_t), 0);
+    mmix_edu_dma_run(qts, bar, MMIX_EDU_DMA_BUFFER,
+                     MMIX_POPULATED_DEST_RAM, sizeof(uint64_t),
+                     MMIX_EDU_DMA_TO_PCI);
 }
 
 static void mmix_assert_active_devices(QTestState *qts, unsigned int cpus)
@@ -235,6 +357,7 @@ static void test_mmix_platform_slot_boundaries(void)
     uint64_t address;
 
     mmix_assert_active_devices(qts, 1);
+    mmix_assert_fw_cfg_signature(qts);
 
     mmix_assert_unassigned(qts, MMIX_UART_BASE + MMIX_UART_SIZE);
     mmix_assert_unassigned(qts, MMIX_RTC_BASE + MMIX_RTC_SIZE);
@@ -385,7 +508,7 @@ static void test_mmix_platform_low_address_isolation(void)
     qtest_quit(qts);
 }
 
-static void test_mmix_platform_deferred_apertures(void)
+static void mmix_assert_deferred_apertures(QTestState *qts)
 {
     static const uint64_t addresses[] = {
         UINT64_C(0x0001000000000000),
@@ -398,13 +521,18 @@ static void test_mmix_platform_deferred_apertures(void)
         UINT64_C(0x0001000300000000),
         UINT64_C(0x0001110000000000),
     };
-    QTestState *qts = qtest_init("-machine virt");
     size_t i;
 
     for (i = 0; i < ARRAY_SIZE(addresses); i++) {
         mmix_assert_unassigned(qts, addresses[i]);
     }
+}
 
+static void test_mmix_platform_deferred_apertures(void)
+{
+    QTestState *qts = qtest_init("-machine virt");
+
+    mmix_assert_deferred_apertures(qts);
     qtest_quit(qts);
 }
 
@@ -576,6 +704,231 @@ static void test_mmix_platform_boot_mode(gconstpointer opaque)
     }
 }
 
+static const char mmix_populated_devices[] =
+    "-rtc clock=vm "
+    "-watchdog-action none "
+    "-object rng-builtin,id=rng0 "
+    "-device virtio-rng-device,id=vrng,rng=rng0 "
+    "-device edu,bus=pcie.0,addr=1.0,dma_mask=0xffffffffffffffff "
+    "-device e1000,bus=pcie.0,addr=2.0";
+
+static uint64_t mmix_configure_e1000(QTestState *qts)
+{
+    uint64_t config = mmix_pcie_ecam_address(2, 0);
+
+    g_assert_cmphex(mmix_readl_le(qts, config), ==, 0x100e8086);
+    mmix_writel_le(qts, config + PCI_BASE_ADDRESS_0,
+                   MMIX_E1000_BAR_ADDRESS);
+    mmix_writew_le(qts, config + PCI_COMMAND,
+                   PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    return MMIX_PCIE_MMIO32_BASE + MMIX_E1000_BAR_ADDRESS;
+}
+
+static void mmix_populated_program_state(QTestState *qts,
+                                         unsigned int target_cpu)
+{
+    const uint64_t timer =
+        mmix_context_address(MMIX_TIMER_CONTEXT_BASE, target_cpu);
+    const uint64_t ipi =
+        mmix_context_address(MMIX_IPI_CONTEXT_BASE, target_cpu);
+    const uint64_t intc =
+        mmix_context_address(MMIX_INTC_CONTEXT_BASE, target_cpu);
+    const uint64_t irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    const uint64_t irq_enable =
+        mmix_intc_source_address(intc + MMIX_INTC_CONTEXT_ENABLE,
+                                 MMIX_PCIE_INTX_IRQ);
+    const uint64_t framebuffer =
+        qtest_readq(qts, MMIX_FRAMEBUFFER_BASE + MMIX_FRAMEBUFFER_RAM_BASE);
+    const uint64_t bar = mmix_configure_edu(qts);
+
+    g_assert_cmphex(qtest_readl(qts, bar), ==, MMIX_EDU_ID);
+    qtest_writeq(qts, MMIX_POPULATED_SOURCE_RAM,
+                 MMIX_POPULATED_RAM_MARKER);
+    mmix_edu_dma_copy(qts, bar);
+    g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
+                    MMIX_POPULATED_RAM_MARKER);
+
+    qtest_writeb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH, 0x5a);
+    mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_LOW, 0x89abcdef);
+    mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_HIGH, 0x01234567);
+    mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_IRQ_ENABLED, 1);
+    mmix_writel_le(qts, MMIX_WATCHDOG_CONTROL_BASE + MMIX_WATCHDOG_WOR,
+                   1000);
+    mmix_writel_le(qts, MMIX_WATCHDOG_CONTROL_BASE + MMIX_WATCHDOG_WCS,
+                   MMIX_WATCHDOG_WCS_EN);
+    qtest_writeq(qts, framebuffer, MMIX_POPULATED_FB_MARKER);
+    qtest_writeq(qts, timer + MMIX_TIMER_CONTEXT_COMPARE, UINT64_MAX);
+    qtest_writeq(qts, timer + MMIX_TIMER_CONTEXT_CONTROL,
+                 MMIX_TIMER_CONTROL_ENABLE);
+    qtest_writeq(qts, MMIX_IPI_BASE + MMIX_IPI_SEND,
+                 UINT64_C(1) << target_cpu);
+    qtest_writeq(qts, irq_enable, irq_bit);
+    qtest_writel(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
+                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    mmix_writel_le(qts, bar + MMIX_EDU_IRQ_RAISE, 1);
+
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
+                    0x5a);
+    g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_CONTEXT_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readq(qts, irq_enable), ==, irq_bit);
+    g_assert_cmphex(qtest_readq(
+                        qts,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, irq_bit);
+}
+
+static void mmix_populated_assert_preserved(QTestState *qts,
+                                            unsigned int target_cpu)
+{
+    const uint64_t timer =
+        mmix_context_address(MMIX_TIMER_CONTEXT_BASE, target_cpu);
+    const uint64_t ipi =
+        mmix_context_address(MMIX_IPI_CONTEXT_BASE, target_cpu);
+    const uint64_t intc =
+        mmix_context_address(MMIX_INTC_CONTEXT_BASE, target_cpu);
+    const uint64_t irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    const uint64_t irq_enable =
+        mmix_intc_source_address(intc + MMIX_INTC_CONTEXT_ENABLE,
+                                 MMIX_PCIE_INTX_IRQ);
+    const uint64_t framebuffer =
+        qtest_readq(qts, MMIX_FRAMEBUFFER_BASE + MMIX_FRAMEBUFFER_RAM_BASE);
+
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
+                    0x5a);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_LOW),
+                    ==, 0x89abcdef);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_HIGH),
+                    ==, 0x01234567);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE +
+                                      MMIX_RTC_IRQ_ENABLED), ==, 1);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_WOR), ==, 1000);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_WCS), ==,
+                    MMIX_WATCHDOG_WCS_EN);
+    g_assert_cmphex(qtest_readq(qts, framebuffer), ==,
+                    MMIX_POPULATED_FB_MARKER);
+    g_assert_cmphex(qtest_readq(qts, timer + MMIX_TIMER_CONTEXT_COMPARE), ==,
+                    UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, timer + MMIX_TIMER_CONTEXT_CONTROL), ==,
+                    MMIX_TIMER_CONTROL_ENABLE);
+    g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_CONTEXT_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readq(qts, irq_enable), ==, irq_bit);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS),
+                    ==, VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
+                    MMIX_POPULATED_RAM_MARKER);
+}
+
+static void test_mmix_platform_populated_reset(void)
+{
+    QTestState *qts = qtest_initf("-machine virt -m 512M -smp 1 %s",
+                                  mmix_populated_devices);
+    const uint64_t irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    const uint64_t framebuffer =
+        qtest_readq(qts, MMIX_FRAMEBUFFER_BASE + MMIX_FRAMEBUFFER_RAM_BASE);
+
+    mmix_populated_program_state(qts, 0);
+    qtest_system_reset(qts);
+
+    mmix_assert_active_devices(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
+                    0);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_LOW),
+                    ==, 0);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_WCS), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, MMIX_TIMER_CONTEXT_BASE +
+                                    MMIX_TIMER_CONTEXT_COMPARE), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, MMIX_TIMER_CONTEXT_BASE +
+                                    MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, MMIX_IPI_CONTEXT_BASE +
+                                    MMIX_IPI_CONTEXT_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readq(
+                        qts,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, 0);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS),
+                    ==, 0);
+    g_assert_cmphex(mmix_readl_le(
+                        qts, mmix_pcie_ecam_address(1, PCI_BASE_ADDRESS_0)) &
+                    PCI_BASE_ADDRESS_MEM_MASK, ==, 0);
+    g_assert_cmphex(qtest_readq(qts, framebuffer), ==,
+                    MMIX_POPULATED_FB_MARKER);
+    g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
+                    MMIX_POPULATED_RAM_MARKER);
+    mmix_assert_deferred_apertures(qts);
+    qtest_quit(qts);
+}
+
+static void test_mmix_platform_populated_migration(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-platform-state-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    g_autofree char *args = NULL;
+    QTestState *from;
+    QTestState *to;
+    uint64_t e1000_bar;
+    uint64_t intc;
+    uint64_t irq_bit;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    args = g_strdup_printf("-machine virt -m 512M -smp 2 %s",
+                           mmix_populated_devices);
+    incoming = g_strdup_printf("%s -incoming %s", args, uri);
+    from = qtest_init(args);
+    to = qtest_init(incoming);
+
+    mmix_populated_program_state(from, 1);
+    intc = mmix_context_address(MMIX_INTC_CONTEXT_BASE, 1);
+    irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    g_assert_cmpuint(qtest_readq(from, intc + MMIX_INTC_CONTEXT_CLAIM), ==,
+                     MMIX_PCIE_INTX_IRQ);
+    e1000_bar = mmix_configure_e1000(from);
+    mmix_writel_le(from, e1000_bar + MMIX_E1000_IMS,
+                   MMIX_E1000_TEST_CAUSE);
+    mmix_writel_le(from, e1000_bar + MMIX_E1000_ICS,
+                   MMIX_E1000_TEST_CAUSE);
+    qtest_qmp_assert_success(from,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_eventwait(from, "STOP");
+    qtest_qmp_eventwait(to, "RESUME");
+
+    mmix_populated_assert_preserved(to, 1);
+    mmix_assert_fw_cfg_signature(to);
+    g_assert_cmphex(qtest_readq(
+                        to,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, 0);
+    qtest_writeq(to, intc + MMIX_INTC_CONTEXT_COMPLETE,
+                 MMIX_PCIE_INTX_IRQ);
+    g_assert_cmphex(qtest_readq(
+                        to,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, irq_bit);
+    g_assert_cmphex(mmix_readl_le(
+                        to, mmix_pcie_ecam_address(2, PCI_BASE_ADDRESS_0)) &
+                    PCI_BASE_ADDRESS_MEM_MASK, ==, MMIX_E1000_BAR_ADDRESS);
+    g_assert_cmphex(mmix_readl_le(to, e1000_bar + MMIX_E1000_ICR) &
+                    MMIX_E1000_TEST_CAUSE, ==, MMIX_E1000_TEST_CAUSE);
+    mmix_assert_deferred_apertures(to);
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     static const MMIXRAMSizeCase ram_sizes[] = {
@@ -616,6 +969,10 @@ int main(int argc, char **argv)
                    test_mmix_platform_deferred_apertures);
     qtest_add_func("/mmix/platform/nonoverlapping-extents",
                    test_mmix_platform_nonoverlapping_extents);
+    qtest_add_func("/mmix/platform/populated/reset",
+                   test_mmix_platform_populated_reset);
+    qtest_add_func("/mmix/platform/populated/migration",
+                   test_mmix_platform_populated_migration);
     for (i = 0; i < ARRAY_SIZE(boot_modes); i++) {
         g_autofree char *name = g_strdup_printf(
             "/mmix/platform/boot-mode/%s", boot_mode_names[i]);
