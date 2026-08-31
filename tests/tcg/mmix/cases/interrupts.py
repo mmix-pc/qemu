@@ -820,6 +820,220 @@ def unsave_fault_resume_program():
 UNSAVE_FAULT_RESUME = unsave_fault_resume_program()
 
 
+def forced_translation_pte(address_reg=R186, mask_reg=R187):
+    return [
+        insn(GET, address_reg, R0, SR_YY),
+        *set_octa(mask_reg, 0x1fff),
+        insn(ANDN, address_reg, address_reg, mask_reg),
+        insn(ORI, address_reg, address_reg, 7),
+        insn(PUT, SR_ZZ, 0, address_reg),
+    ]
+
+
+def nested_save_unsave_handlers(handler, nested_handler):
+    outer = [
+        branch(BNZ, R190, (nested_handler - handler) // 4),
+        wyde(SETL, R190, 1),
+        insn(LDOUI, R220, R239, 0),
+        insn(ADDUI, R220, R220, 1),
+        insn(STOUI, R220, R239, 0),
+        insn(GET, R180, 0, SR_WW),
+        insn(GET, R181, 0, SR_XX),
+        insn(GET, R182, 0, SR_YY),
+        insn(GET, R183, 0, SR_ZZ),
+        insn(GET, R184, 0, SR_BB),
+        insn(ADDU, R185, R255, R250),
+        insn(SAVE, R33, 0, 0),
+        insn(ADDUI, R61, R33, 0),
+        insn(UNSAVE, 0, 0, R61),
+        insn(PUT, SR_WW, 0, R180),
+        insn(PUT, SR_XX, 0, R181),
+        insn(PUT, SR_YY, 0, R182),
+        insn(PUT, SR_ZZ, 0, R183),
+        insn(PUT, SR_BB, 0, R184),
+        insn(PUT, SR_J, 0, R185),
+        *forced_translation_pte(),
+        wyde(SETL, R255, 0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    nested = [
+        insn(LDOUI, R220, R239, 0),
+        insn(ADDUI, R220, R220, 1),
+        insn(STOUI, R220, R239, 0),
+        *forced_translation_pte(),
+        wyde(SETL, R255, 0),
+        insn(RESUME, 0, 0, 1),
+    ]
+    return outer, nested
+
+
+def nested_save_unsave_restart_program(outer_save_fault):
+    main_address = 0x200
+    handler = 0x1000
+    nested_handler = 0x1100
+    count_address = (1 << 63) | 0x1800
+    page_table = VM_PAGE_TABLE
+    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    physical_page_table = (1 << 63) | page_table
+    physical_stack_pte = (1 << 63) | stack_pte
+    stack_page_rwx = INITIAL_STACK | 7
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("nested SAVE/UNSAVE sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    bootstrap = [
+        *set_octa(R20, (1 << 63) | main_address),
+        insn(GO, R21, R20, R250),
+    ]
+    place(0, bootstrap)
+
+    main = [
+        *set_octa(R239, count_address),
+        *set_octa(R240, physical_page_table),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R242, physical_stack_pte),
+        *set_octa(R243, stack_page_rwx),
+        insn(STOU, R243, R242, R250),
+        wyde(SETML, R235, 1),
+        *set_octa(R245, VM_RV_PAGE0),
+        *set_octa(R246, VM_RV_SOFTWARE),
+        *set_octa(R247, (1 << 63) | handler),
+        insn(PUT, SR_T, 0, R247),
+        wyde(SETL, R0, 0x11),
+        wyde(SETL, R1, 0x22),
+        *set_octa(R40, 0x1122334455667788),
+    ]
+    if outer_save_fault:
+        main.extend([
+            insn(PUT, SR_V, 0, R246),
+            insn(LDVTS, R234, R235, R250),
+            insn(SAVE, R32, 0, 0),
+            insn(ADDUI, R60, R32, 0),
+        ])
+    else:
+        main.extend([
+            insn(PUT, SR_V, 0, R245),
+            insn(SAVE, R32, 0, 0),
+            insn(ADDUI, R60, R32, 0),
+            insn(PUT, SR_V, 0, R246),
+            insn(LDVTS, R234, R235, R250),
+        ])
+    main.extend([
+        insn(UNSAVE, 0, 0, R60),
+        insn(CMPUI, R70, R0, 0x11),
+        branch(BNZ, R70, 5),
+        insn(CMPUI, R71, R1, 0x22),
+        branch(BNZ, R71, 3),
+        wyde(SETL, R200, 1),
+        jump(JMP, 2),
+        wyde(SETL, R200, 0xdead),
+        insn(LDOUI, R201, R239, 0),
+        halt(),
+    ])
+    place(main_address, main)
+
+    outer, nested = nested_save_unsave_handlers(handler, nested_handler)
+    place(handler, outer)
+    place(nested_handler, nested)
+
+    return bytes(image), (1 << 63) | (main_address + (len(main) - 1) * 4)
+
+
+def nested_fill_save_unsave_program(depth=40):
+    main_address = 0x200
+    subroutine = 0x800
+    handler = 0x4000
+    nested_handler = 0x4100
+    count_address = (1 << 63) | 0x5000
+    page_table = VM_PAGE_TABLE
+    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("nested register-stack fill sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    place(0, [
+        *set_octa(R20, (1 << 63) | main_address),
+        insn(GO, R21, R20, R250),
+    ])
+
+    main = [
+        *set_octa(R239, count_address),
+        *set_octa(R240, (1 << 63) | page_table),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R242, (1 << 63) | stack_pte),
+        *set_octa(R243, INITIAL_STACK | 7),
+        insn(STOU, R243, R242, R250),
+        *set_octa(R243, (INITIAL_STACK + 0x2000) | 7),
+        insn(STOUI, R243, R242, 8),
+        *set_octa(R245, VM_RV_PAGE0),
+        *set_octa(R246, VM_RV_SOFTWARE),
+        *set_octa(R247, (1 << 63) | handler),
+        insn(PUT, SR_T, 0, R247),
+        insn(PUT, SR_V, 0, R245),
+        *set_octa(R236, INITIAL_STACK + 0x2000),
+    ]
+    call_pc = main_address + len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R31, (subroutine - call_pc) // 4),
+        insn(ADDI, R225, R31, 0),
+        insn(GET, R226, 0, SR_O),
+        insn(GET, R227, 0, SR_S),
+        insn(GET, R228, 0, SR_L),
+        insn(CMPUI, R70, R225, depth + 1),
+        branch(BNZ, R70, 3),
+        wyde(SETL, R200, 1),
+        jump(JMP, 2),
+        wyde(SETL, R200, 0xdead),
+        insn(LDOUI, R201, R239, 0),
+        halt(),
+    ])
+    place(main_address, main)
+
+    nested = []
+    for level in range(depth):
+        nested.extend([
+            insn(GET, R100 + level, 0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, 0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ])
+    nested.extend([
+        wyde(SETL, R0, 1),
+        insn(PUT, SR_V, 0, R246),
+        insn(LDVTS, R237, R236, R250),
+        insn(POP, 1, 0, 0),
+    ])
+    place(subroutine, nested)
+
+    outer, nested_handler_code = nested_save_unsave_handlers(
+        handler, nested_handler)
+    place(handler, outer)
+    place(nested_handler, nested_handler_code)
+
+    return bytes(image), (1 << 63) | (main_address + (len(main) - 1) * 4)
+
+
+NESTED_SAVE_RESTART = nested_save_unsave_restart_program(True)
+NESTED_UNSAVE_RESTART = nested_save_unsave_restart_program(False)
+NESTED_FILL_SAVE_UNSAVE = nested_fill_save_unsave_program()
+
+
 def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
     interrupted_base = 0x200
     handler_entry = 0x1000
@@ -1440,6 +1654,43 @@ INTERRUPT_TESTS = [
             R229: 0,
             R230: RQ_PROGRAM_R,
             R231: 0,
+        },
+    ),
+    MMIXTest(
+        "register-stack-nested-save-fault-resume",
+        NESTED_SAVE_RESTART[0],
+        pc=NESTED_SAVE_RESTART[1],
+        regs={
+            R0: 0x11,
+            R1: 0x22,
+            R40: 0x1122334455667788,
+            R200: 1,
+            R201: 2,
+        },
+    ),
+    MMIXTest(
+        "register-stack-nested-unsave-fault-branch",
+        NESTED_UNSAVE_RESTART[0],
+        pc=NESTED_UNSAVE_RESTART[1],
+        regs={
+            R0: 0x11,
+            R1: 0x22,
+            R40: 0x1122334455667788,
+            R200: 1,
+            R201: 2,
+        },
+    ),
+    MMIXTest(
+        "register-stack-fill-nested-save-unsave-branch",
+        NESTED_FILL_SAVE_UNSAVE[0],
+        pc=NESTED_FILL_SAVE_UNSAVE[1],
+        regs={
+            R200: 1,
+            R201: 2,
+            R225: 41,
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
         },
     ),
     MMIXTest(

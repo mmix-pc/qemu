@@ -210,16 +210,6 @@ typedef struct MMIXDataAccessState {
     uint64_t value;
 } MMIXDataAccessState;
 
-typedef struct MMIXTrapRestartState {
-    MMIXStackAccessState stack_access;
-    MMIXInsnReplayState interrupted_replay;
-    uint32_t forced_translation_insn;
-    uint64_t forced_translation_address;
-    uint64_t forced_translation_where;
-    uint8_t forced_translation_access;
-    bool forced_translation;
-} MMIXTrapRestartState;
-
 typedef enum MMIXSaveRestartPhase {
     MMIX_SAVE_RESTART_NONE,
     MMIX_SAVE_RESTART_PREPARE,
@@ -239,6 +229,28 @@ typedef struct MMIXSaveRestartState {
     uint64_t sregs[MMIX_SREGS];
     uint64_t packed;
 } MMIXSaveRestartState;
+
+typedef struct MMIXSaveUnsaveTrapState {
+    MMIXSaveRestartState save_restart;
+    uint64_t local_regs[MMIX_LOCAL_REGS];
+    uint64_t unsave_restart_address;
+    uint64_t ro;
+    uint64_t rs;
+    uint64_t rl;
+    bool unsave_restart_active;
+} MMIXSaveUnsaveTrapState;
+
+typedef struct MMIXTrapRestartState {
+    MMIXStackAccessState stack_access;
+    MMIXInsnReplayState interrupted_replay;
+    MMIXSaveUnsaveTrapState *save_unsave;
+    uint32_t forced_translation_insn;
+    uint64_t forced_translation_address;
+    uint64_t forced_translation_where;
+    uint8_t forced_translation_access;
+    bool register_stack_rebased;
+    bool forced_translation;
+} MMIXTrapRestartState;
 
 typedef struct CPUArchState {
     /*

@@ -69,6 +69,24 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
         .forced_translation = forced_translation,
     };
 
+    /* An interrupted SAVE/UNSAVE gives its handler a fresh register stack. */
+    if (env->save_restart.phase != MMIX_SAVE_RESTART_NONE ||
+        env->unsave_restart_active) {
+        MMIXSaveUnsaveTrapState *save_unsave = g_new0(
+            MMIXSaveUnsaveTrapState, 1);
+
+        save_unsave->save_restart = env->save_restart;
+        save_unsave->unsave_restart_address =
+            env->unsave_restart_address;
+        save_unsave->unsave_restart_active = env->unsave_restart_active;
+        save_unsave->ro = env->sregs[MMIX_SREG_RO];
+        save_unsave->rs = env->sregs[MMIX_SREG_RS];
+        save_unsave->rl = env->sregs[MMIX_SREG_RL];
+        memcpy(save_unsave->local_regs, env->local_regs,
+               sizeof(save_unsave->local_regs));
+        restart.save_unsave = save_unsave;
+    }
+
     if (forced_translation) {
         restart.forced_translation_insn = env->forced_translation_insn;
         restart.forced_translation_address = env->forced_translation_address;
@@ -79,6 +97,13 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
     g_array_append_val(cpu->trap_restart_stack, restart);
     memset(&env->stack_access, 0, sizeof(env->stack_access));
     memset(&env->insn_replay, 0, sizeof(env->insn_replay));
+    memset(&env->save_restart, 0, sizeof(env->save_restart));
+    env->unsave_restart_address = 0;
+    env->unsave_restart_active = false;
+    if (restart.save_unsave != NULL) {
+        env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
+        env->sregs[MMIX_SREG_RL] = 0;
+    }
 }
 
 static MMIXTrapRestartState *mmix_trap_restart_top(CPUMMIXState *env)
@@ -87,6 +112,36 @@ static MMIXTrapRestartState *mmix_trap_restart_top(CPUMMIXState *env)
 
     return stack->len == 0 ? NULL :
            &g_array_index(stack, MMIXTrapRestartState, stack->len - 1);
+}
+
+static void mmix_trap_restart_restore_register_stack(
+    CPUMMIXState *env, const MMIXTrapRestartState *restart)
+{
+    const MMIXSaveUnsaveTrapState *save_unsave = restart->save_unsave;
+
+    if (save_unsave == NULL) {
+        return;
+    }
+
+    env->sregs[MMIX_SREG_RO] = save_unsave->ro;
+    env->sregs[MMIX_SREG_RS] = save_unsave->rs;
+    env->sregs[MMIX_SREG_RL] = save_unsave->rl;
+    memcpy(env->local_regs, save_unsave->local_regs,
+           sizeof(env->local_regs));
+}
+
+static void mmix_trap_restart_restore_helper_state(
+    CPUMMIXState *env, const MMIXTrapRestartState *restart)
+{
+    const MMIXSaveUnsaveTrapState *save_unsave = restart->save_unsave;
+
+    if (save_unsave == NULL) {
+        return;
+    }
+
+    env->save_restart = save_unsave->save_restart;
+    env->unsave_restart_address = save_unsave->unsave_restart_address;
+    env->unsave_restart_active = save_unsave->unsave_restart_active;
 }
 
 static void mmix_trap_restart_pop(CPUMMIXState *env)
@@ -408,6 +463,9 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         bool pending_stack_access = true;
         uint64_t cause;
 
+        mmix_trap_restart_restore_register_stack(env, restart);
+        mmix_trap_restart_restore_helper_state(env, restart);
+
         switch (restart->stack_access.kind) {
         case MMIX_STACK_ACCESS_SPILL:
         case MMIX_STACK_ACCESS_SAVE:
@@ -427,6 +485,18 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
             if ((ropcode != 3 && (exec & cause) == 0) || where < 4) {
                 mmix_resume_unsupported(env, "invalid pending stack access",
                                         exec);
+            }
+
+            if (restart->register_stack_rebased) {
+                /* Retry the instruction against the UNSAVE-rebuilt stack. */
+                memset(&restart->stack_access, 0,
+                       sizeof(restart->stack_access));
+                env->pc = where - 4;
+                env->npc = where;
+                if (tracked_restart) {
+                    mmix_trap_restart_pop(env);
+                }
+                cpu_loop_exit_noexc(cs);
             }
 
             if (cause == MMIX_RQ_PROGRAM_W) {

@@ -677,6 +677,13 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     cs->exception_index = -1;
 }
 
+static void mmix_trap_restart_clear(gpointer data)
+{
+    MMIXTrapRestartState *restart = data;
+
+    g_free(restart->save_unsave);
+}
+
 static void mmix_cpu_initfn(Object *obj)
 {
     MMIXCPU *cpu = MMIX_CPU(obj);
@@ -689,6 +696,8 @@ static void mmix_cpu_initfn(Object *obj)
         g_array_new(false, false, sizeof(MMIXTranslationCacheEntry));
     cpu->trap_restart_stack =
         g_array_new(false, false, sizeof(MMIXTrapRestartState));
+    g_array_set_clear_func(cpu->trap_restart_stack,
+                           mmix_trap_restart_clear);
 }
 
 static const Property mmix_cpu_properties[] = {

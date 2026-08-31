@@ -48,7 +48,9 @@ static void mmix_cpu_stack_access_commit(CPUMMIXState *env,
             MMIXTrapRestartState *restart =
                 &g_array_index(stack, MMIXTrapRestartState, i);
 
-            if (mmix_cpu_stack_access_matches(&restart->stack_access,
+            /* SAVE/UNSAVE retries restore their own register-ring snapshot. */
+            if (restart->save_unsave == NULL &&
+                mmix_cpu_stack_access_matches(&restart->stack_access,
                                               access)) {
                 restart->stack_access.completed = true;
             }
@@ -215,6 +217,23 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env, uintptr_t ra)
     env->sregs[MMIX_SREG_RS] = addr;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
     return value;
+}
+
+static void mmix_cpu_note_register_stack_rebase(CPUMMIXState *env)
+{
+    GArray *stack = env_archcpu(env)->trap_restart_stack;
+    unsigned int i;
+
+    for (i = 0; i < stack->len; i++) {
+        MMIXTrapRestartState *restart =
+            &g_array_index(stack, MMIXTrapRestartState, i);
+
+        /* A pending SAVE/UNSAVE has its own exact pre-handler snapshot. */
+        if (restart->save_unsave == NULL &&
+            restart->stack_access.kind != MMIX_STACK_ACCESS_NONE) {
+            restart->register_stack_rebased = true;
+        }
+    }
 }
 
 static void mmix_cpu_fill_stack(CPUMMIXState *env, uintptr_t ra)
@@ -686,4 +705,5 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
     env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
     env->sregs[MMIX_SREG_RL] = MIN(saved_rl, rg);
     env->unsave_restart_active = false;
+    mmix_cpu_note_register_stack_rebase(env);
 }
