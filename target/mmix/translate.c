@@ -96,8 +96,16 @@ static TCGv_i64 cpu_npc;
         return true; \
     }
 
+static void gen_consume_insn_replay(DisasContext *ctx)
+{
+    if (ctx->replay) {
+        gen_helper_mmix_consume_insn_replay(tcg_env);
+    }
+}
+
 static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
 {
+    gen_consume_insn_replay(ctx);
     if (!ctx->replay && translator_use_goto_tb(&ctx->base, dest)) {
         tcg_gen_goto_tb(tb_slot_idx);
         tcg_gen_movi_i64(cpu_pc, dest);
@@ -888,6 +896,7 @@ static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
     tcg_gen_add_i64(dest, gen_load_reg(a->y), gen_load_z(a, immediate));
     tcg_gen_andi_i64(dest, dest, ~3ULL);
     gen_store_reg(a->x, tcg_constant_i64(ctx->base.pc_next));
+    gen_consume_insn_replay(ctx);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -912,6 +921,7 @@ static bool gen_pushgo(DisasContext *ctx, arg_xyz *a, bool immediate)
     tcg_gen_andi_i64(dest, dest, ~3ULL);
     gen_helper_mmix_push(tcg_env, tcg_constant_i32(a->x),
                          tcg_constant_i64(ctx->base.pc_next));
+    gen_consume_insn_replay(ctx);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -925,6 +935,7 @@ static bool trans_POP(DisasContext *ctx, arg_xyz *a)
 
     gen_helper_mmix_pop(dest, tcg_env, tcg_constant_i32(a->x),
                         tcg_constant_i32(a->yz));
+    gen_consume_insn_replay(ctx);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -1300,7 +1311,6 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
             tcg_gen_ld_i64(ctx->replay_z, tcg_env,
                            offsetof(CPUMMIXState, insn_replay.z));
         }
-        gen_helper_mmix_consume_insn_replay(tcg_env);
     } else {
         ctx->base.pc_next += 4;
     }
@@ -1314,6 +1324,10 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
         };
 
         gen_mmix_break_rules(ctx, &a, false);
+    }
+    /* Faultable helpers must complete before replay ownership is released. */
+    if (ctx->base.is_jmp != DISAS_NORETURN) {
+        gen_consume_insn_replay(ctx);
     }
 }
 

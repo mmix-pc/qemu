@@ -112,6 +112,14 @@ void helper_mmix_consume_insn_replay(CPUMMIXState *env)
     }
 }
 
+static void mmix_commit_replay_before_synchronous_trap(CPUMMIXState *env)
+{
+    /* Forced-translation traps instead suspend replay for an exact retry. */
+    if (env->insn_replay.active) {
+        helper_mmix_consume_insn_replay(env);
+    }
+}
+
 static void mmix_cpu_enter_trap(CPUState *cs, hwaddr handler, uint64_t where,
                                 uint64_t exec, uint64_t y, uint64_t z)
 {
@@ -217,6 +225,7 @@ void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
 {
     CPUState *cs = env_cpu(env);
 
+    mmix_commit_replay_before_synchronous_trap(env);
     env->sregs[MMIX_SREG_RW] = env->npc;
     env->sregs[MMIX_SREG_RX] = 0x8000000000000000ULL | insn;
     env->sregs[MMIX_SREG_RY] = y;
@@ -237,6 +246,7 @@ void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
     CPUState *cs = env_cpu(env);
     uint64_t handler = env->sregs[MMIX_SREG_RT];
 
+    mmix_commit_replay_before_synchronous_trap(env);
     mmix_trap_restart_push(env, false);
     env->sregs[MMIX_SREG_RWW] = env->npc;
     env->sregs[MMIX_SREG_RXX] = 0x8000000000000000ULL | insn;
@@ -598,6 +608,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
                       "MMIX arithmetic trip event=0x%02x from 0x%016" PRIx64
                       " to 0x%016" HWADDR_PRIx "\n",
                       event, env->pc, handler);
+        mmix_commit_replay_before_synchronous_trap(env);
         env->sregs[MMIX_SREG_RB] = mmix_cpu_read_reg(env, 255);
         mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
         env->pc = handler;
@@ -616,6 +627,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
                       "MMIX dynamic trap causes=0x%016" PRIx64
                       " from 0x%016" PRIx64 " to 0x%016" HWADDR_PRIx "\n",
                       causes, env->pc, handler);
+        mmix_commit_replay_before_synchronous_trap(env);
         if (causes & MMIX_RQ_PROGRAM_B) {
             mmix_cpu_enter_trap(
                 cs, handler, env->npc,

@@ -4,6 +4,45 @@
 
 from .common import *
 
+RETAINED_ASN = 1
+CURRENT_ASN = 2
+RETAINED_OLD_VALUE = 0x1111111111111111
+RETAINED_NEW_VALUE = 0x2222222222222222
+
+
+def retained_asn_setup():
+    retained_bits = RETAINED_ASN << 3
+
+    return [
+        *set_octa(R150, VM_PAGE_TABLE_ROOT2),
+        *set_octa(R151, retained_bits | 7),
+        insn(STOU, R151, R150, R250),
+        *set_octa(R151, 0x6000 | retained_bits | 7),
+        insn(STOUI, R151, R150, 8),
+        *set_octa(R152, 0x6000),
+        *set_octa(R153, RETAINED_OLD_VALUE),
+        insn(STOU, R153, R152, R250),
+        *set_octa(R154, 0x8000),
+        *set_octa(R155, RETAINED_NEW_VALUE),
+        insn(STOU, R155, R154, R250),
+        *set_octa(R156, VM_RV_ROOT2 | retained_bits),
+        insn(PUT, SR_V, 0, R156),
+        wyde(SETL, R157, 0x2000),
+        insn(LDOU, R166, R157, R250),
+        wyde(SETL, R158, 0x2000 | retained_bits),
+        wyde(SETL, R159, 0x4000 | retained_bits),
+        *set_octa(R149, 0x8000000000004008),
+        *set_octa(R148, 0x8000 | retained_bits | 7),
+        insn(STOU, R148, R149, R250),
+    ]
+
+
+def retained_asn_results():
+    return [
+        insn(PUT, SR_V, 0, R156),
+        insn(LDOU, R165, R157, R250),
+    ]
+
 
 def masked_interrupt_request_program():
     timer_compare = (
@@ -433,14 +472,17 @@ DYNAMIC_TRAP_REGISTER_STACK = dynamic_trap_register_stack_program()
 
 
 def spill_fault_resume_program(depth=10, protect_before_push=False,
-                               nested_handler_stack=False):
+                               nested_handler_stack=False,
+                               retained_asn=False):
     sub_base = 0x200
     handler = 0x1000
     page_table = VM_PAGE_TABLE
     stack_pte = page_table + (INITIAL_STACK >> 13) * 8
     physical_stack_pte = (1 << 63) | stack_pte
-    stack_page_read_only = INITIAL_STACK | 4
-    stack_page_rwx = INITIAL_STACK | 7
+    current_bits = (CURRENT_ASN << 3) if retained_asn else 0
+    current_rv = VM_RV_PAGE0 | current_bits
+    stack_page_read_only = INITIAL_STACK | current_bits | 4
+    stack_page_rwx = INITIAL_STACK | current_bits | 7
     image = bytearray()
     protect_level = 6
 
@@ -454,21 +496,22 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
 
     main = [
         *set_octa(R240, page_table),
-        wyde(SETL, R241, 7),
+        wyde(SETL, R241, current_bits | 7),
         insn(STOU, R241, R240, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_read_only),
         *set_octa(R245, stack_page_rwx),
         insn(STOU, R245 if protect_before_push else R243, R242, R250),
         *set_octa(R244, physical_stack_pte),
-        wyde(SETML, R235, 1),
-        *set_octa(R246, VM_RV_PAGE0),
+        *set_octa(R235, INITIAL_STACK | current_bits),
+        *set_octa(R246, current_rv),
         wyde(SETL, R247, handler),
         insn(PUT, SR_TT, 0, R247),
         *set_octa(R248, RQ_PROGRAM_W),
         insn(PUT, SR_K, 0, R248),
         *set_octa(R249, RQ_PROGRAM_B),
         insn(PUT, SR_Q, 0, R249),
+        *(retained_asn_setup() if retained_asn else []),
         insn(PUT, SR_V, 0, R246),
     ]
     call_pc = len(b"".join(main))
@@ -480,6 +523,7 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
         insn(GET, R228, 0, SR_L),
         insn(GET, R229, 0, SR_Q),
         insn(GET, R230, 0, SR_K),
+        *(retained_asn_results() if retained_asn else []),
         halt(),
     ])
     place(0, main)
@@ -518,6 +562,10 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
             insn(ADDUI, R220, R220, 1),
             insn(CMPUI, R219, R220, 1),
             branch(BNZ, R219, (nested_handler - handler - 8) // 4),
+            *([
+                insn(LDVTS, R160, R158, R250),
+                insn(LDVTS, R162, R159, R250),
+            ] if retained_asn else []),
             insn(GET, R180, 0, SR_WW),
             insn(GET, R181, 0, SR_XX),
             insn(GET, R182, 0, SR_YY),
@@ -544,6 +592,9 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
         place(handler, outer)
         place(nested_handler, [
             insn(ADDUI, R220, R220, 1),
+            *([
+                insn(LDVTS, R161, R158, R250),
+            ] if retained_asn else []),
             insn(STOUI, R245, R244, 0),
             insn(LDVTS, R234, R235, R250),
             insn(PUTI, SR_Q, 0, 0),
@@ -566,7 +617,7 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
             insn(RESUME, 0, 0, 1),
         ])
 
-    exit_pc = call_pc + 7 * 4
+    exit_pc = (len(main) - 1) * 4
     result = depth + 4 if protect_before_push else depth + 1
     return bytes(image), exit_pc, result
 
@@ -575,6 +626,8 @@ SPILL_FAULT_LOCAL_GROWTH = spill_fault_resume_program()
 SPILL_FAULT_PUSHJ = spill_fault_resume_program(protect_before_push=True)
 NESTED_HANDLER_SPILL_FAULT = spill_fault_resume_program(
     protect_before_push=True, nested_handler_stack=True)
+RETAINED_ASN_SPILL_FAULT = spill_fault_resume_program(
+    protect_before_push=True, nested_handler_stack=True, retained_asn=True)
 
 
 def fill_fault_resume_program(depth=10):
@@ -767,7 +820,7 @@ def unsave_fault_resume_program():
 UNSAVE_FAULT_RESUME = unsave_fault_resume_program()
 
 
-def handler_pop_fill_fault_resume_program(depth=10):
+def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
     interrupted_base = 0x200
     handler_entry = 0x1000
     nested_handler = 0x1080
@@ -776,8 +829,10 @@ def handler_pop_fill_fault_resume_program(depth=10):
     page_table = VM_PAGE_TABLE
     stack_pte = page_table + (INITIAL_STACK >> 13) * 8
     physical_stack_pte = (1 << 63) | stack_pte
-    stack_page_write_only = INITIAL_STACK | 2
-    stack_page_rwx = INITIAL_STACK | 7
+    current_bits = (CURRENT_ASN << 3) if retained_asn else 0
+    current_rv = VM_RV_PAGE0 | current_bits
+    stack_page_write_only = INITIAL_STACK | current_bits | 2
+    stack_page_rwx = INITIAL_STACK | current_bits | 7
     image = bytearray()
 
     def place(addr, instructions):
@@ -790,19 +845,20 @@ def handler_pop_fill_fault_resume_program(depth=10):
 
     main = [
         *set_octa(R240, page_table),
-        wyde(SETL, R241, 7),
+        wyde(SETL, R241, current_bits | 7),
         insn(STOU, R241, R240, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_write_only),
         *set_octa(R245, stack_page_rwx),
         insn(STOU, R245, R242, R250),
         *set_octa(R244, physical_stack_pte),
-        wyde(SETML, R235, 1),
-        *set_octa(R246, VM_RV_PAGE0),
+        *set_octa(R235, INITIAL_STACK | current_bits),
+        *set_octa(R246, current_rv),
         wyde(SETL, R247, handler_entry),
         insn(PUT, SR_TT, 0, R247),
         *set_octa(R248, RQ_PROGRAM_B),
         insn(PUT, SR_K, 0, R248),
+        *(retained_asn_setup() if retained_asn else []),
         insn(PUT, SR_V, 0, R246),
     ]
     call_pc = len(b"".join(main))
@@ -814,6 +870,7 @@ def handler_pop_fill_fault_resume_program(depth=10):
         insn(GET, R228, 0, SR_L),
         insn(GET, R229, 0, SR_Q),
         insn(GET, R230, 0, SR_K),
+        *(retained_asn_results() if retained_asn else []),
         halt(),
     ])
     place(0, main)
@@ -839,6 +896,10 @@ def handler_pop_fill_fault_resume_program(depth=10):
     outer_handler = [
         branch(BNZ, R190, (nested_handler - handler_entry) // 4),
         wyde(SETL, R190, 1),
+        *([
+            insn(LDVTS, R160, R158, R250),
+            insn(LDVTS, R162, R159, R250),
+        ] if retained_asn else []),
         insn(GET, R180, 0, SR_WW),
         insn(GET, R181, 0, SR_XX),
         insn(GET, R182, 0, SR_YY),
@@ -862,6 +923,9 @@ def handler_pop_fill_fault_resume_program(depth=10):
 
     place(nested_handler, [
         insn(ADDUI, R220, R220, 1),
+        *([
+            insn(LDVTS, R161, R158, R250),
+        ] if retained_asn else []),
         insn(GET, R221, 0, SR_Q),
         insn(GET, R222, 0, SR_XX),
         insn(GET, R223, 0, SR_WW),
@@ -902,11 +966,13 @@ def handler_pop_fill_fault_resume_program(depth=10):
     ])
     place(handler_calls, nested_calls)
 
-    exit_pc = call_pc + 7 * 4
+    exit_pc = (len(main) - 1) * 4
     return bytes(image), exit_pc, pop_pc + 4, 0x77 + depth
 
 
 HANDLER_POP_FILL_FAULT_RESUME = handler_pop_fill_fault_resume_program()
+RETAINED_ASN_FILL_FAULT_RESUME = handler_pop_fill_fault_resume_program(
+    retained_asn=True)
 
 
 def pending_interrupt_spill_fill_program(depth=10):
@@ -1312,6 +1378,25 @@ INTERRUPT_TESTS = [
         },
     ),
     MMIXTest(
+        "register-stack-retained-asn-spill-fault-resume",
+        RETAINED_ASN_SPILL_FAULT[0],
+        pc=RETAINED_ASN_SPILL_FAULT[1],
+        regs={
+            R160: 2,
+            R161: 0,
+            R162: 0,
+            R165: RETAINED_NEW_VALUE,
+            R166: RETAINED_OLD_VALUE,
+            R220: 3,
+            R225: RETAINED_ASN_SPILL_FAULT[2],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: RQ_PROGRAM_W,
+            R230: RQ_PROGRAM_W,
+        },
+    ),
+    MMIXTest(
         "register-stack-pop-fill-fault-resume",
         FILL_FAULT_RESUME[0],
         pc=FILL_FAULT_RESUME[1],
@@ -1373,6 +1458,35 @@ INTERRUPT_TESTS = [
             R223: HANDLER_POP_FILL_FAULT_RESUME[2],
             R224: INITIAL_STACK + 0xc08,
             R225: HANDLER_POP_FILL_FAULT_RESUME[3],
+            R226: INITIAL_STACK,
+            R227: INITIAL_STACK,
+            R228: 32,
+            R229: 0,
+            R230: RQ_PROGRAM_B,
+            R231: 0,
+        },
+    ),
+    MMIXTest(
+        "dynamic-trap-retained-asn-pop-fill-fault-resume",
+        RETAINED_ASN_FILL_FAULT_RESUME[0],
+        pc=RETAINED_ASN_FILL_FAULT_RESUME[1],
+        regs={
+            R160: 2,
+            R161: 0,
+            R162: 0,
+            R165: RETAINED_NEW_VALUE,
+            R166: RETAINED_OLD_VALUE,
+            R220: 1,
+            R221: RQ_PROGRAM_B | RQ_PROGRAM_R,
+            R222: RQ_PROGRAM_R | int.from_bytes(
+                RETAINED_ASN_FILL_FAULT_RESUME[0][
+                    RETAINED_ASN_FILL_FAULT_RESUME[2] - 4:
+                    RETAINED_ASN_FILL_FAULT_RESUME[2]
+                ], "big"
+            ),
+            R223: RETAINED_ASN_FILL_FAULT_RESUME[2],
+            R224: INITIAL_STACK + 0xc08,
+            R225: RETAINED_ASN_FILL_FAULT_RESUME[3],
             R226: INITIAL_STACK,
             R227: INITIAL_STACK,
             R228: 32,

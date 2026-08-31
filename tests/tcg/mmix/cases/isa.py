@@ -233,16 +233,36 @@ def forced_instruction_translation_program(target_address, target_regions,
     )
 
 
-def forced_stack_spill_fill_program(depth=40):
-    sub_base = 0x800
+def forced_stack_spill_fill_program(depth=40, replay_ru=False):
+    handler_phys = 0x5000 if replay_ru else FORCED_TRANSLATION_HANDLER
+    handler_address = (1 << 63) | handler_phys
+    sub_base = 0x3000 if replay_ru else 0x800
+    current_bits = (RETAINED_ASN_B << 3) if replay_ru else 0
+    current_rv = VM_RV_SOFTWARE | current_bits
+    stable_ru = 0xffff000000000055
     bootstrap = [
         *set_octa(R1, NEGATIVE_FORCED_TRANSLATION_MAIN),
         insn(GO, R2, R1, R0),
     ]
     main = [
-        *set_octa(R20, NEGATIVE_FORCED_TRANSLATION_HANDLER),
+        *set_octa(R20, handler_address),
         insn(PUT, SR_T, 0, R20),
-        *set_octa(R21, VM_RV_SOFTWARE),
+        *([
+            *retained_asn_setup(),
+            *set_octa(R24, RETAINED_RV_A),
+            insn(PUT, SR_V, 0, R24),
+            wyde(SETL, R25, 0x2000),
+            insn(LDOU, R166, R25, R0),
+            *set_octa(R26, 0x8000000000002008),
+            *set_octa(R27, retained_pte(0xa000, RETAINED_ASN_A)),
+            insn(STOU, R27, R26, R0),
+            wyde(SETL, R158, 0x2000 | (RETAINED_ASN_A << 3)),
+            wyde(SETL, R22, 64),
+            insn(PUT, SR_G, 0, R22),
+            *set_octa(R23, stable_ru),
+            insn(PUT, SR_U, 0, R23),
+        ] if replay_ru else []),
+        *set_octa(R21, current_rv),
         insn(PUT, SR_V, 0, R21),
     ]
     call_pc = FORCED_TRANSLATION_MAIN + len(b"".join(main))
@@ -252,6 +272,11 @@ def forced_stack_spill_fill_program(depth=40):
         insn(GET, R226, 0, SR_O),
         insn(GET, R227, 0, SR_S),
         insn(GET, R228, 0, SR_L),
+        *([
+            insn(ANDI, R173, R171, 2),
+            insn(PUT, SR_V, 0, R24),
+            insn(LDOU, R172, R25, R0),
+        ] if replay_ru else []),
         halt(),
     ])
 
@@ -266,29 +291,57 @@ def forced_stack_spill_fill_program(depth=40):
             insn(POP, 1, 0, 0),
         ])
     nested.extend([
-        *set_octa(R150, INITIAL_STACK),
+        *set_octa(R150, INITIAL_STACK | current_bits),
         insn(LDVTS, R151, R150, R0),
-        *set_octa(R152, INITIAL_STACK + 0x2000),
+        *set_octa(R152, (INITIAL_STACK + 0x2000) | current_bits),
         insn(LDVTS, R153, R152, R0),
+    ])
+    if replay_ru:
+        saved_insn = int.from_bytes(insn(GET, R32, 0, SR_U), "big")
+        tail_address = sub_base + len(b"".join(nested))
+        replay_pc = tail_address + 11 * 4
+        nested.extend([
+            *set_octa(R154, replay_pc + 4),
+            insn(PUT, SR_W, 0, R154),
+            *set_octa(R155, saved_insn),
+            insn(PUT, SR_X, 0, R155),
+            insn(RESUME, 0, 0, 0),
+            jump(SYNC, 8),
+            insn(GET, R160, 0, SR_U),
+            insn(CMP, R161, R32, R160),
+            branch(BNZ, R161, 3),
+            wyde(SETL, R180, 1),
+            jump(JMP, 2),
+            wyde(SETL, R180, 0xdead),
+            insn(ADDU, R181, R32, R0),
+        ])
+    nested.extend([
         wyde(SETL, R0, 1),
         insn(POP, 1, 0, 0),
     ])
 
     handler = [
+        *([
+            insn(LDVTS, R170, R158, R0),
+            insn(OR, R171, R171, R170),
+        ] if replay_ru else []),
         insn(GET, R240, R0, SR_YY),
         *set_octa(R241, 0x1fff),
         insn(ANDN, R242, R240, R241),
-        insn(ORI, R242, R242, 7),
+        insn(ORI, R242, R242, current_bits | 7),
         insn(PUT, SR_ZZ, R0, R242),
         insn(ADDI, R250, R250, 1),
         wyde(SETL, R255, 0),
         insn(RESUME, R0, R0, 1),
     ]
+    tail_regions = (
+        ((sub_base, nested), (handler_phys, handler)) if replay_ru else
+        ((handler_phys, handler), (sub_base, nested))
+    )
     image = program_with_regions(
         (0, bootstrap),
         (FORCED_TRANSLATION_MAIN, main),
-        (FORCED_TRANSLATION_HANDLER, handler),
-        (sub_base, nested),
+        *tail_regions,
     )
     return image, NEGATIVE_FORCED_TRANSLATION_MAIN + (len(main) - 1) * 4
 
@@ -469,6 +522,7 @@ def forced_translation_nested_handler_program(depth=40, handler_depth=10):
 
 
 FORCED_STACK_SPILL_FILL = forced_stack_spill_fill_program()
+FORCED_STACK_REPLAY_RU = forced_stack_spill_fill_program(replay_ru=True)
 FORCED_STACK_SAVE_UNSAVE = forced_stack_save_unsave_program()
 FORCED_TRANSLATION_NESTED_HANDLER = forced_translation_nested_handler_program()
 
@@ -3866,6 +3920,19 @@ ISA_TESTS = [
             R227: INITIAL_STACK,
             R228: 32,
             R250: 4,
+        },
+    ),
+    MMIXTest(
+        "software-translation-retained-asn-stack-replay-ru",
+        FORCED_STACK_REPLAY_RU[0],
+        pc=FORCED_STACK_REPLAY_RU[1],
+        regs={
+            R160: 0xffff000000000055,
+            R166: 0x1111111111111111,
+            R172: 0xaaaaaaaaaaaaaaaa,
+            R173: 2,
+            R180: 1,
+            R181: 0xffff000000000055,
         },
     ),
     MMIXTest(
