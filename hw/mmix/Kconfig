@@ -3,6 +3,7 @@ config MMIX_VIRT
     default y
     depends on MMIX
     select DEVICE_TREE
+    select E1000_PCI
     select EDU
     select SERIAL_MM
     select FRAMEBUFFER

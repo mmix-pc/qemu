@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "elf.h"
 #include <glib/gstdio.h>
+#include "hw/pci/pci.h"
 #include "libqtest.h"
 #include "qemu/bswap.h"
 #include "qemu/units.h"
@@ -62,6 +63,7 @@
 
 #define MMIX_VIRTIO_BASE               UINT64_C(0x0001000040000000)
 #define MMIX_DISCOVERABLE_BASE         UINT64_C(0x0001000050000000)
+#define MMIX_PCIE_ECAM_BASE             UINT64_C(0x0001000100000000)
 
 #define MMIX_CONTEXT_STRIDE            UINT64_C(0x10000)
 #define MMIX_CONTEXT_REGISTER_SIZE     UINT64_C(0x1000)
@@ -167,6 +169,9 @@ static void mmix_assert_active_devices(QTestState *qts, unsigned int cpus)
     g_assert_cmphex(qtest_readl(qts, MMIX_POWER_BASE +
                                     MMIX_POWER_FEATURES), ==,
                     MMIX_POWER_FEATURE_CONTROL);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_PCIE_ECAM_BASE), ==,
+                    PCI_DEVICE_ID_REDHAT_PCIE_HOST << 16 |
+                    PCI_VENDOR_ID_REDHAT);
 }
 
 static void test_mmix_platform_mappings(void)

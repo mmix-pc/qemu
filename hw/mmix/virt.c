@@ -112,6 +112,10 @@ struct MMIXVirtMachineState {
     GPEXHost *pcie_host;
     MemoryRegion pcie_mmio32;
     MemoryRegion pcie_mmio64;
+    MemoryRegion pcie_dma_root;
+    MemoryRegion pcie_dma_ram;
+    AddressSpace pcie_dma_as;
+    bool pcie_dma_initialized;
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
@@ -166,9 +170,25 @@ static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
     return PFLASH_CFI01(dev);
 }
 
+static AddressSpace *mmix_virt_pcie_dma_address_space(PCIBus *bus,
+                                                       void *opaque,
+                                                       int devfn)
+{
+    MMIXVirtMachineState *vms = opaque;
+
+    (void)bus;
+    (void)devfn;
+    return &vms->pcie_dma_as;
+}
+
+static const PCIIOMMUOps mmix_virt_pcie_dma_ops = {
+    .get_address_space = mmix_virt_pcie_dma_address_space,
+};
+
 static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
                                        DeviceState *intc)
 {
+    MachineState *machine = MACHINE(vms);
     DeviceState *dev = qdev_new(TYPE_GPEX_HOST);
     MemoryRegion *mmio;
     MMIXPhysRange range;
@@ -179,7 +199,9 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
                       MMIX_VIRT_PCIE_BUS_COUNT * PCIE_MMCFG_SIZE_MIN);
     QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_INTX_IRQ_COUNT != PCI_NUM_PINS);
 
-    /* MSI-capable endpoints may exist, but the machine exposes no MSI target. */
+    /*
+     * MSI-capable endpoints may exist, but the machine exposes no MSI target.
+     */
     msi_nonbroken = true;
     object_property_add_child(OBJECT(vms), "pcie", OBJECT(dev));
     object_property_set_uint(OBJECT(dev), PCI_HOST_ECAM_BASE,
@@ -241,6 +263,20 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
 
     vms->pcie_host = GPEX_HOST(dev);
     vms->pcie_host->gpex_cfg.bus = PCI_HOST_BRIDGE(dev)->bus;
+
+    /* PCI DMA is identity mapped only to installed ordinary RAM. */
+    memory_region_init(&vms->pcie_dma_root, OBJECT(vms), "mmix-pcie-dma",
+                       MMIX_VIRT_RAM_PHYS_LIMIT);
+    memory_region_init_alias(&vms->pcie_dma_ram, OBJECT(vms),
+                             "mmix-pcie-dma-ram", machine->ram, 0,
+                             machine->ram_size);
+    memory_region_add_subregion(&vms->pcie_dma_root, 0,
+                                &vms->pcie_dma_ram);
+    address_space_init(&vms->pcie_dma_as, &vms->pcie_dma_root,
+                       "mmix-pcie-dma");
+    vms->pcie_dma_initialized = true;
+    pci_setup_iommu(vms->pcie_host->gpex_cfg.bus,
+                    &mmix_virt_pcie_dma_ops, vms);
 }
 
 static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
@@ -1825,6 +1861,12 @@ static void mmix_virt_instance_init(Object *obj)
 static void mmix_virt_instance_finalize(Object *obj)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
+
+    if (vms->pcie_dma_initialized) {
+        address_space_destroy(&vms->pcie_dma_as);
+        memory_region_del_subregion(&vms->pcie_dma_root,
+                                    &vms->pcie_dma_ram);
+    }
 
     mmix_boot_plan_free(vms->boot_plan);
     mmix_boot_payload_free(vms->boot_payload);
