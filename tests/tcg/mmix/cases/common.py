@@ -35,7 +35,7 @@ from lib.mmo import (
 )
 
 MASK64 = (1 << 64) - 1
-INITIAL_STACK = 0x00010000
+INITIAL_STACK = 0x1fcf8000
 MMIX_VIRT_INITIAL_STACK_SLOT_SIZE = 0x00008000
 RA_EVENT_X = 0x01
 RA_EVENT_Z = 0x02
@@ -61,6 +61,14 @@ VM_RV_PAGE0 = 0x11110d0000002000
 VM_RV_SOFTWARE = VM_RV_PAGE0 | 1
 VM_PAGE_TABLE_ROOT2 = 0x4000
 VM_RV_ROOT2 = 0x11110d0000004000
+VM_STACK_POINTER_TABLE = 0x4000
+VM_STACK_LEAF_TABLE = 0x6000
+VM_STACK_PTP_ADDRESS = (VM_STACK_POINTER_TABLE +
+                        ((INITIAL_STACK >> 23) & 0x3ff) * 8)
+VM_STACK_PTP = (1 << 63) | VM_STACK_LEAF_TABLE
+VM_STACK_PTE = (VM_STACK_LEAF_TABLE +
+                ((INITIAL_STACK >> 13) & 0x3ff) * 8)
+VM_RV_STACK = 0x22220d0000002000
 NEGATIVE_HANDLER = 0x8000000000000080
 MMIX_VIRT_UART0 = "uart0"
 MMIX_VIRT_VIRTIO_MMIO = "virtio_mmio"
@@ -135,6 +143,12 @@ MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER] = (
     MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0],
     MMIX_VIRT_TIMER_SIZE,
 )
+
+
+def privileged_mmio(device):
+    return (1 << 63) | MMIX_VIRT_MEMMAP[device][0]
+
+
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
 MMIX_LOGICAL_SEGMENT_SIZE = 0x2000000000000000
 MMIX_POOL_SEGMENT_SIZE = 0x0000000000800000
@@ -189,8 +203,8 @@ def raw_direct_image(program):
     return bytes(MMIX_RAW_ENTRY) + program
 
 
-def serial_tx_program(message=b"MMIX\n"):
-    program = [*set_octa(R1, MMIX_VIRT_UART0_BASE)]
+def serial_tx_program(message=b"MMIX\n", uart_base=MMIX_VIRT_UART0_BASE):
+    program = [*set_octa(R1, uart_base)]
 
     for ch in message:
         program.extend([

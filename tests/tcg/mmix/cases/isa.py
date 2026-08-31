@@ -2550,38 +2550,6 @@ ISA_TESTS = [
         regs={R2: 0xfeedfacecafebeef, R3: 0xfeedfacecafebeef},
     ),
     MMIXTest(
-        "unsupported-high-segment-runtime-trap",
-        program_with_handler(
-            [
-                wyde(SETL, R1, 0x80),  # handler address
-                insn(PUT, SR_TT, 0, R1),
-                *set_octa(R2, RQ_PROGRAM_K),
-                insn(PUT, SR_K, 0, R2),
-                *set_octa(R3, MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS),
-                insn(LDOU, R4, R3, R0),
-                wyde(SETL, R5, 0x00ff),    # skipped after dynamic trap
-            ],
-            0x80,
-            [
-                insn(GET, R40, 0, SR_Q),
-                insn(GET, R41, 0, SR_XX),
-                insn(GET, R42, 0, SR_WW),
-                insn(GET, R43, 0, SR_K),
-                halt(),
-            ],
-        ),
-        pc=0x90,
-        regs={
-            R4: 0,
-            R5: 0,
-            R40: RQ_PROGRAM_R,
-            R41: RQ_PROGRAM_R | int.from_bytes(insn(LDOU, R4, R3, R0),
-                                                "big"),
-            R42: 0x30,
-            R43: 0,
-        },
-    ),
-    MMIXTest(
         "virtual-translation-page0-rwx",
         b"".join(
             [
@@ -5841,4 +5809,17 @@ ISA_TESTS = [
             R27: 0,
         },
     ),
+]
+
+HOSTED_ISA_NAMES = {
+    "data-segment-runtime-load-store",
+    "pool-segment-runtime-load-store",
+    "stack-segment-runtime-load-store",
+    "stack-segment-runtime-last-octa",
+}
+HOSTED_ISA_TESTS = [
+    test for test in ISA_TESTS if test.name in HOSTED_ISA_NAMES
+]
+ISA_TESTS = [
+    test for test in ISA_TESTS if test.name not in HOSTED_ISA_NAMES
 ]

@@ -46,22 +46,22 @@ def retained_asn_results():
 
 def masked_interrupt_request_program():
     timer_compare = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0] +
+        privileged_mmio(MMIX_VIRT_TIMER) +
         MMIX_VIRT_TIMER_CONTEXT_BASE +
         MMIX_VIRT_TIMER_CONTEXT_COMPARE
     )
     timer_control = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0] +
+        privileged_mmio(MMIX_VIRT_TIMER) +
         MMIX_VIRT_TIMER_CONTEXT_BASE +
         MMIX_VIRT_TIMER_CONTEXT_CONTROL
     )
     intc_enable = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0] +
+        privileged_mmio(MMIX_VIRT_INTC) +
         MMIX_VIRT_INTC_CONTEXT_BASE +
         MMIX_VIRT_INTC_CONTEXT_ENABLE
     )
     intc_claim = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0] +
+        privileged_mmio(MMIX_VIRT_INTC) +
         MMIX_VIRT_INTC_CONTEXT_BASE +
         MMIX_VIRT_INTC_CONTEXT_CLAIM
     )
@@ -70,7 +70,7 @@ def masked_interrupt_request_program():
         insn(PUTI, SR_K, 0, 0),
         *set_octa(R1, intc_enable),
         *set_octa(R2, 1 << MMIX_VIRT_TIMER_IRQ_BASE),
-        insn(STTU, R2, R1, R0),
+        insn(STOU, R2, R1, R0),
         *set_octa(R3, timer_compare),
         insn(STOU, R0, R3, R0),
         *set_octa(R4, timer_control),
@@ -88,7 +88,7 @@ def masked_interrupt_request_program():
 
         # Claiming withdraws the CPU input, but rQ remains latched until PUT.
         *set_octa(R7, intc_claim),
-        insn(LDTU, R23, R7, R0),
+        insn(LDOU, R23, R7, R0),
         insn(GET, R24, 0, SR_Q),
         insn(PUTI, SR_Q, 0, 0),
         insn(GET, R25, 0, SR_Q),
@@ -104,17 +104,17 @@ MASKED_INTERRUPT_REQUEST = masked_interrupt_request_program()
 def external_dynamic_trap_program():
     handler = 0x100
     timer_compare = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0] +
+        privileged_mmio(MMIX_VIRT_TIMER) +
         MMIX_VIRT_TIMER_CONTEXT_BASE +
         MMIX_VIRT_TIMER_CONTEXT_COMPARE
     )
     timer_control = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0] +
+        privileged_mmio(MMIX_VIRT_TIMER) +
         MMIX_VIRT_TIMER_CONTEXT_BASE +
         MMIX_VIRT_TIMER_CONTEXT_CONTROL
     )
     intc_enable = (
-        MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0] +
+        privileged_mmio(MMIX_VIRT_INTC) +
         MMIX_VIRT_INTC_CONTEXT_BASE +
         MMIX_VIRT_INTC_CONTEXT_ENABLE
     )
@@ -122,7 +122,7 @@ def external_dynamic_trap_program():
         insn(PUTI, SR_K, 0, 0),
         *set_octa(R1, intc_enable),
         *set_octa(R2, 1 << MMIX_VIRT_TIMER_IRQ_BASE),
-        insn(STTU, R2, R1, R0),
+        insn(STOU, R2, R1, R0),
         *set_octa(R3, timer_compare),
         insn(STOU, R0, R3, R0),
         *set_octa(R4, timer_control),
@@ -171,8 +171,8 @@ EXTERNAL_DYNAMIC_TRAP = external_dynamic_trap_program()
 
 def external_dynamic_trap_resume_program():
     handler = 0x200
-    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
-    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    timer_base = privileged_mmio(MMIX_VIRT_TIMER)
+    intc_base = privileged_mmio(MMIX_VIRT_INTC)
     timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
                      MMIX_VIRT_TIMER_CONTEXT_COMPARE)
     timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
@@ -200,7 +200,7 @@ def external_dynamic_trap_resume_program():
         wyde(SETL, R69, MMIX_VIRT_TIMER_CONTROL_ENABLE |
              MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
         *set_octa(R70, RK_INTERRUPT_CONTROLLER),
-        insn(STTU, R66, R65, R0),
+        insn(STOU, R66, R65, R0),
         insn(STOU, R0, R60, R0),
         insn(STOU, R69, R61, R0),
         insn(GET, R20, 0, SR_Q),
@@ -240,10 +240,10 @@ def external_dynamic_trap_resume_program():
         [
             insn(ADDUI, R50, R50, 1),
             insn(GET, R51, 0, SR_Q),
-            insn(LDTU, R52, R63, R0),
+            insn(LDOU, R52, R63, R0),
             insn(STOU, R0, R61, R0),
             insn(STOU, R68, R62, R0),
-            insn(STTU, R67, R64, R0),
+            insn(STOU, R67, R64, R0),
             insn(PUTI, SR_Q, 0, 0),
             insn(GET, R53, 0, SR_Q),
             insn(GET, R54, 0, SR_WW),
@@ -260,9 +260,9 @@ EXTERNAL_DYNAMIC_TRAP_RESUME = external_dynamic_trap_resume_program()
 
 def ipi_dynamic_trap_resume_program():
     handler = 0x300
-    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
-    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
-    ipi_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0]
+    timer_base = privileged_mmio(MMIX_VIRT_TIMER)
+    intc_base = privileged_mmio(MMIX_VIRT_INTC)
+    ipi_base = privileged_mmio(MMIX_VIRT_IPI)
     timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
                      MMIX_VIRT_TIMER_CONTEXT_COMPARE)
     timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
@@ -302,7 +302,7 @@ def ipi_dynamic_trap_resume_program():
         *set_octa(R15, hardware_requests),
         *set_octa(R16, RK_IPI),
         *set_octa(R17, handler),
-        insn(STTU, R10, R4, R0),
+        insn(STOU, R10, R4, R0),
         insn(STOU, R0, R1, R0),
         insn(STOU, R12, R2, R0),
         insn(STOU, R14, R7, R0),
@@ -312,12 +312,12 @@ def ipi_dynamic_trap_resume_program():
         branch(BNZ, R22, 0xfffd),
 
         # With both requests latched, withdrawing INTC leaves IPI active.
-        insn(LDTU, R27, R5, R0),
+        insn(LDOU, R27, R5, R0),
         insn(PUTI, SR_Q, 0, 0),
         insn(GET, R21, 0, SR_Q),
         insn(STOU, R0, R2, R0),
         insn(STOU, R13, R3, R0),
-        insn(STTU, R11, R6, R0),
+        insn(STOU, R11, R6, R0),
         insn(PUT, SR_TT, 0, R17),
         insn(PUT, SR_K, 0, R16),
         insn(ADDUI, R30, R30, 1),
@@ -329,10 +329,10 @@ def ipi_dynamic_trap_resume_program():
         insn(STOU, R14, R7, R0),
         insn(ADDUI, R30, R30, 1),
         insn(GET, R24, 0, SR_Q),
-        insn(LDTU, R28, R5, R0),
+        insn(LDOU, R28, R5, R0),
         insn(STOU, R0, R2, R0),
         insn(STOU, R13, R3, R0),
-        insn(STTU, R11, R6, R0),
+        insn(STOU, R11, R6, R0),
         insn(PUTI, SR_Q, 0, 0),
         insn(GET, R25, 0, SR_Q),
         insn(GET, R26, 0, SR_K),
@@ -477,10 +477,10 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
     sub_base = 0x200
     handler = 0x1000
     page_table = VM_PAGE_TABLE
-    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    stack_pte = VM_STACK_PTE
     physical_stack_pte = (1 << 63) | stack_pte
     current_bits = (CURRENT_ASN << 3) if retained_asn else 0
-    current_rv = VM_RV_PAGE0 | current_bits
+    current_rv = VM_RV_STACK | current_bits
     stack_page_read_only = INITIAL_STACK | current_bits | 4
     stack_page_rwx = INITIAL_STACK | current_bits | 7
     image = bytearray()
@@ -498,6 +498,9 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
         *set_octa(R240, page_table),
         wyde(SETL, R241, current_bits | 7),
         insn(STOU, R241, R240, R250),
+        *set_octa(R238, VM_STACK_PTP_ADDRESS),
+        *set_octa(R239, VM_STACK_PTP),
+        insn(STOU, R239, R238, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_read_only),
         *set_octa(R245, stack_page_rwx),
@@ -634,7 +637,7 @@ def fill_fault_resume_program(depth=10):
     sub_base = 0x200
     handler = 0x1000
     page_table = VM_PAGE_TABLE
-    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    stack_pte = VM_STACK_PTE
     physical_stack_pte = (1 << 63) | stack_pte
     stack_page_write_only = INITIAL_STACK | 2
     stack_page_rwx = INITIAL_STACK | 7
@@ -652,13 +655,16 @@ def fill_fault_resume_program(depth=10):
         *set_octa(R240, page_table),
         wyde(SETL, R241, 7),
         insn(STOU, R241, R240, R250),
+        *set_octa(R238, VM_STACK_PTP_ADDRESS),
+        *set_octa(R239, VM_STACK_PTP),
+        insn(STOU, R239, R238, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_write_only),
         *set_octa(R245, stack_page_rwx),
         insn(STOU, R245, R242, R250),
         *set_octa(R244, physical_stack_pte),
-        wyde(SETML, R235, 1),
-        *set_octa(R246, VM_RV_PAGE0),
+        *set_octa(R235, INITIAL_STACK),
+        *set_octa(R246, VM_RV_STACK),
         wyde(SETL, R247, handler),
         insn(PUT, SR_TT, 0, R247),
         *set_octa(R248, RQ_PROGRAM_R),
@@ -728,7 +734,7 @@ def unsave_fault_resume_program():
     handler = 0x1000
     snapshots = 0x1800
     page_table = VM_PAGE_TABLE
-    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    stack_pte = VM_STACK_PTE
     physical_stack_pte = (1 << 63) | stack_pte
     stack_page_write_only = INITIAL_STACK | 2
     stack_page_rwx = INITIAL_STACK | 7
@@ -747,13 +753,16 @@ def unsave_fault_resume_program():
         *set_octa(R240, page_table),
         wyde(SETL, R241, 7),
         insn(STOU, R241, R240, R250),
+        *set_octa(R238, VM_STACK_PTP_ADDRESS),
+        *set_octa(R239, VM_STACK_PTP),
+        insn(STOU, R239, R238, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_write_only),
         *set_octa(R245, stack_page_rwx),
         insn(STOU, R245, R242, R250),
         *set_octa(R244, physical_stack_pte),
-        wyde(SETML, R235, 1),
-        *set_octa(R246, VM_RV_PAGE0),
+        *set_octa(R235, INITIAL_STACK),
+        *set_octa(R246, VM_RV_STACK),
         wyde(SETL, R247, handler),
         insn(PUT, SR_TT, 0, R247),
         *set_octa(R248, RQ_PROGRAM_R),
@@ -1041,10 +1050,10 @@ def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
     handler_body = 0x1100
     handler_calls = 0x1200
     page_table = VM_PAGE_TABLE
-    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    stack_pte = VM_STACK_PTE
     physical_stack_pte = (1 << 63) | stack_pte
     current_bits = (CURRENT_ASN << 3) if retained_asn else 0
-    current_rv = VM_RV_PAGE0 | current_bits
+    current_rv = VM_RV_STACK | current_bits
     stack_page_write_only = INITIAL_STACK | current_bits | 2
     stack_page_rwx = INITIAL_STACK | current_bits | 7
     image = bytearray()
@@ -1061,6 +1070,9 @@ def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
         *set_octa(R240, page_table),
         wyde(SETL, R241, current_bits | 7),
         insn(STOU, R241, R240, R250),
+        *set_octa(R238, VM_STACK_PTP_ADDRESS),
+        *set_octa(R239, VM_STACK_PTP),
+        insn(STOU, R239, R238, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_write_only),
         *set_octa(R245, stack_page_rwx),
@@ -1192,8 +1204,8 @@ RETAINED_ASN_FILL_FAULT_RESUME = handler_pop_fill_fault_resume_program(
 def pending_interrupt_spill_fill_program(depth=10):
     sub_base = 0x200
     handler = 0x1000
-    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
-    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    timer_base = privileged_mmio(MMIX_VIRT_TIMER)
+    intc_base = privileged_mmio(MMIX_VIRT_INTC)
     timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
                      MMIX_VIRT_TIMER_CONTEXT_COMPARE)
     timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
@@ -1232,7 +1244,7 @@ def pending_interrupt_spill_fill_program(depth=10):
         *set_octa(R70, RK_INTERRUPT_CONTROLLER),
         wyde(SETL, R71, handler),
         insn(PUT, SR_TT, 0, R71),
-        insn(STTU, R66, R65, R250),
+        insn(STOU, R66, R65, R250),
         insn(STOU, R250, R60, R250),
         insn(STOU, R69, R61, R250),
         insn(GET, R72, 0, SR_Q),
@@ -1298,10 +1310,10 @@ def pending_interrupt_spill_fill_program(depth=10):
         insn(GET, R205, 0, SR_L),
         insn(GET, R206, 0, SR_WW),
         insn(GET, R207, 0, SR_Q),
-        insn(LDTU, R208, R63, R250),
+        insn(LDOU, R208, R63, R250),
         insn(STOU, R250, R61, R250),
         insn(STOU, R68, R62, R250),
-        insn(STTU, R67, R64, R250),
+        insn(STOU, R67, R64, R250),
         insn(PUTI, SR_Q, 0, 0),
         insn(ADDU, R255, R250, R250),
         insn(RESUME, 0, 0, 1),
@@ -1317,8 +1329,8 @@ PENDING_INTERRUPT_SPILL_FILL = pending_interrupt_spill_fill_program()
 def nested_interrupt_replay_program(substitute_operands=False):
     handler_phys = 0x1800
     handler = (1 << 63) | handler_phys
-    timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
-    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    timer_base = privileged_mmio(MMIX_VIRT_TIMER)
+    intc_base = privileged_mmio(MMIX_VIRT_INTC)
     timer_compare = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
                      MMIX_VIRT_TIMER_CONTEXT_COMPARE)
     timer_control = (timer_base + MMIX_VIRT_TIMER_CONTEXT_BASE +
@@ -1353,7 +1365,7 @@ def nested_interrupt_replay_program(substitute_operands=False):
         *set_octa(R72, saved_exec),
         wyde(SETL, R73, 0x30),
         wyde(SETL, R74, 2),
-        insn(STTU, R66, R65, R0),
+        insn(STOU, R66, R65, R0),
         insn(PUT, SR_K, 0, R71),
         wyde(SETL, R255, 0x55),
         wyde(SETL, R10, 0x20),
@@ -1384,10 +1396,10 @@ def nested_interrupt_replay_program(substitute_operands=False):
     nested_index = len(handler_code)
     handler_code[2] = branch(BNZ, R51, nested_index - 2)
     handler_code.extend([
-        insn(LDTU, R52, R63, R0),
+        insn(LDOU, R52, R63, R0),
         insn(STOU, R0, R61, R0),
         insn(STOU, R68, R62, R0),
-        insn(STTU, R67, R64, R0),
+        insn(STOU, R67, R64, R0),
         insn(PUTI, SR_Q, 0, 0),
         insn(GET, R53, 0, SR_WW),
         insn(GET, R54, 0, SR_XX),

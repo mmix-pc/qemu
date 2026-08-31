@@ -32,6 +32,7 @@ L3_HANDLER_RS = 0x38
 L3_HALT = 0x40
 L3_HANDLER0 = 0x4000
 L3_HANDLER63 = 0x4400
+L3_INITIAL_STACK = INITIAL_STACK
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,15 +57,17 @@ class MMIXL3SMPTest:
     halt_offset = L3_HALT
     ipi_request = RQ_IPI
     timer_request = RQ_INTERRUPT_CONTROLLER
-    initial_stack = INITIAL_STACK
+    initial_stack = L3_INITIAL_STACK
     initial_stack_slot_size = MMIX_VIRT_INITIAL_STACK_SLOT_SIZE
     main_start = SMP_ENTRY
     ipi_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0]
     timer_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0]
+    intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
 
     @property
     def qemu_args(self):
         return (
+            "-machine", "elf-startup-abi=linux",
             "-smp", str(self.cpu_count),
             "-accel", f"tcg,thread={self.thread_mode}",
         )
@@ -78,6 +81,11 @@ class MMIXL3SMPTest:
             cpu * MMIX_VIRT_TIMER_CONTEXT_STRIDE + register
         )
 
+    def intc_enable(self, cpu, word):
+        return (
+            self.intc_base + MMIX_VIRT_INTC_CONTEXT_BASE +
+            cpu * MMIX_VIRT_INTC_CONTEXT_STRIDE + word * 8
+        )
 
 def _mailbox(cpu):
     return L3_MAILBOX_BASE + cpu * L3_MAILBOX_STRIDE
@@ -128,6 +136,7 @@ def _handler(cpu, address):
         insn(GET, R192, 0, SR_S),
         smp_store(R191, R180, L3_HANDLER_RO),
         smp_store(R192, R180, L3_HANDLER_RS),
+        *set_octa(R198, RQ_IPI | RQ_INTERRUPT_CONTROLLER),
         *set_octa(R193, RQ_IPI),
         insn(AND, R194, R190, R193),
     )
@@ -139,6 +148,7 @@ def _handler(cpu, address):
         smp_store(R195, R180, L3_IPI_COUNT),
         wyde(SETL, R196, MMIX_VIRT_IPI_STATUS_PENDING),
         insn(STOUI, R196, R182, 0),
+        insn(ADDU, R198, R254, R254),
     )
     program.mark("timer")
     program.emit(
@@ -147,8 +157,12 @@ def _handler(cpu, address):
     )
     program.emit_branch(BZ, R194, "resume")
     program.emit(
-        smp_store(R190, R180, L3_TIMER_RQ),
+        *set_octa(R198, RQ_IPI),
         insn(LDOUI, R196, R184, 0),
+    )
+    program.emit_branch(BZ, R196, "resume")
+    program.emit(
+        smp_store(R190, R180, L3_TIMER_RQ),
         smp_store(R196, R180, L3_TIMER_CLAIM),
         insn(LDOUI, R195, R180, L3_TIMER_COUNT),
         insn(ADDUI, R195, R195, 1),
@@ -162,7 +176,7 @@ def _handler(cpu, address):
     program.mark("resume")
     program.emit(
         insn(PUTI, SR_Q, 0, 0),
-        *set_octa(R255, RQ_IPI | RQ_INTERRUPT_CONTROLLER),
+        insn(ADDU, R255, R198, R254),
         insn(RESUME, 0, 0, 1),
     )
     return address, program.build()
@@ -173,8 +187,8 @@ def l3_cpu0_cpu63_interrupt_program():
 
     program.emit(
         insn(GET, R32, 0, SR_O),
-        *set_octa(R33, INITIAL_STACK),
-        insn(SUBU, R32, R32, R33),
+        *set_octa(R33, L3_INITIAL_STACK),
+        insn(SUBU, R32, R33, R32),
         insn(SRUI, R32, R32, 15),
         wyde(SETL, R254, 0),
     )

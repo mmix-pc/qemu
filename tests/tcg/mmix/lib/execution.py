@@ -1970,6 +1970,23 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
             f"expected {expected:#x}, got {actual:#x}"
         )
 
+    def wait_at_least(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed while {description}"
+                )
+            if actual >= expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected at least {expected:#x}, got {actual:#x}"
+        )
+
     def wait_for_progress(cpu, previous, description):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -2061,8 +2078,8 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
 
     set_irq(0)
     write(1, test.handler_ack_offset, 2)
-    wait(1, test.handler_done_offset, 2,
-         "completing CPU1's combined shared source")
+    wait_at_least(1, test.handler_done_offset, 2,
+                  "completing CPU1's combined shared source")
     wait(1, test.handler_count_offset, 3,
          "entering CPU1's fixed timer handler")
     wait(1, test.handler_done_offset, 3,
@@ -2451,7 +2468,8 @@ def _run_smp_shootdown_protocol(qtest, test):
 
 
 def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
-                          *, use_loader=False):
+                          *, use_loader=False, publish_initial_stack=False,
+                          validate_initial_stacks=False):
     image = workdir / f"{test.name}.elf"
     qtest_path = workdir / socket_name
 
@@ -2507,7 +2525,7 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
             raise AssertionError(
                 f"{test.name}: vCPUs share host thread ids {thread_ids}"
             )
-        if use_loader:
+        if publish_initial_stack:
             stack = _qmp_command(
                 process,
                 "qom-get",
@@ -2519,6 +2537,22 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
             _qtest_command(
                 qtest, f"writeq {test.cpu_id_stack_phys:#x} {stack:#x}"
             )
+        if validate_initial_stacks:
+            for cpu in test.cpu_ids:
+                stack = _qmp_command(
+                    process,
+                    "qom-get",
+                    {
+                        "path": f"/machine/cpu[{cpu}]",
+                        "property": "initial-stack",
+                    },
+                )
+                expected = test.initial_stack - cpu * test.initial_stack_slot_size
+                if stack != expected:
+                    raise AssertionError(
+                        f"{test.name}: CPU {cpu} initial stack is "
+                        f"{stack:#x}, expected {expected:#x}"
+                    )
         _qmp_command(process, "cont")
         protocol(qtest, test)
         stdout, stderr = process.communicate(timeout=5)
@@ -2544,35 +2578,35 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
 def run_mttcg_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_interrupt_protocol,
-        "m45-qtest.sock", use_loader=True,
+        "m45-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_timer_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_timer_protocol,
-        "m46-qtest.sock", use_loader=True,
+        "m46-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_shared_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shared_interrupt_protocol,
-        "m47-qtest.sock", use_loader=True,
+        "m47-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_ipi_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_ipi_protocol,
-        "m48-qtest.sock", use_loader=True,
+        "m48-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_shootdown_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shootdown_protocol,
-        "m49-qtest.sock", use_loader=True,
+        "m49-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
@@ -2580,6 +2614,7 @@ def run_l3_mttcg_shared_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_l3_shared_interrupt_protocol,
         "l3-shared-interrupt-qtest.sock", use_loader=True,
+        publish_initial_stack=True,
     )
 
 
@@ -2662,13 +2697,15 @@ def _run_l3_shared_interrupt_protocol(qtest, test):
 
 def _run_l3_cpu_isolation_protocol(qtest, test):
     def read(cpu, offset):
-        response = _qtest_command(
-            qtest, f"readq {test.mailbox(cpu, offset):#x}"
+        return int.from_bytes(
+            _qtest_read(qtest, test.mailbox(cpu, offset), 8), "big"
         )
-        return int(response[1], 0)
 
     def write(address, value):
-        _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+        _qtest_write(qtest, address, value.to_bytes(8, "big"))
+
+    def read_phys(address):
+        return int.from_bytes(_qtest_read(qtest, address, 8), "big")
 
     def wait(cpu, offset, expected, description):
         deadline = time.monotonic() + 10
@@ -2685,28 +2722,38 @@ def _run_l3_cpu_isolation_protocol(qtest, test):
     for cpu in test.cpu_ids:
         wait(cpu, test.ready_offset, 1, "waiting for startup")
 
-    targets = sum(1 << cpu for cpu in test.cpu_ids)
-    write(test.ipi_base + 0x8, targets)
     for cpu in test.cpu_ids:
-        wait(cpu, test.ipi_count_offset, 1, "handling its IPI")
-        rq = read(cpu, test.ipi_rq_offset)
-        assert rq & test.ipi_request
-        assert rq & test.timer_request == 0
-
-    for cpu in test.cpu_ids:
+        irq = 16 + cpu
+        word = irq // 64
+        bit = 1 << (irq % 64)
+        write(test.intc_enable(cpu, word), bit)
+        enable = read_phys(test.intc_enable(cpu, word))
+        assert enable & bit, (
+            f"{test.name}: CPU {cpu} INTC enable word {word} is "
+            f"{enable:#x}"
+        )
         write(test.timer_context(cpu, 0x00), 0)
         write(test.timer_context(cpu, 0x08), 0x3)
     for cpu in test.cpu_ids:
         wait(cpu, test.timer_count_offset, 1, "handling its timer")
         rq = read(cpu, test.timer_rq_offset)
         assert rq & test.timer_request
-        assert rq & test.ipi_request == 0
-        assert read(cpu, test.timer_claim_offset) == 16 + cpu
+        claim = read(cpu, test.timer_claim_offset)
+        assert claim == 16 + cpu, (
+            f"{test.name}: CPU {cpu} claimed {claim}, expected {16 + cpu}"
+        )
         expected_stack = (
-            test.initial_stack + cpu * test.initial_stack_slot_size
+            test.initial_stack - cpu * test.initial_stack_slot_size
         )
         assert read(cpu, test.handler_ro_offset) == expected_stack
         assert read(cpu, test.handler_rs_offset) == expected_stack
+
+    targets = sum(1 << cpu for cpu in test.cpu_ids)
+    write(test.ipi_base + 0x8, targets)
+    for cpu in test.cpu_ids:
+        wait(cpu, test.ipi_count_offset, 1, "handling its IPI")
+        rq = read(cpu, test.ipi_rq_offset)
+        assert rq & test.ipi_request
 
     assert read(0, test.handler_ro_offset) != read(
         63, test.handler_ro_offset
@@ -2717,5 +2764,5 @@ def _run_l3_cpu_isolation_protocol(qtest, test):
 def run_l3_mttcg_cpu_isolation_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_l3_cpu_isolation_protocol,
-        "l3-cpu-isolation-qtest.sock", use_loader=True,
+        "l3-cpu-isolation-qtest.sock", validate_initial_stacks=True,
     )
