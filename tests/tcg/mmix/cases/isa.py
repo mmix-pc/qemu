@@ -10,6 +10,182 @@ NEGATIVE_FORCED_TRANSLATION_MAIN = 0x8000000000000100
 NEGATIVE_FORCED_TRANSLATION_HANDLER = 0x8000000000000200
 FORCED_TRANSLATION_VIRTUAL = 0x2000
 FORCED_TRANSLATION_PHYSICAL = 0x4000
+RETAINED_ASN_A = 1
+RETAINED_ASN_B = 2
+RETAINED_RV_A = VM_RV_PAGE0 | (RETAINED_ASN_A << 3)
+RETAINED_RV_B = VM_RV_ROOT2 | (RETAINED_ASN_B << 3)
+RETAINED_RV_A_S14 = (
+    (VM_RV_ROOT2 & ~(0xff << 40)) |
+    (14 << 40) |
+    (RETAINED_ASN_A << 3)
+)
+
+
+def retained_pte(physical, asn, permissions=7):
+    return physical | (asn << 3) | permissions
+
+
+def retained_asn_setup():
+    return [
+        *set_octa(R1, VM_PAGE_TABLE),
+        *set_octa(R2, retained_pte(0, RETAINED_ASN_A)),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R2, retained_pte(0x6000, RETAINED_ASN_A)),
+        insn(STOUI, R2, R1, 8),
+        *set_octa(R3, VM_PAGE_TABLE_ROOT2),
+        *set_octa(R4, retained_pte(0, RETAINED_ASN_B)),
+        insn(STOU, R4, R3, R0),
+        *set_octa(R4, retained_pte(0x8000, RETAINED_ASN_B)),
+        insn(STOUI, R4, R3, 8),
+        *set_octa(R5, 0x6000),
+        *set_octa(R6, 0x1111111111111111),
+        insn(STOU, R6, R5, R0),
+        *set_octa(R7, 0x8000),
+        *set_octa(R8, 0x2222222222222222),
+        insn(STOU, R8, R7, R0),
+        *set_octa(R9, 0xa000),
+        *set_octa(R10, 0xaaaaaaaaaaaaaaaa),
+        insn(STOU, R10, R9, R0),
+    ]
+
+
+def retained_asn_switch_test():
+    program = [
+        *retained_asn_setup(),
+        *set_octa(R11, RETAINED_RV_A),
+        insn(PUT, SR_V, R0, R11),
+        wyde(SETL, R12, 0x2000),
+        insn(LDOU, R20, R12, R0),
+        *set_octa(R13, RETAINED_RV_B),
+        insn(PUT, SR_V, R0, R13),
+        insn(LDOU, R21, R12, R0),
+        *set_octa(R14, 0x8000000000002008),
+        *set_octa(R15, retained_pte(0xa000, RETAINED_ASN_A)),
+        insn(STOU, R15, R14, R0),
+        insn(PUT, SR_V, R0, R11),
+        insn(LDOU, R22, R12, R0),
+        insn(PUT, SR_V, R0, R13),
+        insn(LDOU, R23, R12, R0),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "virtual-translation-retained-asn-switch",
+        image,
+        pc=len(image) - 4,
+        regs={
+            R20: 0x1111111111111111,
+            R21: 0x2222222222222222,
+            R22: 0x1111111111111111,
+            R23: 0x2222222222222222,
+        },
+    )
+
+
+def retained_page_size_test():
+    program = [
+        *set_octa(R1, VM_PAGE_TABLE),
+        *set_octa(R2, retained_pte(0, RETAINED_ASN_A)),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R2, retained_pte(0x6000, RETAINED_ASN_A)),
+        insn(STOUI, R2, R1, 16),
+        *set_octa(R3, VM_PAGE_TABLE_ROOT2),
+        *set_octa(R4, retained_pte(0, RETAINED_ASN_A)),
+        insn(STOU, R4, R3, R0),
+        *set_octa(R4, retained_pte(0x8000, RETAINED_ASN_A)),
+        insn(STOUI, R4, R3, 8),
+        *set_octa(R5, 0x6000),
+        *set_octa(R6, 0x1111111111111111),
+        insn(STOU, R6, R5, R0),
+        *set_octa(R7, 0x8000),
+        *set_octa(R8, 0x2222222222222222),
+        insn(STOU, R8, R7, R0),
+        *set_octa(R9, 0xa000),
+        *set_octa(R10, 0xaaaaaaaaaaaaaaaa),
+        insn(STOU, R10, R9, R0),
+        *set_octa(R11, 0xc000),
+        *set_octa(R12, 0xcccccccccccccccc),
+        insn(STOU, R12, R11, R0),
+        *set_octa(R13, RETAINED_RV_A),
+        insn(PUT, SR_V, R0, R13),
+        wyde(SETL, R14, 0x4000),
+        insn(LDOU, R20, R14, R0),
+        *set_octa(R15, RETAINED_RV_A_S14),
+        insn(PUT, SR_V, R0, R15),
+        insn(LDOU, R21, R14, R0),
+        *set_octa(R16, 0x8000000000002010),
+        *set_octa(R17, retained_pte(0xa000, RETAINED_ASN_A)),
+        insn(STOU, R17, R16, R0),
+        *set_octa(R18, 0x8000000000004008),
+        *set_octa(R19, retained_pte(0xc000, RETAINED_ASN_A)),
+        insn(STOU, R19, R18, R0),
+        insn(PUT, SR_V, R0, R13),
+        insn(LDOU, R22, R14, R0),
+        insn(PUT, SR_V, R0, R15),
+        insn(LDOU, R23, R14, R0),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "virtual-translation-retained-page-size",
+        image,
+        pc=len(image) - 4,
+        regs={
+            R20: 0x1111111111111111,
+            R21: 0x2222222222222222,
+            R22: 0x1111111111111111,
+            R23: 0x2222222222222222,
+        },
+    )
+
+
+def retained_asn_ldvts_test():
+    program = [
+        *retained_asn_setup(),
+        *set_octa(R11, RETAINED_RV_A),
+        insn(PUT, SR_V, R0, R11),
+        wyde(SETL, R12, 0x2000),
+        insn(LDOU, R20, R12, R0),
+        *set_octa(R13, RETAINED_RV_B),
+        insn(PUT, SR_V, R0, R13),
+        insn(LDOU, R21, R12, R0),
+        *set_octa(R14, 0x8000000000002008),
+        *set_octa(R15, retained_pte(0xa000, RETAINED_ASN_A)),
+        insn(STOU, R15, R14, R0),
+        wyde(SETL, R16, 0x2004 | (RETAINED_ASN_A << 3)),
+        insn(LDVTS, R24, R16, R0),
+        wyde(SETL, R16, 0x2000 | (RETAINED_ASN_A << 3)),
+        insn(LDVTS, R25, R16, R0),
+        insn(LDVTS, R28, R16, R0),
+        wyde(SETL, R17, RETAINED_ASN_A << 3),
+        insn(LDVTS, R26, R17, R0),
+        insn(LDOU, R22, R12, R0),
+        insn(PUT, SR_V, R0, R11),
+        insn(LDOU, R23, R12, R0),
+        insn(PUT, SR_V, R0, R13),
+        insn(LDOU, R27, R12, R0),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "ldvts-retained-asn-isolation",
+        image,
+        pc=len(image) - 4,
+        regs={
+            R20: 0x1111111111111111,
+            R21: 0x2222222222222222,
+            R22: 0x2222222222222222,
+            R23: 0xaaaaaaaaaaaaaaaa,
+            R24: 2,
+            R25: 2,
+            R26: 1,
+            R27: 0x2222222222222222,
+            R28: 0,
+        },
+    )
 
 
 def forced_data_translation_program(main, handler, initial_value,
@@ -1656,6 +1832,9 @@ RECOVERABLE_STORE_REPLAY_TESTS = [
 
 
 ISA_TESTS = [
+    retained_asn_switch_test(),
+    retained_page_size_test(),
+    retained_asn_ldvts_test(),
     MMIXTest(
         "raw-image-startup-registers",
         b"".join(
@@ -3321,7 +3500,7 @@ ISA_TESTS = [
             R13: 0x1111111111111111,
             R14: 2,
             R15: 0x2222222222222222,
-            R17: 0,
+            R17: 2,
         },
     ),
     MMIXTest(
@@ -3461,7 +3640,7 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
-        "software-translation-put-rv-invalidates-cache",
+        "software-translation-put-rv-retains-cache",
         forced_data_translation_program(
             [
                 wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
@@ -3490,8 +3669,8 @@ ISA_TESTS = [
         pc=0x800000000000016c,
         regs={
             R11: 0x1122334455667788,
-            R15: 0x8877665544332211,
-            R60: 2,
+            R15: 0x1122334455667788,
+            R60: 1,
         },
     ),
     invalid_forced_data_translation_test(

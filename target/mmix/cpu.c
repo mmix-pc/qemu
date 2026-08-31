@@ -291,7 +291,8 @@ static uint64_t mmix_translation_key(vaddr address, uint8_t page_shift,
 
 static MMIXTranslationCacheEntry *
 mmix_translation_cache_find(CPUMMIXState *env,
-                            MMIXTranslationCacheKind kind, uint64_t key)
+                            MMIXTranslationCacheKind kind, uint64_t key,
+                            uint8_t page_shift)
 {
     GArray *cache = mmix_translation_cache(env, kind);
     unsigned int i;
@@ -300,7 +301,7 @@ mmix_translation_cache_find(CPUMMIXState *env,
         MMIXTranslationCacheEntry *entry =
             &g_array_index(cache, MMIXTranslationCacheEntry, i);
 
-        if (entry->key == key) {
+        if (entry->key == key && entry->page_shift == page_shift) {
             return entry;
         }
     }
@@ -323,7 +324,7 @@ static void mmix_translation_cache_insert(CPUMMIXState *env,
         .page_shift = page_shift,
     };
     MMIXTranslationCacheEntry *existing =
-        mmix_translation_cache_find(env, kind, entry.key);
+        mmix_translation_cache_find(env, kind, entry.key, page_shift);
 
     if (existing != NULL) {
         *existing = entry;
@@ -340,7 +341,8 @@ static bool mmix_translation_cache_lookup(CPUMMIXState *env,
 {
     MMIXTranslationCacheEntry *entry = mmix_translation_cache_find(
         env, mmix_translation_cache_kind(access_type),
-        mmix_translation_key(address, page_shift, address_space_number));
+        mmix_translation_key(address, page_shift, address_space_number),
+        page_shift);
     uint64_t page_mask;
 
     if (entry == NULL) {

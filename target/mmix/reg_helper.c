@@ -354,7 +354,7 @@ static void mmix_cpu_put_rv(CPUMMIXState *env, uint64_t val)
 {
     env->sregs[MMIX_SREG_RV] = val;
     env->flat_translation = false;
-    mmix_cpu_flush_translation_caches(env);
+    mmix_cpu_update_translation_state(env);
 }
 
 uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
