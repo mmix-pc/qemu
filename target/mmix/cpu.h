@@ -162,6 +162,7 @@ enum {
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_SWYM_INSN 0xfd000000U
+#define MMIX_RESUME_OPCODE 0xf9U
 #define MMIX_TB_REPLAY_FLAG (1ULL << 63)
 #define MMIX_TB_REPLAY_SUBSTITUTE_FLAG (1ULL << 62)
 #define MMIX_RA_EVENT_D    (1u << 7)
@@ -198,8 +199,8 @@ typedef struct MMIXInsnReplayState {
     uint64_t continuation;
     uint64_t y;
     uint64_t z;
+    uint64_t trap_restart_sequence;
     uint32_t insn;
-    bool owns_trap_restart;
     bool substitute_operands;
     bool active;
 } MMIXInsnReplayState;
@@ -244,9 +245,11 @@ typedef struct MMIXTrapRestartState {
     MMIXStackAccessState stack_access;
     MMIXInsnReplayState interrupted_replay;
     MMIXSaveUnsaveTrapState *save_unsave;
-    uint32_t forced_translation_insn;
-    uint64_t forced_translation_address;
-    uint64_t forced_translation_where;
+    uint64_t sequence;
+    uint64_t trap_where;
+    uint64_t trap_exec;
+    uint64_t trap_y;
+    uint64_t trap_rv;
     uint8_t forced_translation_access;
     bool register_stack_rebased;
     bool forced_translation;

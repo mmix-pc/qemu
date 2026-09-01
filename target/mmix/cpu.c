@@ -420,13 +420,11 @@ bool mmix_cpu_install_translation(CPUMMIXState *env, vaddr address,
     uint8_t function = extract64(rv, 0, 3);
     hwaddr physical_page;
 
-    if ((access_type != MMU_INST_FETCH &&
-         access_type != MMU_DATA_LOAD && access_type != MMU_DATA_STORE) ||
+    if ((access_type != MMU_INST_FETCH && access_type != MMU_DATA_LOAD) ||
         env->flat_translation || (int64_t)address < 0 ||
         page_shift < 13 || page_shift > 48 || function != 1 ||
         ((pte >> MMIX_PTE_N_SHIFT) & MMIX_PTE_N_MASK) !=
-        address_space_number ||
-        (mmix_pte_prot(pte) & mmix_access_prot(access_type)) == 0) {
+        address_space_number) {
         return false;
     }
 

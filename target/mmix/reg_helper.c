@@ -44,6 +44,7 @@ static void mmix_cpu_stack_access_commit(CPUMMIXState *env,
         GArray *stack = env_archcpu(env)->trap_restart_stack;
         unsigned int i;
 
+        mmix_trap_restart_lock();
         for (i = 0; i < stack->len; i++) {
             MMIXTrapRestartState *restart =
                 &g_array_index(stack, MMIXTrapRestartState, i);
@@ -55,6 +56,7 @@ static void mmix_cpu_stack_access_commit(CPUMMIXState *env,
                 restart->stack_access.completed = true;
             }
         }
+        mmix_trap_restart_unlock();
     }
     memset(access, 0, sizeof(*access));
 }
@@ -224,6 +226,7 @@ static void mmix_cpu_note_register_stack_rebase(CPUMMIXState *env)
     GArray *stack = env_archcpu(env)->trap_restart_stack;
     unsigned int i;
 
+    mmix_trap_restart_lock();
     for (i = 0; i < stack->len; i++) {
         MMIXTrapRestartState *restart =
             &g_array_index(stack, MMIXTrapRestartState, i);
@@ -234,6 +237,7 @@ static void mmix_cpu_note_register_stack_rebase(CPUMMIXState *env)
             restart->register_stack_rebased = true;
         }
     }
+    mmix_trap_restart_unlock();
 }
 
 static void mmix_cpu_fill_stack(CPUMMIXState *env, uintptr_t ra)

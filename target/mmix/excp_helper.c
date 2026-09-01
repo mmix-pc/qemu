@@ -12,6 +12,24 @@
 #include "exec/log.h"
 #include "system/runstate.h"
 
+static QemuMutex mmix_trap_restart_mutex;
+static gsize mmix_trap_restart_mutex_initialized;
+static uint64_t mmix_trap_restart_sequence;
+
+void mmix_trap_restart_lock(void)
+{
+    if (g_once_init_enter(&mmix_trap_restart_mutex_initialized)) {
+        qemu_mutex_init(&mmix_trap_restart_mutex);
+        g_once_init_leave(&mmix_trap_restart_mutex_initialized, 1);
+    }
+    qemu_mutex_lock(&mmix_trap_restart_mutex);
+}
+
+void mmix_trap_restart_unlock(void)
+{
+    qemu_mutex_unlock(&mmix_trap_restart_mutex);
+}
+
 static uint32_t mmix_select_arithmetic_event(uint32_t events)
 {
     static const uint32_t priority[] = {
@@ -60,14 +78,27 @@ static hwaddr mmix_arithmetic_trip_handler(uint32_t event)
 }
 
 static void mmix_trap_restart_push(CPUMMIXState *env,
-                                   bool forced_translation)
+                                   bool forced_translation,
+                                   uint64_t where, uint64_t exec,
+                                   uint64_t y)
 {
     MMIXCPU *cpu = env_archcpu(env);
     MMIXTrapRestartState restart = {
         .stack_access = env->stack_access,
         .interrupted_replay = env->insn_replay,
+        .trap_where = where,
+        .trap_exec = exec,
+        .trap_y = y,
+        .trap_rv = env->sregs[MMIX_SREG_RV],
         .forced_translation = forced_translation,
     };
+
+    if (!env->insn_replay.active &&
+        env->save_restart.phase == MMIX_SAVE_RESTART_NONE &&
+        !env->unsave_restart_active &&
+        env->stack_access.kind == MMIX_STACK_ACCESS_NONE) {
+        return;
+    }
 
     /* An interrupted SAVE/UNSAVE gives its handler a fresh register stack. */
     if (env->save_restart.phase != MMIX_SAVE_RESTART_NONE ||
@@ -88,13 +119,14 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
     }
 
     if (forced_translation) {
-        restart.forced_translation_insn = env->forced_translation_insn;
-        restart.forced_translation_address = env->forced_translation_address;
-        restart.forced_translation_where = env->forced_translation_where;
         restart.forced_translation_access = env->forced_translation_access;
     }
     /* A trap accepted before replay executes suspends it at this depth. */
+    mmix_trap_restart_lock();
+    g_assert(mmix_trap_restart_sequence != UINT64_MAX);
+    restart.sequence = ++mmix_trap_restart_sequence;
     g_array_append_val(cpu->trap_restart_stack, restart);
+    mmix_trap_restart_unlock();
     memset(&env->stack_access, 0, sizeof(env->stack_access));
     memset(&env->insn_replay, 0, sizeof(env->insn_replay));
     memset(&env->save_restart, 0, sizeof(env->save_restart));
@@ -104,14 +136,6 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
         env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
         env->sregs[MMIX_SREG_RL] = 0;
     }
-}
-
-static MMIXTrapRestartState *mmix_trap_restart_top(CPUMMIXState *env)
-{
-    GArray *stack = env_archcpu(env)->trap_restart_stack;
-
-    return stack->len == 0 ? NULL :
-           &g_array_index(stack, MMIXTrapRestartState, stack->len - 1);
 }
 
 static void mmix_trap_restart_restore_register_stack(
@@ -144,26 +168,55 @@ static void mmix_trap_restart_restore_helper_state(
     env->unsave_restart_active = save_unsave->unsave_restart_active;
 }
 
-static void mmix_trap_restart_pop(CPUMMIXState *env)
+static void mmix_trap_restart_remove(CPUMMIXState *env, uint64_t sequence)
 {
-    GArray *stack = env_archcpu(env)->trap_restart_stack;
-    MMIXTrapRestartState *restart;
+    MMIXTrapRestartState removed = { 0 };
+    CPUState *cs;
+    bool found = false;
 
-    g_assert(stack->len != 0);
-    restart = &g_array_index(stack, MMIXTrapRestartState, stack->len - 1);
-    env->insn_replay = restart->interrupted_replay;
-    g_array_set_size(stack, stack->len - 1);
+    mmix_trap_restart_lock();
+    CPU_FOREACH(cs) {
+        MMIXCPU *cpu;
+        GArray *stack;
+        unsigned int i;
+
+        if (!object_dynamic_cast(OBJECT(cs), TYPE_MMIX_CPU)) {
+            continue;
+        }
+        cpu = MMIX_CPU(cs);
+        stack = cpu->trap_restart_stack;
+        for (i = 0; i < stack->len; i++) {
+            MMIXTrapRestartState *restart = &g_array_index(
+                stack, MMIXTrapRestartState, i);
+
+            if (restart->sequence != sequence) {
+                continue;
+            }
+            removed = *restart;
+            restart->save_unsave = NULL;
+            g_array_remove_index(stack, i);
+            found = true;
+            break;
+        }
+        if (found) {
+            break;
+        }
+    }
+    mmix_trap_restart_unlock();
+    g_assert(found);
+    env->insn_replay = removed.interrupted_replay;
+    g_free(removed.save_unsave);
 }
 
 void helper_mmix_consume_insn_replay(CPUMMIXState *env)
 {
-    bool owns_trap_restart = env->insn_replay.owns_trap_restart;
+    uint64_t sequence = env->insn_replay.trap_restart_sequence;
 
     g_assert(env->insn_replay.active);
     env->insn_replay.active = false;
-    if (owns_trap_restart) {
+    if (sequence != 0) {
         /* Restore any replay suspended by a nested trap at consumption. */
-        mmix_trap_restart_pop(env);
+        mmix_trap_restart_remove(env, sequence);
     }
 }
 
@@ -181,7 +234,8 @@ static void mmix_cpu_enter_trap(CPUState *cs, hwaddr handler, uint64_t where,
     CPUMMIXState *env = cpu_env(cs);
 
     mmix_trap_restart_push(env,
-                           cs->exception_index == EXCP_MMIX_FORCED_TRANSLATION);
+                           cs->exception_index == EXCP_MMIX_FORCED_TRANSLATION,
+                           where, exec, y);
     env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
     env->sregs[MMIX_SREG_RWW] = where;
     env->sregs[MMIX_SREG_RXX] = exec;
@@ -194,19 +248,136 @@ static void mmix_cpu_enter_trap(CPUState *cs, hwaddr handler, uint64_t where,
     cs->exception_index = -1;
 }
 
-static bool mmix_resume_translation_access(uint32_t insn,
-                                           MMUAccessType pending_access,
-                                           MMUAccessType *access_type)
+static MMUAccessType mmix_resume_translation_access(uint32_t insn)
 {
     if (insn == MMIX_SWYM_INSN) {
-        *access_type = MMU_INST_FETCH;
-    } else if (pending_access == MMU_DATA_LOAD ||
-               pending_access == MMU_DATA_STORE) {
-        *access_type = pending_access;
-    } else {
-        return false;
+        return MMU_INST_FETCH;
     }
-    return *access_type == pending_access;
+
+    return MMU_DATA_LOAD;
+}
+
+static bool mmix_trap_restart_matches(
+    const MMIXTrapRestartState *restart, uint64_t where, uint64_t exec,
+    uint64_t y)
+{
+    return restart->trap_where == where && restart->trap_exec == exec &&
+           restart->trap_y == y;
+}
+
+static bool mmix_trap_restart_select(CPUMMIXState *env, uint64_t where,
+                                     uint64_t exec, uint64_t y,
+                                     bool forced_translation,
+                                     MMUAccessType access_type, bool remove,
+                                     MMIXTrapRestartState *result)
+{
+    CPUState *cs;
+    uint64_t rv = env->sregs[MMIX_SREG_RV];
+    MMIXCPU *selected_cpu = NULL;
+    unsigned int selected_index = 0;
+    uint64_t selected_sequence = 0;
+
+    mmix_trap_restart_lock();
+    CPU_FOREACH(cs) {
+        MMIXCPU *cpu;
+        GArray *stack;
+        unsigned int i;
+
+        if (!object_dynamic_cast(OBJECT(cs), TYPE_MMIX_CPU)) {
+            continue;
+        }
+        cpu = MMIX_CPU(cs);
+        stack = cpu->trap_restart_stack;
+        for (i = stack->len; i > 0; i--) {
+            MMIXTrapRestartState *restart = &g_array_index(
+                stack, MMIXTrapRestartState, i - 1);
+
+            if (!mmix_trap_restart_matches(restart, where, exec, y) ||
+                restart->forced_translation != forced_translation ||
+                (forced_translation && restart->trap_rv != rv) ||
+                (forced_translation &&
+                 (access_type == MMU_INST_FETCH) !=
+                 (restart->forced_translation_access == MMU_INST_FETCH)) ||
+                restart->sequence <= selected_sequence) {
+                continue;
+            }
+            selected_cpu = cpu;
+            selected_index = i - 1;
+            selected_sequence = restart->sequence;
+        }
+    }
+    if (selected_cpu != NULL) {
+        MMIXTrapRestartState *restart = &g_array_index(
+            selected_cpu->trap_restart_stack, MMIXTrapRestartState,
+            selected_index);
+
+        *result = *restart;
+        if (remove) {
+            restart->save_unsave = NULL;
+            g_array_remove_index(selected_cpu->trap_restart_stack,
+                                 selected_index);
+        }
+    }
+    mmix_trap_restart_unlock();
+    return selected_cpu != NULL;
+}
+
+static bool mmix_trap_restart_find(CPUMMIXState *env, uint64_t where,
+                                   uint64_t exec, uint64_t y,
+                                   MMUAccessType access_type,
+                                   MMIXTrapRestartState *result)
+{
+    return mmix_trap_restart_select(env, where, exec, y, false,
+                                    access_type, false, result);
+}
+
+static bool mmix_trap_restart_find_current(CPUMMIXState *env,
+                                           uint64_t where,
+                                           MMIXTrapRestartState *result)
+{
+    GArray *stack = env_archcpu(env)->trap_restart_stack;
+    unsigned int i;
+    bool found = false;
+
+    mmix_trap_restart_lock();
+    for (i = stack->len; i > 0; i--) {
+        MMIXTrapRestartState *restart = &g_array_index(
+            stack, MMIXTrapRestartState, i - 1);
+
+        if (restart->forced_translation || restart->trap_where != where) {
+            continue;
+        }
+        *result = *restart;
+        found = true;
+        break;
+    }
+    mmix_trap_restart_unlock();
+    return found;
+}
+
+static bool mmix_trap_restart_take(CPUMMIXState *env, uint64_t where,
+                                   uint64_t exec, uint64_t y,
+                                   bool forced_translation,
+                                   MMUAccessType access_type,
+                                   MMIXTrapRestartState *result)
+{
+    return mmix_trap_restart_select(env, where, exec, y,
+                                    forced_translation, access_type, true,
+                                    result);
+}
+
+static void mmix_trap_restart_finish(CPUMMIXState *env,
+                                     MMIXTrapRestartState *restart,
+                                     bool detached)
+{
+    if (!detached) {
+        mmix_trap_restart_remove(env, restart->sequence);
+        return;
+    }
+
+    env->insn_replay = restart->interrupted_replay;
+    g_free(restart->save_unsave);
+    restart->save_unsave = NULL;
 }
 
 static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
@@ -302,7 +473,8 @@ void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
     uint64_t handler = env->sregs[MMIX_SREG_RT];
 
     mmix_commit_replay_before_synchronous_trap(env);
-    mmix_trap_restart_push(env, false);
+    mmix_trap_restart_push(env, false, env->npc,
+                           0x8000000000000000ULL | insn, y);
     env->sregs[MMIX_SREG_RWW] = env->npc;
     env->sregs[MMIX_SREG_RXX] = 0x8000000000000000ULL | insn;
     env->sregs[MMIX_SREG_RYY] = y;
@@ -373,26 +545,14 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     uint8_t ropcode = 0;
     uint32_t insn;
     MMUAccessType translation_access = MMU_DATA_LOAD;
-    MMIXTrapRestartState *restart = NULL;
-    MMIXTrapRestartState untracked_restart;
+    MMIXTrapRestartState *restart;
+    MMIXTrapRestartState untracked_restart = { 0 };
+    MMIXTrapRestartState matched_restart = { 0 };
+    MMIXTrapRestartState detached_restart = { 0 };
     bool tracked_restart = false;
+    bool restart_detached = false;
 
-    if (trap_state) {
-        restart = mmix_trap_restart_top(env);
-        tracked_restart = restart != NULL;
-        if (restart == NULL) {
-            untracked_restart = (MMIXTrapRestartState) {
-                .stack_access = env->stack_access,
-                .forced_translation_insn = env->forced_translation_insn,
-                .forced_translation_address =
-                    env->forced_translation_address,
-                .forced_translation_where = env->forced_translation_where,
-                .forced_translation_access = env->forced_translation_access,
-                .forced_translation = true,
-            };
-            restart = &untracked_restart;
-        }
-    }
+    restart = &untracked_restart;
 
     if (trap_state) {
         where = env->sregs[MMIX_SREG_RWW];
@@ -406,6 +566,18 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         z = env->sregs[MMIX_SREG_RZ];
     }
 
+    if (trap_state && (int64_t)exec < 0) {
+        if (mmix_trap_restart_take(env, where, exec, y, false,
+                                   MMU_DATA_LOAD, &detached_restart)) {
+            restart = &detached_restart;
+            tracked_restart = true;
+            restart_detached = true;
+        } else {
+            restart = &untracked_restart;
+            tracked_restart = false;
+        }
+    }
+
     if ((int64_t)exec >= 0) {
         ropcode = exec >> 56;
         if (ropcode > 3 || (ropcode == 3 && !trap_state)) {
@@ -413,9 +585,18 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
         }
+        if (trap_state && ropcode != 3) {
+            if (mmix_trap_restart_find_current(env, where,
+                                               &matched_restart) ||
+                mmix_trap_restart_find(env, where, exec, y,
+                                       MMU_DATA_LOAD, &matched_restart)) {
+                restart = &matched_restart;
+                tracked_restart = true;
+            }
+        }
         if ((ropcode == 0 || ropcode == 1) && trap_state &&
             restart->stack_access.kind == MMIX_STACK_ACCESS_NONE &&
-            ((int64_t)env->pc >= 0 || !tracked_restart)) {
+            (int64_t)env->pc >= 0) {
             mmix_cpu_break_rules_and_continue(
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
@@ -429,27 +610,39 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 mmix_cpu_read_reg(env, resume_z));
         }
         if (ropcode == 3) {
-            bool valid = restart->forced_translation &&
-                         (int64_t)env->pc < 0 &&
-                         (exec & 0xffffffff00000000ULL) ==
-                         MMIX_FORCED_TRANSLATION_EXEC_PREFIX &&
-                         where == restart->forced_translation_where &&
-                         (uint32_t)exec == restart->forced_translation_insn &&
-                         (int64_t)y >= 0 &&
-                         y == restart->forced_translation_address &&
-                         mmix_resume_translation_access(
-                             (uint32_t)exec,
-                             restart->forced_translation_access,
-                             &translation_access);
+            bool valid;
+
+            translation_access = mmix_resume_translation_access(
+                (uint32_t)exec);
+            valid = (int64_t)env->pc < 0 &&
+                    (exec & 0xffffffff00000000ULL) ==
+                    MMIX_FORCED_TRANSLATION_EXEC_PREFIX &&
+                    (int64_t)y >= 0 &&
+                    ((uint32_t)exec >> 24) != MMIX_RESUME_OPCODE;
 
             if (!valid ||
                 (translation_access != MMU_INST_FETCH && where < 4) ||
-                translation_access != restart->forced_translation_access ||
                 !mmix_cpu_install_translation(env, y, z,
                                               translation_access)) {
                 mmix_cpu_break_rules_and_continue(
                     env, resume_insn, mmix_cpu_read_reg(env, 0),
                     mmix_cpu_read_reg(env, resume_z));
+            }
+
+            /*
+             * SAVE/UNSAVE can move an interrupted context to another CPU.
+             * Recover only the partial helper state whose architectural trap
+             * identity and address space match the restored context.
+             */
+            if (mmix_trap_restart_take(
+                    env, where, exec, y, true, translation_access,
+                    &detached_restart)) {
+                restart = &detached_restart;
+                tracked_restart = true;
+                restart_detached = true;
+            } else {
+                restart = &untracked_restart;
+                tracked_restart = false;
             }
         }
     }
@@ -494,7 +687,8 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 env->pc = where - 4;
                 env->npc = where;
                 if (tracked_restart) {
-                    mmix_trap_restart_pop(env);
+                    mmix_trap_restart_finish(env, restart,
+                                             restart_detached);
                 }
                 cpu_loop_exit_noexc(cs);
             }
@@ -516,7 +710,8 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 env->pc = where - 4;
                 env->npc = where;
                 if (tracked_restart) {
-                    mmix_trap_restart_pop(env);
+                    mmix_trap_restart_finish(env, restart,
+                                             restart_detached);
                 }
                 cpu_loop_exit_noexc(cs);
             }
@@ -527,7 +722,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         env->pc = where;
         env->npc = where + 4;
         if (tracked_restart) {
-            mmix_trap_restart_pop(env);
+            mmix_trap_restart_finish(env, restart, restart_detached);
         }
         cpu_loop_exit_noexc(cs);
     }
@@ -545,14 +740,14 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
             env->pc = where - 4;
             env->npc = where;
             if (tracked_restart) {
-                mmix_trap_restart_pop(env);
+                mmix_trap_restart_finish(env, restart, restart_detached);
             }
             mmix_update_ra_events(env, events, insn, y, z);
         }
         env->pc = where;
         env->npc = where + 4;
         if (tracked_restart) {
-            mmix_trap_restart_pop(env);
+            mmix_trap_restart_finish(env, restart, restart_detached);
         }
         cpu_loop_exit_noexc(cs);
     }
@@ -566,7 +761,8 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
             .insn_pc = where - 4,
             .continuation = where,
             .insn = insn,
-            .owns_trap_restart = trap_state,
+            .trap_restart_sequence = tracked_restart ?
+                                     restart->sequence : 0,
             .active = true,
         };
         env->pc = env->insn_replay.insn_pc;
@@ -584,7 +780,8 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
             .y = y,
             .z = z,
             .insn = insn,
-            .owns_trap_restart = trap_state,
+            .trap_restart_sequence = tracked_restart ?
+                                     restart->sequence : 0,
             .substitute_operands = true,
             .active = true,
         };
@@ -599,13 +796,28 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         if (translation_access == MMU_INST_FETCH) {
             env->pc = where;
             env->npc = where + 4;
-        } else {
+            if (tracked_restart) {
+                mmix_trap_restart_finish(env, restart, restart_detached);
+            }
+            cpu_loop_exit_noexc(cs);
+        }
+
+        if (tracked_restart) {
             env->pc = where - 4;
             env->npc = where;
+            mmix_trap_restart_finish(env, restart, restart_detached);
+            cpu_loop_exit_noexc(cs);
         }
-        if (tracked_restart) {
-            mmix_trap_restart_pop(env);
-        }
+
+        env->insn_replay = (MMIXInsnReplayState) {
+            .insn_pc = where - 4,
+            .continuation = where,
+            .insn = insn,
+            .trap_restart_sequence = 0,
+            .active = true,
+        };
+        env->pc = env->insn_replay.insn_pc;
+        env->npc = env->insn_replay.continuation;
         cpu_loop_exit_noexc(cs);
     default:
         g_assert_not_reached();
