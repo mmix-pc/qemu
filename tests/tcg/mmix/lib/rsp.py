@@ -137,6 +137,33 @@ class RSPClient:
                 return self._read_packet()
         raise AssertionError("QEMU rejected the RSP packet three times")
 
+    def read_xfer(self, object_name, annex, *, chunk_size=0x400,
+                  max_size=1 << 20):
+        result = bytearray()
+
+        while True:
+            response = self.request(
+                f"qXfer:{object_name}:read:{annex}:"
+                f"{len(result):x},{chunk_size:x}"
+            )
+            if not response or response[:1] not in (b"l", b"m"):
+                raise AssertionError(
+                    f"invalid qXfer response for {object_name}:{annex}: "
+                    f"{response!r}"
+                )
+            result.extend(response[1:])
+            if len(result) > max_size:
+                raise AssertionError(
+                    f"qXfer response for {object_name}:{annex} exceeds "
+                    f"{max_size} bytes"
+                )
+            if response[:1] == b"l":
+                return bytes(result)
+            if len(response) == 1:
+                raise AssertionError(
+                    f"empty qXfer continuation for {object_name}:{annex}"
+                )
+
     def interrupt(self):
         self._connection.sendall(b"\x03")
         return self._read_packet()
