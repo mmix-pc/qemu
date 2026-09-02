@@ -40,13 +40,10 @@ int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     n -= MMIX_GDB_GENERAL_REGS;
 
     if (n < MMIX_SREGS) {
-        env->sregs[n] = ldq_be_p(mem_buf);
-        return 8;
+        return mmix_cpu_debug_write_sreg(env, n, ldq_be_p(mem_buf)) ? 8 : 0;
     }
     if (n == MMIX_SREGS) {
-        env->pc = ldq_be_p(mem_buf);
-        env->npc = env->pc + 4;
-        return 8;
+        return mmix_cpu_debug_write_pc(env, ldq_be_p(mem_buf)) ? 8 : 0;
     }
 
     return 0;

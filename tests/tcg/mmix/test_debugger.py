@@ -24,6 +24,11 @@ MMIX_GDB_SPECIAL_REGS = (
     "rQ", "rU", "rV", "rG", "rL", "rA", "rF", "rP",
     "rW", "rX", "rY", "rZ", "rWW", "rXX", "rYY", "rZZ",
 )
+MMIX_GDB_DIRECT_SPECIAL_REGS = (
+    "rB", "rD", "rE", "rH", "rJ", "rM", "rR", "rBB",
+    "rC", "rN", "rI", "rT", "rTT", "rU", "rF", "rP",
+    "rW", "rX", "rY", "rZ", "rWW", "rXX", "rYY", "rZZ",
+)
 MMIX_GDB_PC_REG = MMIX_GDB_GENERAL_REGS + len(MMIX_GDB_SPECIAL_REGS)
 MMIX_GDB_REGS = MMIX_GDB_PC_REG + 1
 
@@ -46,6 +51,10 @@ def _write_register(client, number, value):
     encoded = struct.pack(">Q", value).hex()
 
     assert client.request(f"P{number:x}={encoded}") == b"OK"
+
+
+def _special_register_number(name):
+    return MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index(name)
 
 
 def _step(client):
@@ -174,3 +183,104 @@ def test_rsp_general_register_writes_follow_logical_window(qemu, workdir):
         assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_WINDOW_RETURN
         assert _read_register(client, ro) == initial_ro
         assert _read_register(client, 0) == values[0]
+
+
+def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        ro = _special_register_number("rO")
+        rs = _special_register_number("rS")
+        rg = _special_register_number("rG")
+        rl = _special_register_number("rL")
+        ra = _special_register_number("rA")
+        rk = _special_register_number("rK")
+        rq = _special_register_number("rQ")
+        initial_ro = _read_register(client, ro)
+        initial_rs = _read_register(client, rs)
+
+        for index, name in enumerate(MMIX_GDB_DIRECT_SPECIAL_REGS):
+            number = _special_register_number(name)
+            value = 0x4D4D495800000000 | index
+
+            _write_register(client, number, value)
+            assert _read_register(client, number) == value
+
+        _write_register(client, ra, 0x12345)
+        assert _read_register(client, ra) == 0x12345
+        _write_register(client, ra, 1 << 20)
+        assert _read_register(client, ra) == 0x12345
+
+        _write_register(client, rg, 40)
+        assert _read_register(client, rg) == 40
+        _write_register(client, rg, 31)
+        assert _read_register(client, rg) == 40
+        _write_register(client, rg, 32)
+
+        old_r1 = _read_register(client, 1)
+        _write_register(client, rl, 1)
+        assert _read_register(client, rl) == 1
+        _write_register(client, rl, 2)
+        assert _read_register(client, rl) == 2
+        assert _read_register(client, 1) == 0
+        _write_register(client, 1, old_r1)
+        _write_register(client, rl, 33)
+        assert _read_register(client, rl) == 2
+
+        local_values = (0x1011121314151617, 0x2021222324252627)
+        for number, value in enumerate(local_values):
+            _write_register(client, number, value)
+        _write_register(client, ro, initial_ro + 8)
+        assert _read_register(client, ro) == initial_ro + 8
+        for number, value in enumerate(local_values):
+            assert _read_register(client, number) == value
+
+        _write_register(client, ro, initial_ro + 1)
+        assert _read_register(client, ro) == initial_ro + 8
+        _write_register(client, rs, initial_ro + 16)
+        assert _read_register(client, rs) == initial_rs
+        _write_register(client, rs, initial_rs + 8)
+        assert _read_register(client, rs) == initial_rs + 8
+        _write_register(client, rs, initial_rs)
+        _write_register(client, ro, initial_ro)
+
+        _write_register(client, rq, 1 << 8)
+        assert _read_register(client, rq) == 0
+        _write_register(client, rq, 1 << 32)
+        assert _read_register(client, rq) == 1 << 32
+        _write_register(client, rq, 0)
+
+        _write_register(client, rk, 1 << 32)
+        assert _read_register(client, rk) == 1 << 32
+        _write_register(client, rk, 0)
+
+
+def test_rsp_special_register_write_updates_translation_state(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        rv = _special_register_number("rV")
+        value = _read_register(client, rv) ^ (1 << 3)
+
+        _write_register(client, rv, value)
+        assert _read_register(client, rv) == value
+
+
+def test_rsp_pc_write_preserves_instruction_alignment(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_ENTRY + 1)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY
+
+        source = 0x3132333435363738
+        _write_register(client, 2, source)
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_ENTRY + 4)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 4
+        _step(client)
+        assert _read_register(client, 40) == source
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 8

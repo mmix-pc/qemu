@@ -341,6 +341,9 @@ int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *buf, int reg);
 
 uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
+bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg,
+                               uint64_t val);
+bool mmix_cpu_debug_write_pc(CPUMMIXState *env, uint64_t val);
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_is_privileged(CPUMMIXState *env);
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);

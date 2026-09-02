@@ -428,6 +428,147 @@ static void mmix_cpu_put_rg(CPUMMIXState *env, uint64_t val)
     }
 }
 
+static bool mmix_cpu_debug_write_idle(CPUMMIXState *env)
+{
+    /* These continuations contain operands or ring state tied to the CPU. */
+    return env->stack_access.kind == MMIX_STACK_ACCESS_NONE &&
+           env->save_restart.phase == MMIX_SAVE_RESTART_NONE &&
+           !env->unsave_restart_active && !env->insn_replay.active;
+}
+
+static bool mmix_cpu_debug_stack_valid(CPUMMIXState *env, uint64_t ro,
+                                       uint64_t rs, uint64_t rg,
+                                       uint64_t rl)
+{
+    uint64_t depth;
+
+    if ((ro | rs) & (MMIX_OCTA_SIZE - 1) ||
+        rs < env_archcpu(env)->initial_stack || ro < rs ||
+        rg < MMIX_GLOBAL_REG_MIN || rg >= MMIX_REGS || rl > rg) {
+        return false;
+    }
+
+    /* The circular register stack needs one empty slot to distinguish wrap. */
+    depth = (ro - rs) / MMIX_OCTA_SIZE;
+    return depth < env->lring_size && rl < env->lring_size - depth;
+}
+
+static void mmix_cpu_debug_put_ro(CPUMMIXState *env, uint64_t val)
+{
+    uint64_t locals[MMIX_LOCAL_REGS];
+    unsigned rl = mmix_cpu_get_rl(env);
+    unsigned i;
+
+    for (i = 0; i < rl; i++) {
+        locals[i] = env->local_regs[mmix_cpu_local_index(env, i)];
+    }
+    /* Changing rO must not silently change the visible logical registers. */
+    env->sregs[MMIX_SREG_RO] = val;
+    for (i = 0; i < rl; i++) {
+        env->local_regs[mmix_cpu_local_index(env, i)] = locals[i];
+    }
+    mmix_cpu_note_register_stack_rebase(env);
+}
+
+bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg, uint64_t val)
+{
+    uint64_t ro = env->sregs[MMIX_SREG_RO];
+    uint64_t rs = env->sregs[MMIX_SREG_RS];
+    uint64_t rg = env->sregs[MMIX_SREG_RG];
+    uint64_t rl = env->sregs[MMIX_SREG_RL];
+    uint64_t hardware_requests = 0;
+
+    if (reg >= MMIX_SREGS) {
+        return false;
+    }
+    if (env->sregs[reg] == val) {
+        return true;
+    }
+    if (!mmix_cpu_debug_write_idle(env)) {
+        return false;
+    }
+
+    switch (reg) {
+    case MMIX_SREG_RO:
+        ro = val;
+        break;
+    case MMIX_SREG_RS:
+        rs = val;
+        break;
+    case MMIX_SREG_RG:
+        rg = val;
+        break;
+    case MMIX_SREG_RL:
+        rl = val;
+        break;
+    default:
+        break;
+    }
+    if (!mmix_cpu_debug_stack_valid(env, ro, rs, rg, rl)) {
+        return false;
+    }
+
+    switch (reg) {
+    case MMIX_SREG_RO:
+        mmix_cpu_debug_put_ro(env, val);
+        break;
+    case MMIX_SREG_RS:
+        env->sregs[reg] = val;
+        mmix_cpu_note_register_stack_rebase(env);
+        break;
+    case MMIX_SREG_RG:
+        env->sregs[reg] = val;
+        break;
+    case MMIX_SREG_RL:
+        mmix_cpu_grow_rl(env, val, 0);
+        mmix_cpu_put_rl(env, val);
+        break;
+    case MMIX_SREG_RA:
+        if (val & ~MMIX_RA_VALID_MASK) {
+            return false;
+        }
+        env->sregs[reg] = val;
+        break;
+    case MMIX_SREG_RK:
+        mmix_cpu_put_rk(env, val);
+        break;
+    case MMIX_SREG_RQ:
+        /* Hardware request bits are derived from the target's input lines. */
+        if (env->interrupt_controller_level) {
+            hardware_requests |= MMIX_RQ_INTERRUPT_CONTROLLER;
+        }
+        if (env->ipi_level) {
+            hardware_requests |= MMIX_RQ_IPI;
+        }
+        if ((val & MMIX_RQ_HARDWARE_MASK) != hardware_requests) {
+            return false;
+        }
+        env->sregs[reg] = val;
+        env->rq_new_bits = 0;
+        mmix_cpu_update_interrupt(env);
+        break;
+    case MMIX_SREG_RV:
+        mmix_cpu_put_rv(env, val);
+        break;
+    default:
+        env->sregs[reg] = val;
+        break;
+    }
+    return true;
+}
+
+bool mmix_cpu_debug_write_pc(CPUMMIXState *env, uint64_t val)
+{
+    if (env->pc == val) {
+        return true;
+    }
+    if ((val & 3) || !mmix_cpu_debug_write_idle(env)) {
+        return false;
+    }
+    cpu_set_pc(env_cpu(env), val);
+    return true;
+}
+
 static bool mmix_sreg_read_only(uint32_t reg)
 {
     switch (reg) {
