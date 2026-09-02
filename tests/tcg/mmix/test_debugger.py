@@ -135,6 +135,28 @@ def test_rsp_register_description_and_reads(qemu, workdir):
         assert register_data[-8:] == struct.pack(">Q", DEBUGGER_ENTRY)
 
 
+def test_rsp_bulk_register_write_fallback_validates_packet_size(qemu,
+                                                                 workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        registers = client.request("g")
+        r0 = _read_register(client, 0)
+
+        assert client.request(b"G" + registers) == b"OK"
+        assert client.request("g") == registers
+
+        changed_r0 = struct.pack(">Q", r0 ^ 1).hex().encode("ascii")
+        short_packet = changed_r0 + registers[16:-2]
+        assert client.request(b"G" + short_packet) == b"E22"
+        assert _read_register(client, 0) == r0
+
+        long_packet = changed_r0 + registers[16:] + b"00"
+        assert client.request(b"G" + long_packet) == b"E22"
+        assert _read_register(client, 0) == r0
+
+
 def test_rsp_general_register_writes_follow_logical_window(qemu, workdir):
     image = _write_debugger_fixture(workdir)
     values = {

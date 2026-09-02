@@ -125,6 +125,10 @@ struct SysemuCPUOps;
  *                     No more than @gdb_num_core_regs registers can be read.
  * @gdb_write_register: Callback for letting GDB write a register.
  *                     No more than @gdb_num_core_regs registers can be written.
+ * @gdb_write_registers: Optional callback for atomically validating and
+ *                     writing the complete register data from a GDB `G`
+ *                     packet. Returns true on success. On failure, the
+ *                     callback must leave the CPU state unchanged.
  * @gdb_adjust_breakpoint: Callback for adjusting the address of a
  *       breakpoint.  Used by AVR to handle a gdb mis-feature with
  *       its Harvard architecture split code and data.
@@ -169,6 +173,8 @@ struct CPUClass {
     vaddr (*get_pc)(CPUState *cpu);
     int (*gdb_read_register)(CPUState *cpu, GByteArray *buf, int reg);
     int (*gdb_write_register)(CPUState *cpu, uint8_t *buf, int reg);
+    bool (*gdb_write_registers)(CPUState *cpu, const uint8_t *buf,
+                                size_t len);
     vaddr (*gdb_adjust_breakpoint)(CPUState *cpu, vaddr addr);
 
     const char *gdb_core_xml_file;

@@ -1318,45 +1318,81 @@ static void handle_read_mem(GArray *params, void *user_ctx)
     gdb_put_strbuf();
 }
 
-static void handle_write_all_regs(GArray *params, void *user_ctx)
+static size_t gdb_read_all_registers(CPUState *cpu, GByteArray *registers)
 {
     int reg_id;
-    size_t len;
-    uint8_t *registers;
-    int reg_size;
+    size_t len = 0;
 
-    if (!params->len) {
-        return;
+    for (reg_id = 0; reg_id < cpu->gdb_num_g_regs; reg_id++) {
+        len += gdb_read_register(cpu, registers, reg_id);
+        g_assert(len == registers->len);
+    }
+    return len;
+}
+
+static bool gdb_write_all_registers(CPUState *cpu, uint8_t *registers,
+                                    size_t len)
+{
+    int reg_id;
+
+    if (cpu->cc->gdb_write_registers) {
+        return cpu->cc->gdb_write_registers(cpu, registers, len);
     }
 
-    cpu_synchronize_state(gdbserver_state.g_cpu);
-    len = strlen(gdb_get_cmd_param(params, 0)->data) / 2;
-    gdb_hextomem(gdbserver_state.mem_buf, gdb_get_cmd_param(params, 0)->data, len);
-    registers = gdbserver_state.mem_buf->data;
-    for (reg_id = 0;
-         reg_id < gdbserver_state.g_cpu->gdb_num_g_regs && len > 0;
-         reg_id++) {
-        reg_size = gdb_write_register(gdbserver_state.g_cpu, registers, reg_id);
+    for (reg_id = 0; reg_id < cpu->gdb_num_g_regs && len > 0; reg_id++) {
+        int reg_size = gdb_write_register(cpu, registers, reg_id);
+
+        if (reg_size < 0 || reg_size > len) {
+            break;
+        }
         len -= reg_size;
         registers += reg_size;
     }
+
+    /* Preserve the legacy best-effort fallback for existing targets. */
+    return true;
+}
+
+static void handle_write_all_regs(GArray *params, void *user_ctx)
+{
+    CPUState *cpu = gdbserver_state.g_cpu;
+    const char *encoded;
+    size_t encoded_len;
+    size_t expected_len;
+
+    if (params->len != 1) {
+        gdb_put_packet("E22");
+        return;
+    }
+
+    cpu_synchronize_state(cpu);
+    expected_len = gdb_read_all_registers(cpu, gdbserver_state.mem_buf);
+    encoded = gdb_get_cmd_param(params, 0)->data;
+    encoded_len = strlen(encoded);
+    if (encoded_len != expected_len * 2) {
+        gdb_put_packet("E22");
+        return;
+    }
+
+    g_byte_array_set_size(gdbserver_state.mem_buf, 0);
+    gdb_hextomem(gdbserver_state.mem_buf, encoded, expected_len);
+    if (!gdb_write_all_registers(cpu, gdbserver_state.mem_buf->data,
+                                 expected_len)) {
+        gdb_put_packet("E14");
+        return;
+    }
+
     gdb_put_packet("OK");
 }
 
 static void handle_read_all_regs(GArray *params, void *user_ctx)
 {
-    int reg_id;
     size_t len;
 
     cpu_synchronize_state(gdbserver_state.g_cpu);
     g_byte_array_set_size(gdbserver_state.mem_buf, 0);
-    len = 0;
-    for (reg_id = 0; reg_id < gdbserver_state.g_cpu->gdb_num_g_regs; reg_id++) {
-        len += gdb_read_register(gdbserver_state.g_cpu,
-                                 gdbserver_state.mem_buf,
-                                 reg_id);
-        g_assert(len == gdbserver_state.mem_buf->len);
-    }
+    len = gdb_read_all_registers(gdbserver_state.g_cpu,
+                                 gdbserver_state.mem_buf);
 
     gdb_memtohex(gdbserver_state.str_buf, gdbserver_state.mem_buf->data, len);
     gdb_put_strbuf();
@@ -2522,4 +2558,3 @@ void gdb_create_default_process(GDBState *s)
     process->attached = false;
     process->target_xml = NULL;
 }
-
