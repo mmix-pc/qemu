@@ -1448,6 +1448,7 @@ def run_elf_state_test(qemu, workdir, test):
     saved_code = 0x1020304050607080
     saved_bss = 0x8877665544332211
     saved_argument = 0xa5a55a5af0f00f0f
+    saved_argument_end = 0x5a5aa5a50f0ff0f0
     saved_stack = 0x0123456789abcdef
 
     image.write_bytes(test.image)
@@ -1504,18 +1505,22 @@ def run_elf_state_test(qemu, workdir, test):
 
         _qmp_command(process, "cont")
         dump = _wait_for_pc(process, test.idle_pc)
-        argument_base = _hmp_register_value(dump, "r34 =0x")
-        expected_argument = argument_base + 24
+        argument_argv = _hmp_register_value(dump, "r34 =0x")
+        argument_base = argument_argv - 8
+        argument_end = argument_argv + 40
+        expected_argument = argument_argv + 24
         assert _hmp_register_value(dump, "r32 =0x") == test.global_value
         assert _hmp_register_value(dump, "r33 =0x") == 2
         assert _hmp_register_value(dump, "r35 =0x") == 250
         assert _qtest_readq(qtest, test.bss) == 0
-        assert _qtest_readq(qtest, argument_base) == expected_argument
+        assert _qtest_readq(qtest, argument_base) == argument_end
+        assert _qtest_readq(qtest, argument_argv) == expected_argument
         assert _qtest_readq(qtest, stack) == 0
 
         _qtest_writeq(qtest, test.entry, saved_code)
         _qtest_writeq(qtest, test.bss, saved_bss)
-        _qtest_writeq(qtest, argument_base, saved_argument)
+        _qtest_writeq(qtest, argument_base, saved_argument_end)
+        _qtest_writeq(qtest, argument_argv, saved_argument)
         _qtest_writeq(qtest, stack, saved_stack)
         result = _qmp_command(
             process,
@@ -1528,12 +1533,13 @@ def run_elf_state_test(qemu, workdir, test):
         dump = _hmp_register_dump(process, 0)
         assert _hmp_register_value(dump, "pc=0x") == test.entry
         assert _hmp_register_value(dump, "r0  =0x") == 2
-        assert _hmp_register_value(dump, "r1  =0x") == argument_base
+        assert _hmp_register_value(dump, "r1  =0x") == argument_argv
         assert _hmp_register_value(dump, "rG =0x") == 250
         assert _hmp_register_value(dump, "r250=0x") == test.global_value
         assert _qtest_readq(qtest, test.entry) != saved_code
         assert _qtest_readq(qtest, test.bss) == 0
-        assert _qtest_readq(qtest, argument_base) == expected_argument
+        assert _qtest_readq(qtest, argument_base) == argument_end
+        assert _qtest_readq(qtest, argument_argv) == expected_argument
         assert _qtest_readq(qtest, stack) == 0
 
         result = _qmp_command(
@@ -1546,11 +1552,12 @@ def run_elf_state_test(qemu, workdir, test):
         assert _hmp_register_value(dump, "pc=0x") == test.idle_pc, dump
         assert _hmp_register_value(dump, "r32 =0x") == test.global_value
         assert _hmp_register_value(dump, "r33 =0x") == 2
-        assert _hmp_register_value(dump, "r34 =0x") == argument_base
+        assert _hmp_register_value(dump, "r34 =0x") == argument_argv
         assert _hmp_register_value(dump, "r35 =0x") == 250
         assert _qtest_readq(qtest, test.entry) == saved_code
         assert _qtest_readq(qtest, test.bss) == saved_bss
-        assert _qtest_readq(qtest, argument_base) == saved_argument
+        assert _qtest_readq(qtest, argument_base) == saved_argument_end
+        assert _qtest_readq(qtest, argument_argv) == saved_argument
         assert _qtest_readq(qtest, stack) == saved_stack
 
         _qmp_command(process, "quit")

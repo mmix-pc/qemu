@@ -91,6 +91,7 @@ struct MMIXVirtMachineState {
     GBytes *argument_data;
     GBytes *fdt;
     uint64_t argument_base;
+    uint64_t argument_argv;
     uint64_t argument_count;
     MMIXBootMode boot_mode;
     char *pflash_backend_name[MMIX_VIRT_FLASH_BANK_COUNT];
@@ -702,29 +703,36 @@ static bool mmix_virt_copy_arguments(char ***values, uint64_t *count,
                                      uint64_t *size, Error **errp)
 {
     uint64_t argc = semihosting_get_argc();
-    uint64_t pointer_size;
+    uint64_t table_size;
     uint64_t total_size;
     g_auto(GStrv) result = NULL;
     uint64_t i;
 
-    if (uadd64_overflow(argc, 1, &pointer_size) ||
-        umul64_overflow(pointer_size, sizeof(uint64_t), &pointer_size) ||
-        pointer_size > G_MAXSIZE) {
+    if (uadd64_overflow(argc, 2, &table_size) ||
+        umul64_overflow(table_size, sizeof(uint64_t), &table_size) ||
+        table_size > G_MAXSIZE) {
         error_setg(errp, "MMIX ELF argument pointer table is too large");
         return false;
     }
-    total_size = pointer_size;
+    total_size = table_size;
     result = g_new0(char *, argc + 1);
     for (i = 0; i < argc; i++) {
         const char *value = semihosting_get_arg(i);
-        size_t length;
+        uint64_t length;
+        uint64_t aligned_length;
 
         if (!value) {
             error_setg(errp, "MMIX ELF argument #%" PRIu64 " is missing", i);
             return false;
         }
         length = strlen(value) + 1;
-        if (uadd64_overflow(total_size, length, &total_size)) {
+        if (uadd64_overflow(length, sizeof(uint64_t) - 1,
+                            &aligned_length)) {
+            error_setg(errp, "MMIX ELF argument strings are too large");
+            return false;
+        }
+        aligned_length &= ~(uint64_t)(sizeof(uint64_t) - 1);
+        if (uadd64_overflow(total_size, aligned_length, &total_size)) {
             error_setg(errp, "MMIX ELF argument strings are too large");
             return false;
         }
@@ -746,16 +754,18 @@ static GBytes *mmix_virt_build_argument_data(char *const *values,
                                              uint64_t base, Error **errp)
 {
     uint64_t string_offset;
+    uint64_t end;
     uint8_t *data;
     uint64_t i;
 
-    if (uadd64_overflow(count, 1, &string_offset) ||
+    if (uadd64_overflow(count, 2, &string_offset) ||
         umul64_overflow(string_offset, sizeof(uint64_t), &string_offset) ||
-        string_offset > size) {
+        string_offset > size || uadd64_overflow(base, size, &end)) {
         error_setg(errp, "MMIX ELF argument pointer table is invalid");
         return NULL;
     }
     data = g_malloc0(size);
+    stq_be_p(data, end);
     for (i = 0; i < count; i++) {
         size_t length = strlen(values[i]) + 1;
         uint64_t pointer;
@@ -766,9 +776,9 @@ static GBytes *mmix_virt_build_argument_data(char *const *values,
             g_free(data);
             return NULL;
         }
-        stq_be_p(data + i * sizeof(uint64_t), pointer);
+        stq_be_p(data + (i + 1) * sizeof(uint64_t), pointer);
         memcpy(data + string_offset, values[i], length);
-        string_offset += length;
+        string_offset += QEMU_ALIGN_UP(length, sizeof(uint64_t));
     }
     g_assert(string_offset == size);
     return g_bytes_new_take(data, size);
@@ -1045,6 +1055,8 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     vms->argument_base = has_arguments ?
         mmix_boot_plan_reservation(vms->boot_plan,
                                    argument_index)->content.start : 0;
+    vms->argument_argv = has_arguments ?
+        vms->argument_base + sizeof(uint64_t) : 0;
 
     framebuffer = mmix_boot_plan_reservation(
         vms->boot_plan, MMIX_RAM_REQUEST_FRAMEBUFFER);
@@ -1290,7 +1302,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
             CPUMMIXState *env = &MMIX_CPU(vms->cpus[i])->env;
 
             mmix_cpu_write_reg(env, 0, vms->argument_count);
-            mmix_cpu_write_reg(env, 1, vms->argument_base);
+            mmix_cpu_write_reg(env, 1, vms->argument_argv);
         }
     }
 

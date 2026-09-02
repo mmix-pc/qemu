@@ -28,8 +28,11 @@ from .common import (
     R43,
     R44,
     R45,
+    R46,
+    R47,
     R250,
     SR_L,
+    SUBUI,
     SUBU,
     elf64_image,
     elf64_image_with_reg_contents,
@@ -50,6 +53,9 @@ def explicit_arguments_program():
         insn(SUBU, R38, R34, R1),
         insn(SUBU, R39, R35, R34),
         insn(SUBU, R40, R36, R35),
+        insn(SUBUI, R45, R1, 8),
+        insn(LDOU, R46, R45, R250),
+        insn(SUBU, R47, R46, R45),
         insn(LDBUI, R41, R34, 0),
         insn(LDBUI, R42, R34, 4),
         insn(LDBUI, R43, R35, 0),
@@ -61,12 +67,13 @@ def explicit_arguments_program():
         R33: 2,
         R37: 0,
         R38: 32,
-        R39: 5,
-        R40: 4,
+        R39: 8,
+        R40: 8,
         R41: ord("p"),
         R42: 0,
         R43: ord("o"),
         R44: ord("t"),
+        R47: 64,
     }
     return b"".join(program), (len(program) - 1) * 4, regs
 
@@ -85,6 +92,7 @@ def fallback_arguments_program():
         insn(LDBUI, R41, R35, 3),
         insn(LDBUI, R42, R36, 0),
         insn(LDBUI, R43, R36, 3),
+        insn(SUBU, R44, R36, R35),
         halt(),
     ]
     regs = {
@@ -97,6 +105,7 @@ def fallback_arguments_program():
         R41: 0,
         R42: ord("t"),
         R43: 0,
+        R44: 8,
     }
     return b"".join(program), (len(program) - 1) * 4, regs
 
@@ -109,9 +118,19 @@ def empty_argument_program():
         insn(LDOUI, R35, R1, 8),
         insn(SUBU, R36, R34, R1),
         insn(LDBUI, R37, R34, 0),
+        insn(SUBUI, R38, R1, 8),
+        insn(LDOU, R39, R38, R250),
+        insn(SUBU, R40, R39, R38),
         halt(),
     ]
-    regs = {R32: 1, R33: 2, R35: 0, R36: 16, R37: 0}
+    regs = {
+        R32: 1,
+        R33: 2,
+        R35: 0,
+        R36: 16,
+        R37: 0,
+        R40: 32,
+    }
     return b"".join(program), (len(program) - 1) * 4, regs
 
 
@@ -123,9 +142,12 @@ def large_argument_program(length):
         insn(LDBU, R35, R33, R34),
         insn(ADDI, R34, R34, 1),
         insn(LDBU, R36, R33, R34),
+        insn(SUBUI, R37, R1, 8),
+        insn(LDOU, R38, R37, R250),
+        insn(SUBU, R39, R38, R37),
         halt(),
     ]
-    regs = {R32: 1, R35: ord("x"), R36: 0}
+    regs = {R32: 1, R35: ord("x"), R36: 0, R39: 5032}
     return b"".join(program), (len(program) - 1) * 4, regs
 
 
