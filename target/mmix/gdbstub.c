@@ -34,7 +34,7 @@ int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     CPUMMIXState *env = cpu_env(cs);
 
     if (n >= 0 && n < MMIX_GDB_GENERAL_REGS) {
-        env->regs[n] = ldq_be_p(mem_buf);
+        mmix_cpu_write_reg(env, n, ldq_be_p(mem_buf));
         return 8;
     }
     n -= MMIX_GDB_GENERAL_REGS;

@@ -8,7 +8,12 @@ import struct
 import xml.etree.ElementTree as ET
 
 from cases.common import INITIAL_STACK, MMIX_VIRT_BOOTINFO, MMIX_VIRT_MEMMAP
-from cases.debugger import DEBUGGER_ELF_IMAGE, DEBUGGER_ENTRY
+from cases.debugger import (
+    DEBUGGER_ELF_IMAGE,
+    DEBUGGER_ENTRY,
+    DEBUGGER_WINDOW_BODY,
+    DEBUGGER_WINDOW_RETURN,
+)
 from lib.rsp import QEMURSPServer
 
 
@@ -28,6 +33,25 @@ def _write_debugger_fixture(workdir):
 
     image.write_bytes(DEBUGGER_ELF_IMAGE)
     return image
+
+
+def _read_register(client, number):
+    encoded = client.request(f"p{number:x}")
+
+    assert len(encoded) == 16
+    return struct.unpack(">Q", bytes.fromhex(encoded.decode("ascii")))[0]
+
+
+def _write_register(client, number, value):
+    encoded = struct.pack(">Q", value).hex()
+
+    assert client.request(f"P{number:x}={encoded}") == b"OK"
+
+
+def _step(client):
+    stop = client.request("s")
+
+    assert stop.startswith((b"S05", b"T05"))
 
 
 def test_rsp_initial_stop(qemu, workdir):
@@ -100,3 +124,53 @@ def test_rsp_register_description_and_reads(qemu, workdir):
             ">Q", INITIAL_STACK
         )
         assert register_data[-8:] == struct.pack(">Q", DEBUGGER_ENTRY)
+
+
+def test_rsp_general_register_writes_follow_logical_window(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+    values = {
+        0: 0x0102030405060708,
+        2: 0x1112131415161718,
+    }
+    values.update({reg: 0x8000000000000000 | reg for reg in range(224, 256)})
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        ro = MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index("rO")
+        rs = MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index("rS")
+        rg = MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index("rG")
+        rl = MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index("rL")
+        initial_ro = _read_register(client, ro)
+        initial_rs = _read_register(client, rs)
+
+        assert _read_register(client, rl) == 2
+        assert _read_register(client, rg) == 32
+        for number, value in values.items():
+            _write_register(client, number, value)
+            assert _read_register(client, number) == value
+        assert _read_register(client, rl) == 3
+        assert _read_register(client, ro) == initial_ro
+        assert _read_register(client, rs) == initial_rs
+
+        for _ in range(5):
+            _step(client)
+        observed_registers = ((39, 0), (40, 2), (41, 224),
+                              (42, 253), (43, 254))
+        for number, source in observed_registers:
+            assert _read_register(client, number) == values[source]
+
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_WINDOW_BODY
+        assert _read_register(client, ro) != initial_ro
+        assert _read_register(client, rs) == initial_rs
+
+        nested_value = 0x5152535455565758
+        _write_register(client, 0, nested_value)
+        assert _read_register(client, 0) == nested_value
+        _step(client)
+        assert _read_register(client, 44) == nested_value
+
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_WINDOW_RETURN
+        assert _read_register(client, ro) == initial_ro
+        assert _read_register(client, 0) == values[0]

@@ -13,10 +13,22 @@ DEBUGGER_ENTRY = 0x1000
 DEBUGGER_DATA_ADDRESS = 0x1100
 DEBUGGER_STACK_ADDRESS = INITIAL_STACK + 0x100
 DEBUGGER_DATA_VALUE = 0x1122334455667788
+DEBUGGER_WINDOW_CALL = DEBUGGER_ENTRY + 5 * 4
+DEBUGGER_WINDOW_RETURN = DEBUGGER_ENTRY + 6 * 4
+DEBUGGER_WINDOW_BODY = DEBUGGER_ENTRY + 7 * 4
 
 
 def _debugger_elf_image():
     program = b"".join([
+        insn(ADDI, R39, R0, 0),
+        insn(ADDI, R40, R2, 0),
+        insn(ADDI, R41, R224, 0),
+        insn(ADDI, R42, R253, 0),
+        insn(ADDI, R43, R254, 0),
+        branch(PUSHJ, R8, 2),
+        jump(JMP, 3),
+        insn(ADDI, R44, R0, 0),
+        insn(POP, 0, 0, 0),
         *set_octa(R254, DEBUGGER_STACK_ADDRESS),
         *set_octa(R32, DEBUGGER_DATA_ADDRESS),
         insn(LDOU, R33, R32, R0),
