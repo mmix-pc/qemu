@@ -42,6 +42,19 @@ MMIX_GDB_DIRECT_SPECIAL_REGS = (
     "rC", "rN", "rI", "rT", "rTT", "rU", "rF", "rP",
     "rW", "rX", "rY", "rZ", "rWW", "rXX", "rYY", "rZZ",
 )
+MMIX_GDB_GNU_DWARF_SPECIAL_REGS = {
+    "rD": 32,
+    "rE": 33,
+    "rH": 34,
+    "rJ": 35,
+    "rR": 36,
+    "rO": 38,
+}
+MMIX_GDB_GENERIC_ROLES = {
+    "r253": "fp",
+    "r254": "sp",
+    "pc": "pc",
+}
 MMIX_GDB_PC_REG = MMIX_GDB_GENERAL_REGS + len(MMIX_GDB_SPECIAL_REGS)
 MMIX_GDB_REGS = MMIX_GDB_PC_REG + 1
 
@@ -91,6 +104,16 @@ def _special_register_number(name):
     return MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index(name)
 
 
+def _dwarf_register_number(number, name):
+    if number < 224:
+        return number + 48
+    if number < MMIX_GDB_GENERAL_REGS:
+        return number - 224
+    if name == "pc":
+        return 304
+    return MMIX_GDB_GNU_DWARF_SPECIAL_REGS.get(name, number + 16)
+
+
 def _step(client):
     stop = client.request("s")
 
@@ -133,20 +156,25 @@ def test_rsp_register_description_and_reads(qemu, workdir):
             *MMIX_GDB_SPECIAL_REGS,
             "pc",
         ]
+        dwarf_numbers = []
         for number, (register, name) in enumerate(
             zip(registers, expected_names, strict=True)
         ):
+            dwarf_number = _dwarf_register_number(number, name)
+
             assert register.get("name") == name
             assert register.get("regnum") == str(number)
+            assert register.get("dwarf_regnum") == str(dwarf_number)
             assert register.get("bitsize") == "64"
             expected_type = "code_ptr" if name == "pc" else "uint64"
             assert register.get("type") == expected_type
+            assert register.get("generic") == MMIX_GDB_GENERIC_ROLES.get(name)
+            dwarf_numbers.append(dwarf_number)
+
+        assert len(set(dwarf_numbers)) == MMIX_GDB_REGS
 
         assert registers[253].get("altname") == "fp"
-        assert registers[253].get("generic") == "fp"
         assert registers[254].get("altname") == "sp"
-        assert registers[254].get("generic") == "sp"
-        assert registers[MMIX_GDB_PC_REG].get("generic") == "pc"
 
         encoded_registers = server.client.request("g")
         assert len(encoded_registers) == MMIX_GDB_REGS * 16
