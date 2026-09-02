@@ -340,6 +340,8 @@ int mmix_cpu_gdb_read_register(CPUState *cs, GByteArray *buf, int reg);
 int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *buf, int reg);
 bool mmix_cpu_gdb_write_registers(CPUState *cs, const uint8_t *buf,
                                   size_t len);
+int mmix_cpu_gdb_memory_rw_debug(CPUState *cs, vaddr addr, uint8_t *buf,
+                                 size_t len, bool is_write);
 
 uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);

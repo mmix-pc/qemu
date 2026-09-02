@@ -7,11 +7,24 @@
 import struct
 import xml.etree.ElementTree as ET
 
-from cases.common import INITIAL_STACK, MMIX_VIRT_BOOTINFO, MMIX_VIRT_MEMMAP
+from cases.common import (
+    INITIAL_STACK,
+    MMIX_DATA_SEGMENT_BASE,
+    MMIX_DATA_SEGMENT_SIZE,
+    MMIX_VIRT_BOOTINFO,
+    MMIX_VIRT_MEMMAP,
+)
 from cases.debugger import (
     DEBUGGER_ELF_IMAGE,
+    DEBUGGER_DATA_ADDRESS,
+    DEBUGGER_DATA_VALUE,
+    DEBUGGER_DIRECT_JUMP,
     DEBUGGER_ENTRY,
+    DEBUGGER_LOOP,
+    DEBUGGER_NOT_TAKEN_BRANCH,
+    DEBUGGER_TAKEN_BRANCH,
     DEBUGGER_WINDOW_BODY,
+    DEBUGGER_WINDOW_CALL,
     DEBUGGER_WINDOW_RETURN,
 )
 from lib.rsp import QEMURSPServer
@@ -59,6 +72,19 @@ def _set_packet_register(registers, number, value):
 
 def _write_register_packet(client, registers):
     return client.request(b"G" + registers.hex().encode("ascii"))
+
+
+def _read_memory(client, address, size):
+    encoded = client.request(f"m{address:x},{size:x}")
+
+    assert len(encoded) == size * 2
+    return bytes.fromhex(encoded.decode("ascii"))
+
+
+def _write_memory(client, address, data):
+    encoded = data.hex()
+
+    return client.request(f"M{address:x},{len(data):x}:{encoded}")
 
 
 def _special_register_number(name):
@@ -396,3 +422,139 @@ def test_rsp_pc_write_preserves_instruction_alignment(qemu, workdir):
         _step(client)
         assert _read_register(client, 40) == source
         assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 8
+
+
+def test_rsp_memory_access_uses_mmix_virtual_translation(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        code = _read_memory(client, DEBUGGER_ENTRY, 12)
+        code_patch = bytes.fromhex("102030405060")
+
+        assert _write_memory(client, DEBUGGER_ENTRY + 1, code_patch) == b"OK"
+        assert _read_memory(client, DEBUGGER_ENTRY + 1,
+                            len(code_patch)) == code_patch
+        assert _write_memory(client, DEBUGGER_ENTRY, code) == b"OK"
+        assert _read_memory(client, DEBUGGER_ENTRY, len(code)) == code
+
+        stack_address = INITIAL_STACK + 0x88
+        stack_data = bytes.fromhex("112233445566778899")
+        assert _write_memory(client, stack_address, stack_data) == b"OK"
+        assert _read_memory(client, stack_address,
+                            len(stack_data)) == stack_data
+
+        assert _read_memory(client, DEBUGGER_DATA_ADDRESS, 8) == struct.pack(
+            ">Q", DEBUGGER_DATA_VALUE
+        )
+        data_patch = bytes.fromhex("fedcba9876543210")
+        assert _write_memory(client, DEBUGGER_DATA_ADDRESS, data_patch) == b"OK"
+        assert _read_memory(client, DEBUGGER_DATA_ADDRESS, 8) == data_patch
+
+        high_address = MMIX_DATA_SEGMENT_BASE + 0xFFD
+        high_data = bytes(range(1, 18))
+        assert high_address > 0xFFFFFFFF
+        assert _write_memory(client, high_address, high_data) == b"OK"
+        assert _read_memory(client, high_address, len(high_data)) == high_data
+
+
+def test_rsp_memory_write_failures_do_not_modify_accessible_prefix(qemu,
+                                                                    workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        boundary = MMIX_DATA_SEGMENT_BASE + MMIX_DATA_SEGMENT_SIZE
+        prefix_address = boundary - 4
+        original = _read_memory(client, prefix_address, 4)
+        payload = bytes.fromhex("a1a2a3a4b1b2b3b4")
+
+        assert _write_memory(client, prefix_address, payload) == b"E14"
+        assert _read_memory(client, prefix_address, 4) == original
+        assert client.request(f"m{boundary:x},1") == b"E14"
+        assert _write_memory(client, (1 << 64) - 4, payload) == b"E14"
+        assert client.request(
+            f"M{DEBUGGER_DATA_ADDRESS:x},8:00112233"
+        ) == b"E22"
+
+
+def test_rsp_single_step_handles_mmix_control_flow(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_ENTRY)
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 4
+
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_DIRECT_JUMP)
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 36
+
+        _write_register(client, 34, 1)
+        _write_register(client, MMIX_GDB_PC_REG,
+                        DEBUGGER_NOT_TAKEN_BRANCH)
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == (
+            DEBUGGER_NOT_TAKEN_BRANCH + 4
+        )
+
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_TAKEN_BRANCH)
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_LOOP
+
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_WINDOW_CALL)
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_WINDOW_BODY
+        _step(client)
+        _step(client)
+        assert _read_register(client,
+                              MMIX_GDB_PC_REG) == DEBUGGER_WINDOW_RETURN
+
+
+def test_rsp_continue_and_async_interrupt_have_stable_pc(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_LOOP)
+        for _ in range(2):
+            client.resume()
+            stop = client.interrupt()
+            assert stop.startswith(b"T02")
+            assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_LOOP
+
+
+def test_rsp_software_breakpoints_preserve_instructions(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        straight = DEBUGGER_ENTRY + 4
+        original = _read_memory(client, DEBUGGER_ENTRY, 24 * 4)
+
+        assert client.request(f"Z0,{straight:x},4") == b"OK"
+        assert client.request(f"Z0,{straight:x},4") == b"OK"
+        assert _read_memory(client, DEBUGGER_ENTRY, len(original)) == original
+        stop = client.request("c")
+        assert stop.startswith(b"T05")
+        assert _read_register(client, MMIX_GDB_PC_REG) == straight
+
+        assert client.request(f"z0,{straight:x},4") == b"OK"
+        assert client.request(f"z0,{straight:x},4") == b"OK"
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == straight + 4
+
+        _write_register(client, 34, 1)
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_TAKEN_BRANCH)
+        assert client.request(f"Z0,{DEBUGGER_TAKEN_BRANCH:x},4") == b"OK"
+        stop = client.request("c")
+        assert stop.startswith(b"T05")
+        assert _read_register(client,
+                              MMIX_GDB_PC_REG) == DEBUGGER_TAKEN_BRANCH
+        assert client.request(f"z0,{DEBUGGER_TAKEN_BRANCH:x},4") == b"OK"
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_LOOP
+        assert _read_memory(client, DEBUGGER_ENTRY, len(original)) == original

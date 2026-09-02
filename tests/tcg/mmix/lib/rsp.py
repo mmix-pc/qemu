@@ -137,6 +137,17 @@ class RSPClient:
                 return self._read_packet()
         raise AssertionError("QEMU rejected the RSP packet three times")
 
+    def resume(self, payload="c"):
+        if isinstance(payload, str):
+            payload = payload.encode("ascii")
+        frame = self._frame(payload)
+
+        for _ in range(3):
+            self._connection.sendall(frame)
+            if self._read_ack():
+                return
+        raise AssertionError("QEMU rejected the RSP packet three times")
+
     def read_xfer(self, object_name, annex, *, chunk_size=0x400,
                   max_size=1 << 20):
         result = bytearray()

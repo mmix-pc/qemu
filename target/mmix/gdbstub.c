@@ -6,7 +6,9 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "exec/target_page.h"
 #include "gdbstub/helpers.h"
+#include "system/memory.h"
 
 #define MMIX_GDB_GENERAL_REGS MMIX_REGS
 #define MMIX_GDB_REGS (MMIX_REGS + MMIX_SREGS + 1)
@@ -73,4 +75,43 @@ bool mmix_cpu_gdb_write_registers(CPUState *cs, const uint8_t *mem_buf,
     pc = ldq_be_p(mem_buf);
 
     return mmix_cpu_debug_write_registers(env, regs, sregs, pc);
+}
+
+static bool mmix_cpu_gdb_memory_access_valid(CPUState *cs, vaddr addr,
+                                             size_t len, bool is_write)
+{
+    if (len > UINT64_MAX - addr) {
+        return false;
+    }
+
+    while (len > 0) {
+        TranslateForDebugResult translation;
+        uint8_t page_bits;
+        hwaddr page_size;
+        size_t chunk;
+
+        if (!cpu_translate_for_debug(cs, addr, &translation)) {
+            return false;
+        }
+        page_bits = MIN(translation.lg_page_size, TARGET_PAGE_BITS);
+        page_size = 1ULL << page_bits;
+        chunk = MIN((hwaddr)len,
+                    page_size - (translation.physaddr & (page_size - 1)));
+        if (!address_space_access_valid(cs->as, translation.physaddr, chunk,
+                                        is_write, translation.attrs)) {
+            return false;
+        }
+        addr += chunk;
+        len -= chunk;
+    }
+    return true;
+}
+
+int mmix_cpu_gdb_memory_rw_debug(CPUState *cs, vaddr addr, uint8_t *buf,
+                                 size_t len, bool is_write)
+{
+    if (!mmix_cpu_gdb_memory_access_valid(cs, addr, len, is_write)) {
+        return -1;
+    }
+    return cpu_memory_rw_debug(cs, addr, buf, len, is_write);
 }
