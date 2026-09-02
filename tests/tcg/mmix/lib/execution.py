@@ -835,6 +835,23 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
             f"{test.name}: CPU {cpu} made no progress while {description}"
         )
 
+    def wait_at_least(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed while {description}"
+                )
+            if actual >= expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected at least {expected:#x}, got {actual:#x}"
+        )
+
     def intc_enable_address(cpu):
         return (
             test.intc_base + test.intc_context_base +
@@ -911,8 +928,8 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
 
     set_irq(0)
     write(1, test.handler_ack_offset, 2)
-    wait(1, test.handler_done_offset, 2,
-         "completing CPU1's combined shared source")
+    wait_at_least(1, test.handler_done_offset, 2,
+                  "completing CPU1's combined shared source")
     wait(1, test.handler_count_offset, 3,
          "entering CPU1's fixed timer handler")
     wait(1, test.handler_done_offset, 3,
