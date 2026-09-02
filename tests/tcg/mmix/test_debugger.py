@@ -53,6 +53,14 @@ def _write_register(client, number, value):
     assert client.request(f"P{number:x}={encoded}") == b"OK"
 
 
+def _set_packet_register(registers, number, value):
+    struct.pack_into(">Q", registers, number * 8, value)
+
+
+def _write_register_packet(client, registers):
+    return client.request(b"G" + registers.hex().encode("ascii"))
+
+
 def _special_register_number(name):
     return MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index(name)
 
@@ -135,8 +143,7 @@ def test_rsp_register_description_and_reads(qemu, workdir):
         assert register_data[-8:] == struct.pack(">Q", DEBUGGER_ENTRY)
 
 
-def test_rsp_bulk_register_write_fallback_validates_packet_size(qemu,
-                                                                 workdir):
+def test_rsp_bulk_register_write_validates_packet_size(qemu, workdir):
     image = _write_debugger_fixture(workdir)
 
     with QEMURSPServer(qemu, image, workdir) as server:
@@ -155,6 +162,89 @@ def test_rsp_bulk_register_write_fallback_validates_packet_size(qemu,
         long_packet = changed_r0 + registers[16:] + b"00"
         assert client.request(b"G" + long_packet) == b"E22"
         assert _read_register(client, 0) == r0
+
+
+def test_rsp_bulk_register_restore_is_atomic(qemu, workdir):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        original = client.request("g")
+        original_data = bytearray.fromhex(original.decode("ascii"))
+        ro = _special_register_number("rO")
+        rs = _special_register_number("rS")
+        rl = _special_register_number("rL")
+        ra = _special_register_number("rA")
+        rg = _special_register_number("rG")
+        rq = _special_register_number("rQ")
+
+        invalid_packets = []
+
+        invalid_pc = original_data.copy()
+        _set_packet_register(invalid_pc, 0, 0x1112131415161718)
+        _set_packet_register(invalid_pc, MMIX_GDB_PC_REG,
+                             DEBUGGER_ENTRY + 1)
+        invalid_packets.append(invalid_pc)
+
+        invalid_arithmetic = original_data.copy()
+        _set_packet_register(invalid_arithmetic, 0, 0x2122232425262728)
+        _set_packet_register(invalid_arithmetic, ra, 1 << 20)
+        invalid_packets.append(invalid_arithmetic)
+
+        invalid_marginal = original_data.copy()
+        _set_packet_register(invalid_marginal, 2, 0x3132333435363738)
+        invalid_packets.append(invalid_marginal)
+
+        invalid_global_threshold = original_data.copy()
+        _set_packet_register(invalid_global_threshold, 0,
+                             0x4142434445464748)
+        _set_packet_register(invalid_global_threshold, rg, 31)
+        invalid_packets.append(invalid_global_threshold)
+
+        invalid_stack = original_data.copy()
+        _set_packet_register(invalid_stack, 0, 0x5152535455565758)
+        _set_packet_register(invalid_stack, rs,
+                             _read_register(client, ro) + 8)
+        invalid_packets.append(invalid_stack)
+
+        unrestorable_ring = original_data.copy()
+        _set_packet_register(unrestorable_ring, 0, 0x595A5B5C5D5E5F60)
+        _set_packet_register(unrestorable_ring, ro,
+                             _read_register(client, ro) + 8)
+        invalid_packets.append(unrestorable_ring)
+
+        invalid_requests = original_data.copy()
+        _set_packet_register(invalid_requests, 0, 0x6162636465666768)
+        _set_packet_register(invalid_requests, rq, 1 << 8)
+        invalid_packets.append(invalid_requests)
+
+        for registers in invalid_packets:
+            assert _write_register_packet(client, registers) == b"E14"
+            assert client.request("g") == original
+
+        restored = original_data.copy()
+        local_value = 0x7172737475767778
+        global_value = 0x8182838485868788
+        new_stack_base = _read_register(client, ro) + 0x80
+        _set_packet_register(restored, 2, local_value)
+        _set_packet_register(restored, 224, global_value)
+        _set_packet_register(restored, ro, new_stack_base)
+        _set_packet_register(restored, rs, new_stack_base)
+        _set_packet_register(restored, rl, 3)
+        _set_packet_register(restored, MMIX_GDB_PC_REG,
+                             DEBUGGER_ENTRY + 4)
+
+        assert _write_register_packet(client, restored) == b"OK"
+        assert client.request("g") == restored.hex().encode("ascii")
+        assert _read_register(client, 2) == local_value
+        assert _read_register(client, 224) == global_value
+        assert _read_register(client, ro) == new_stack_base
+        assert _read_register(client, rs) == new_stack_base
+        assert _read_register(client, rl) == 3
+
+        _step(client)
+        assert _read_register(client, 40) == local_value
+        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 8
 
 
 def test_rsp_general_register_writes_follow_logical_window(qemu, workdir):

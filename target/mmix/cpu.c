@@ -935,6 +935,7 @@ static void mmix_cpu_class_init(ObjectClass *oc, const void *data)
     cc->sysemu_ops = &mmix_sysemu_ops;
     cc->gdb_read_register = mmix_cpu_gdb_read_register;
     cc->gdb_write_register = mmix_cpu_gdb_write_register;
+    cc->gdb_write_registers = mmix_cpu_gdb_write_registers;
     cc->gdb_core_xml_file = "mmix-core.xml";
     cc->tcg_ops = &mmix_tcg_ops;
 }

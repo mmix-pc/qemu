@@ -338,12 +338,17 @@ hwaddr mmix_cpu_get_phys_addr_debug(CPUState *cs, vaddr addr);
 void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags);
 int mmix_cpu_gdb_read_register(CPUState *cs, GByteArray *buf, int reg);
 int mmix_cpu_gdb_write_register(CPUState *cs, uint8_t *buf, int reg);
+bool mmix_cpu_gdb_write_registers(CPUState *cs, const uint8_t *buf,
+                                  size_t len);
 
 uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
 bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg,
                                uint64_t val);
 bool mmix_cpu_debug_write_pc(CPUMMIXState *env, uint64_t val);
+bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
+                                    const uint64_t *regs,
+                                    const uint64_t *sregs, uint64_t pc);
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_is_privileged(CPUMMIXState *env);
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);

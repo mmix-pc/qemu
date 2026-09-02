@@ -470,13 +470,25 @@ static void mmix_cpu_debug_put_ro(CPUMMIXState *env, uint64_t val)
     mmix_cpu_note_register_stack_rebase(env);
 }
 
+static uint64_t mmix_cpu_debug_hardware_requests(CPUMMIXState *env)
+{
+    uint64_t requests = 0;
+
+    if (env->interrupt_controller_level) {
+        requests |= MMIX_RQ_INTERRUPT_CONTROLLER;
+    }
+    if (env->ipi_level) {
+        requests |= MMIX_RQ_IPI;
+    }
+    return requests;
+}
+
 bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg, uint64_t val)
 {
     uint64_t ro = env->sregs[MMIX_SREG_RO];
     uint64_t rs = env->sregs[MMIX_SREG_RS];
     uint64_t rg = env->sregs[MMIX_SREG_RG];
     uint64_t rl = env->sregs[MMIX_SREG_RL];
-    uint64_t hardware_requests = 0;
 
     if (reg >= MMIX_SREGS) {
         return false;
@@ -534,13 +546,8 @@ bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg, uint64_t val)
         break;
     case MMIX_SREG_RQ:
         /* Hardware request bits are derived from the target's input lines. */
-        if (env->interrupt_controller_level) {
-            hardware_requests |= MMIX_RQ_INTERRUPT_CONTROLLER;
-        }
-        if (env->ipi_level) {
-            hardware_requests |= MMIX_RQ_IPI;
-        }
-        if ((val & MMIX_RQ_HARDWARE_MASK) != hardware_requests) {
+        if ((val & MMIX_RQ_HARDWARE_MASK) !=
+            mmix_cpu_debug_hardware_requests(env)) {
             return false;
         }
         env->sregs[reg] = val;
@@ -566,6 +573,92 @@ bool mmix_cpu_debug_write_pc(CPUMMIXState *env, uint64_t val)
         return false;
     }
     cpu_set_pc(env_cpu(env), val);
+    return true;
+}
+
+bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
+                                    const uint64_t *regs,
+                                    const uint64_t *sregs, uint64_t pc)
+{
+    uint64_t old_ro = env->sregs[MMIX_SREG_RO];
+    uint64_t old_rs = env->sregs[MMIX_SREG_RS];
+    uint64_t ro = sregs[MMIX_SREG_RO];
+    uint64_t rs = sregs[MMIX_SREG_RS];
+    uint64_t rg = sregs[MMIX_SREG_RG];
+    uint64_t rl = sregs[MMIX_SREG_RL];
+    bool stack_rebased = ro != old_ro || rs != old_rs;
+    bool rq_changed;
+    bool rv_changed;
+    bool translation_changed;
+    bool interrupt_changed;
+    unsigned int i;
+
+    if (!mmix_cpu_debug_write_idle(env) || (pc & 3) ||
+        !mmix_cpu_debug_stack_valid(env, ro, rs, rg, rl) ||
+        (sregs[MMIX_SREG_RA] & ~MMIX_RA_VALID_MASK) ||
+        (sregs[MMIX_SREG_RQ] & MMIX_RQ_HARDWARE_MASK) !=
+        mmix_cpu_debug_hardware_requests(env)) {
+        return false;
+    }
+
+    /* A G packet cannot describe older unspilled register-stack frames. */
+    if (stack_rebased && (old_ro != old_rs || ro != rs)) {
+        return false;
+    }
+    for (i = rl; i < rg; i++) {
+        if (regs[i] != 0) {
+            return false;
+        }
+    }
+
+    rq_changed = env->sregs[MMIX_SREG_RQ] != sregs[MMIX_SREG_RQ];
+    rv_changed = env->sregs[MMIX_SREG_RV] != sregs[MMIX_SREG_RV];
+    translation_changed =
+        env->sregs[MMIX_SREG_RK] != sregs[MMIX_SREG_RK] || rv_changed;
+    interrupt_changed =
+        env->sregs[MMIX_SREG_RK] != sregs[MMIX_SREG_RK] ||
+        rq_changed;
+
+    env->sregs[MMIX_SREG_RO] = ro;
+    env->sregs[MMIX_SREG_RS] = rs;
+    env->sregs[MMIX_SREG_RG] = rg;
+    env->sregs[MMIX_SREG_RL] = rl;
+    for (i = 0; i < rl; i++) {
+        env->local_regs[mmix_cpu_local_index(env, i)] = regs[i];
+    }
+    for (i = rg; i < MMIX_REGS; i++) {
+        env->regs[i] = regs[i];
+    }
+    for (i = 0; i < MMIX_SREGS; i++) {
+        switch (i) {
+        case MMIX_SREG_RO:
+        case MMIX_SREG_RS:
+        case MMIX_SREG_RG:
+        case MMIX_SREG_RL:
+            break;
+        default:
+            env->sregs[i] = sregs[i];
+            break;
+        }
+    }
+    env->pc = pc;
+    env->npc = pc + 4;
+
+    if (rq_changed) {
+        env->rq_new_bits = 0;
+    }
+    if (rv_changed) {
+        env->flat_translation = false;
+    }
+    if (stack_rebased) {
+        mmix_cpu_note_register_stack_rebase(env);
+    }
+    if (translation_changed) {
+        mmix_cpu_update_translation_state(env);
+    }
+    if (interrupt_changed) {
+        mmix_cpu_update_interrupt(env);
+    }
     return true;
 }
 
