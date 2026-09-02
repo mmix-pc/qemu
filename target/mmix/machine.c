@@ -104,7 +104,7 @@ const VMStateDescription vmstate_mmix_cpu = {
         VMSTATE_UINT64(env.insn_replay.y, MMIXCPU),
         VMSTATE_UINT64(env.insn_replay.z, MMIXCPU),
         VMSTATE_UINT32(env.insn_replay.insn, MMIXCPU),
-        VMSTATE_BOOL(env.insn_replay.owns_trap_restart, MMIXCPU),
+        VMSTATE_UINT64(env.insn_replay.trap_restart_sequence, MMIXCPU),
         VMSTATE_BOOL(env.insn_replay.substitute_operands, MMIXCPU),
         VMSTATE_BOOL(env.insn_replay.active, MMIXCPU),
         VMSTATE_UINT32(env.forced_translation_insn, MMIXCPU),
