@@ -8,31 +8,36 @@ RETAINED_ASN = 1
 CURRENT_ASN = 2
 RETAINED_OLD_VALUE = 0x1111111111111111
 RETAINED_NEW_VALUE = 0x2222222222222222
+RETAINED_PAGE_TABLE = 0x8000
+RETAINED_OLD_PAGE = 0xa000
+RETAINED_NEW_PAGE = 0xc000
+RETAINED_RV = (VM_RV_ROOT2 - VM_PAGE_TABLE_ROOT2 +
+               RETAINED_PAGE_TABLE)
 
 
 def retained_asn_setup():
     retained_bits = RETAINED_ASN << 3
 
     return [
-        *set_octa(R150, VM_PAGE_TABLE_ROOT2),
+        *set_octa(R150, RETAINED_PAGE_TABLE),
         *set_octa(R151, retained_bits | 7),
         insn(STOU, R151, R150, R250),
-        *set_octa(R151, 0x6000 | retained_bits | 7),
+        *set_octa(R151, RETAINED_OLD_PAGE | retained_bits | 7),
         insn(STOUI, R151, R150, 8),
-        *set_octa(R152, 0x6000),
+        *set_octa(R152, RETAINED_OLD_PAGE),
         *set_octa(R153, RETAINED_OLD_VALUE),
         insn(STOU, R153, R152, R250),
-        *set_octa(R154, 0x8000),
+        *set_octa(R154, RETAINED_NEW_PAGE),
         *set_octa(R155, RETAINED_NEW_VALUE),
         insn(STOU, R155, R154, R250),
-        *set_octa(R156, VM_RV_ROOT2 | retained_bits),
+        *set_octa(R156, RETAINED_RV | retained_bits),
         insn(PUT, SR_V, 0, R156),
         wyde(SETL, R157, 0x2000),
         insn(LDOU, R166, R157, R250),
         wyde(SETL, R158, 0x2000 | retained_bits),
         wyde(SETL, R159, 0x4000 | retained_bits),
-        *set_octa(R149, 0x8000000000004008),
-        *set_octa(R148, 0x8000 | retained_bits | 7),
+        *set_octa(R149, (1 << 63) | RETAINED_PAGE_TABLE | 8),
+        *set_octa(R148, RETAINED_NEW_PAGE | retained_bits | 7),
         insn(STOU, R148, R149, R250),
     ]
 
@@ -499,7 +504,7 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
         wyde(SETL, R241, current_bits | 7),
         insn(STOU, R241, R240, R250),
         *set_octa(R238, VM_STACK_PTP_ADDRESS),
-        *set_octa(R239, VM_STACK_PTP),
+        *set_octa(R239, VM_STACK_PTP | current_bits),
         insn(STOU, R239, R238, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_read_only),
@@ -882,7 +887,7 @@ def nested_save_unsave_restart_program(outer_save_fault):
     nested_handler = 0x1100
     count_address = (1 << 63) | 0x1800
     page_table = VM_PAGE_TABLE
-    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    stack_pte = VM_STACK_PTE
     physical_page_table = (1 << 63) | page_table
     physical_stack_pte = (1 << 63) | stack_pte
     stack_page_rwx = INITIAL_STACK | 7
@@ -907,12 +912,15 @@ def nested_save_unsave_restart_program(outer_save_fault):
         *set_octa(R240, physical_page_table),
         wyde(SETL, R241, 7),
         insn(STOU, R241, R240, R250),
+        *set_octa(R237, (1 << 63) | VM_STACK_PTP_ADDRESS),
+        *set_octa(R238, VM_STACK_PTP),
+        insn(STOU, R238, R237, R250),
         *set_octa(R242, physical_stack_pte),
         *set_octa(R243, stack_page_rwx),
         insn(STOU, R243, R242, R250),
-        wyde(SETML, R235, 1),
-        *set_octa(R245, VM_RV_PAGE0),
-        *set_octa(R246, VM_RV_SOFTWARE),
+        *set_octa(R235, INITIAL_STACK),
+        *set_octa(R245, VM_RV_STACK),
+        *set_octa(R246, VM_RV_STACK | 1),
         *set_octa(R247, (1 << 63) | handler),
         insn(PUT, SR_T, 0, R247),
         wyde(SETL, R0, 0x11),
@@ -958,11 +966,11 @@ def nested_save_unsave_restart_program(outer_save_fault):
 def nested_fill_save_unsave_program(depth=40):
     main_address = 0x200
     subroutine = 0x800
-    handler = 0x4000
-    nested_handler = 0x4100
-    count_address = (1 << 63) | 0x5000
+    handler = 0x8000
+    nested_handler = 0x8100
+    count_address = (1 << 63) | 0x9000
     page_table = VM_PAGE_TABLE
-    stack_pte = page_table + (INITIAL_STACK >> 13) * 8
+    stack_pte = VM_STACK_PTE
     image = bytearray()
 
     def place(addr, instructions):
@@ -983,13 +991,16 @@ def nested_fill_save_unsave_program(depth=40):
         *set_octa(R240, (1 << 63) | page_table),
         wyde(SETL, R241, 7),
         insn(STOU, R241, R240, R250),
+        *set_octa(R237, (1 << 63) | VM_STACK_PTP_ADDRESS),
+        *set_octa(R238, VM_STACK_PTP),
+        insn(STOU, R238, R237, R250),
         *set_octa(R242, (1 << 63) | stack_pte),
         *set_octa(R243, INITIAL_STACK | 7),
         insn(STOU, R243, R242, R250),
         *set_octa(R243, (INITIAL_STACK + 0x2000) | 7),
         insn(STOUI, R243, R242, 8),
-        *set_octa(R245, VM_RV_PAGE0),
-        *set_octa(R246, VM_RV_SOFTWARE),
+        *set_octa(R245, VM_RV_STACK),
+        *set_octa(R246, VM_RV_STACK | 1),
         *set_octa(R247, (1 << 63) | handler),
         insn(PUT, SR_T, 0, R247),
         insn(PUT, SR_V, 0, R245),
@@ -1071,7 +1082,7 @@ def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
         wyde(SETL, R241, current_bits | 7),
         insn(STOU, R241, R240, R250),
         *set_octa(R238, VM_STACK_PTP_ADDRESS),
-        *set_octa(R239, VM_STACK_PTP),
+        *set_octa(R239, VM_STACK_PTP | current_bits),
         insn(STOU, R239, R238, R250),
         *set_octa(R242, stack_pte),
         *set_octa(R243, stack_page_write_only),
