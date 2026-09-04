@@ -4,10 +4,12 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import dataclasses
 import json
 import re
 import select
 import socket
+import struct
 import subprocess
 import time
 
@@ -21,17 +23,27 @@ from lib.asserts import (
     assert_regs,
     assert_serial_output,
 )
-from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE
+from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE, mmo_hosted_text_image
 from lib.qemu import (
     QEMU_SEMIHOSTING_ARGS,
     QEMU_SEMIHOSTING_STDIN_ARGS,
     build_kernel_command,
+    build_smp_elf_loader_command,
     read_log,
     run_kernel,
+    run_loader,
 )
 
 
 QEMU_SEMIHOSTING_CONSOLE_CHARDEV = "mmix-semihosting-console"
+
+
+def _as_hosted_mmo(test):
+    if test.program.startswith(bytes((MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE))):
+        return test
+    return dataclasses.replace(
+        test, program=mmo_hosted_text_image(test.program)
+    )
 
 
 def _test_stdin_data(test, stdin_data):
@@ -62,7 +74,7 @@ def _semihosting_config_args(test, *, chardev=None, chardev_id=None):
     return tuple(args)
 
 
-def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
+def _run_one(qemu, workdir, test, runner, *, qemu_args=(), stdin_data=None):
     image = workdir / f"{test.name}.bin"
     log = workdir / f"{test.name}.log"
 
@@ -70,9 +82,9 @@ def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
     if log.exists():
         log.unlink()
 
-    completed = run_kernel(qemu, image, trace="int", log=log,
-                           qemu_args=qemu_args, check=False, timeout=10,
-                           stdin_data=_test_stdin_data(test, stdin_data))
+    completed = runner(qemu, image, trace="int", log=log,
+                       qemu_args=qemu_args, check=False, timeout=10,
+                       stdin_data=_test_stdin_data(test, stdin_data))
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
@@ -80,12 +92,24 @@ def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
     assert_regs(test.name, result, test.regs)
 
 
+def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
+    _run_one(qemu, workdir, test, run_kernel, qemu_args=qemu_args,
+             stdin_data=stdin_data)
+
+
+def run_one_with_loader(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
+    _run_one(qemu, workdir, test, run_loader, qemu_args=qemu_args,
+             stdin_data=stdin_data)
+
+
 def run_semihosting_one(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     qemu_args = _semihosting_config_args(test)
     run_one(qemu, workdir, test, qemu_args=qemu_args)
 
 
 def run_semihosting_stdin_one(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     qemu_args = (
         test.qemu_args if test.qemu_args else QEMU_SEMIHOSTING_STDIN_ARGS
     )
@@ -101,12 +125,26 @@ def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
     if log.exists():
         log.unlink()
 
+    command = build_kernel_command(qemu, image, trace="unimp,int", log=log,
+                                   qemu_args=qemu_args)
+    process = subprocess.Popen(command)
+    deadline = time.monotonic() + 2
+
     try:
-        run_kernel(qemu, image, trace="unimp,int", log=log,
-                   qemu_args=qemu_args,
-                   check=False, timeout=2)
-    except subprocess.TimeoutExpired:
-        pass
+        while process.poll() is None and time.monotonic() < deadline:
+            if log.exists():
+                log_text = log.read_text(encoding="utf-8")
+                if all(pattern in log_text for pattern in test.patterns):
+                    break
+            time.sleep(0.001)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
     if not log.exists():
         raise AssertionError(f"{test.name}: missing log")
@@ -116,19 +154,37 @@ def run_expected_failure(qemu, workdir, test, *, qemu_args=()):
 
 
 def run_semihosting_expected_failure(qemu, workdir, test):
-    run_expected_failure(qemu, workdir, test,
+    run_expected_failure(qemu, workdir, _as_hosted_mmo(test),
                          qemu_args=QEMU_SEMIHOSTING_ARGS)
+
+
+def run_semihosting_disabled_expected_failure(qemu, workdir, test):
+    run_expected_failure(qemu, workdir, _as_hosted_mmo(test))
 
 
 def run_process_failure(qemu, workdir, test):
     image = workdir / f"{test.name}.bin"
+    empty = workdir / f"{test.name}.empty"
+    missing = workdir / f"{test.name}.missing"
+    needs_empty = "$EMPTY" in test.qemu_args
+    needs_missing = "$MISSING" in test.qemu_args
 
     image.write_bytes(test.program)
+    if needs_empty:
+        empty.write_bytes(b"")
+    if needs_missing and missing.exists():
+        missing.unlink()
+    qemu_args = tuple(
+        str(image) if arg == "$IMAGE" else
+        str(empty) if arg == "$EMPTY" else
+        str(missing) if arg == "$MISSING" else arg
+        for arg in test.qemu_args
+    )
 
     result = run_kernel(
         qemu,
         image,
-        qemu_args=test.qemu_args,
+        qemu_args=qemu_args,
         check=False,
         timeout=10,
         capture_output=True,
@@ -174,6 +230,7 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
 
 
 def run_semihosting_console_test(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
                                             MMIX_MMO_LOP_PRE)))
     suffix = ".mmo" if is_mmo else ".bin"
@@ -212,6 +269,7 @@ def run_semihosting_console_test(qemu, workdir, test):
 
 
 def run_semihosting_stdin_console_test(qemu, workdir, test):
+    test = _as_hosted_mmo(test)
     is_mmo = test.program.startswith(bytes((MMIX_MMO_ESCAPE,
                                             MMIX_MMO_LOP_PRE)))
     suffix = ".mmo" if is_mmo else ".bin"
@@ -334,6 +392,44 @@ def _qmp_command(process, command, arguments=None, timeout=5):
     raise AssertionError(f"timed out waiting for QMP {command}")
 
 
+def run_paused_machine(qemu, *, machine="virt", qemu_args=()):
+    command = [
+        str(qemu),
+        "-machine", machine,
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", "none",
+        *qemu_args,
+        "-S",
+        "-qmp", "stdio",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        _qmp_command(process, "quit")
+        _, stderr = process.communicate(timeout=5)
+        if process.returncode != 0:
+            raise AssertionError(
+                "paused QEMU failed: "
+                f"{stderr.decode('utf-8', errors='replace')}"
+            )
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
 def run_mttcg_elf_test(qemu, workdir, test):
     image = workdir / f"{test.name}.elf"
     log = workdir / f"{test.name}.log"
@@ -388,6 +484,570 @@ def run_mttcg_elf_test(qemu, workdir, test):
     assert_regs(test.name, result, test.regs)
 
 
+def run_no_image_mttcg_test(qemu):
+    command = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", "2",
+        "-accel", "tcg,thread=multi",
+        "-display", "none",
+        "-serial", "none",
+        "-S",
+        "-qmp", "stdio",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        thread_ids = [cpu["thread-id"] for cpu in cpus]
+        if len(cpus) != 2 or len(set(thread_ids)) != 2:
+            raise AssertionError(
+                f"expected two independent MTTCG vCPUs, got {thread_ids}"
+            )
+
+        stacks = [
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(2)
+        ]
+        if stacks[0] == stacks[1] or any(stack % 0x2000 for stack in stacks):
+            raise AssertionError(f"invalid per-CPU initial stacks {stacks}")
+        for cpu in range(2):
+            dump = _hmp_register_dump(process, cpu)
+            if _hmp_register_value(dump, "pc=0x") != 0:
+                raise AssertionError(f"CPU {cpu} did not reset at PC zero")
+            if _hmp_register_value(dump, "rO =0x") != stacks[cpu]:
+                raise AssertionError(f"CPU {cpu} rO does not match its stack")
+            if _hmp_register_value(dump, "rS =0x") != stacks[cpu]:
+                raise AssertionError(f"CPU {cpu} rS does not match its stack")
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
+def _hmp_special_registers(dump):
+    return {
+        name: int(value, 16)
+        for name, value in re.findall(
+            r"\b(r[A-Z]{1,2})\s*=0x([0-9a-fA-F]+)", dump
+        )
+    }
+
+
+def _hmp_general_registers(dump):
+    return {
+        int(reg): int(value, 16)
+        for reg, value in re.findall(
+            r"\br(\d+)\s*=0x([0-9a-fA-F]+)", dump
+        )
+    }
+
+
+def run_firmware_entry_state_test(qemu, bios, cpu_count):
+    command = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", str(cpu_count),
+        "-accel", "tcg,thread=multi",
+        "-bios", str(bios),
+        "-display", "none",
+        "-serial", "none",
+        "-S",
+        "-qmp", "stdio",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        if len(cpus) != cpu_count:
+            raise AssertionError(
+                f"expected {cpu_count} firmware CPUs, got {len(cpus)}"
+            )
+
+        stacks = [
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(cpu_count)
+        ]
+        if len(set(stacks)) != cpu_count or any(
+            stack % 0x2000 for stack in stacks
+        ):
+            raise AssertionError(
+                f"invalid per-CPU firmware stacks {stacks}"
+            )
+
+        special_defaults = {
+            "rG": 32,
+            "rL": 1,
+            "rT": 0x8000000500000000,
+            "rTT": 0x8000000600000000,
+            "rV": 0x369C200400000000,
+        }
+        for cpu, stack in enumerate(stacks):
+            dump = _hmp_register_dump(process, cpu)
+            if _hmp_register_value(dump, "pc=0x") != 0x8001000000000000:
+                raise AssertionError(f"CPU {cpu} firmware PC mismatch")
+            if _hmp_register_value(dump, "npc=0x") != 0x8001000000000004:
+                raise AssertionError(f"CPU {cpu} firmware npc mismatch")
+
+            regs = _hmp_general_registers(dump)
+            expected_regs = {reg: 0 for reg in range(256)}
+            expected_regs[0] = cpu
+            if regs != expected_regs:
+                raise AssertionError(
+                    f"CPU {cpu} firmware general-register mismatch"
+                )
+
+            sregs = _hmp_special_registers(dump)
+            expected_sregs = {
+                name: 0
+                for name in (
+                    "rB rD rE rH rJ rM rR rBB rC rN rO rS rI rT rTT "
+                    "rK rQ rU rV rG rL rA rF rP rW rX rY rZ rWW rXX "
+                    "rYY rZZ"
+                ).split()
+            }
+            expected_sregs.update(special_defaults)
+            expected_sregs["rO"] = stack
+            expected_sregs["rS"] = stack
+            if sregs != expected_sregs:
+                raise AssertionError(
+                    f"CPU {cpu} firmware special-register mismatch"
+                )
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
+def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
+    reset_pc = 0x8001000000000000
+    flash0 = 0x0001000000000000
+    flash1 = 0x0001000004000000
+    fw_cfg = 0x0001000014000000
+    timer_context = 0x0001000020010000
+    ipi = 0x0001000024000000
+    ipi_context1 = ipi + 0x20000
+    ram_marker = 0x10000
+    fdt_copy = 0x20000
+    stack_values = (
+        bytes.fromhex("1122334455667788"),
+        bytes.fromhex("99aabbccddeeff00"),
+    )
+    ram_value = bytes.fromhex("0123456789abcdef")
+    kernel_data = b"firmware snapshot kernel\n"
+    initrd_data = b"firmware snapshot initrd\n"
+    command_line = "console=ttyS0 firmware-state"
+    bios = workdir / "firmware-reset-snapshot.bin"
+    kernel = workdir / "firmware-reset-snapshot-kernel.bin"
+    initrd = workdir / "firmware-reset-snapshot-initrd.bin"
+    snapshot = workdir / "firmware-reset-snapshot.qcow2"
+    qtest_path = workdir / "firmware-reset-snapshot.sock"
+    qemu_img = qemu.with_name("qemu-img")
+
+    bios.write_bytes(firmware)
+    kernel.write_bytes(kernel_data)
+    initrd.write_bytes(initrd_data)
+    for path in (snapshot, qtest_path):
+        if path.exists():
+            path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot, "1M"),
+        check=True,
+        timeout=10,
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    command = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", "2",
+        "-accel", "tcg,thread=multi",
+        "-bios", str(bios),
+        "-kernel", str(kernel),
+        "-initrd", str(initrd),
+        "-append", command_line,
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", "none",
+        "-S",
+        "-qmp", "stdio",
+        "-qtest", f"unix:{qtest_path}",
+        "-qtest-log", "/dev/null",
+        "-drive", f"file={snapshot},format=qcow2,if=none",
+    ]
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+
+        def readb(address):
+            response = _qtest_command(qtest, f"readb {address:#x}")
+            return int(response[1], 0)
+
+        def writeb(address, value):
+            _qtest_command(qtest, f"writeb {address:#x} {value:#x}")
+
+        def select_fw_cfg(selector):
+            _qtest_command(qtest, f"writew {fw_cfg + 8:#x} {selector:#x}")
+
+        def read_fw_cfg(size):
+            return bytes(readb(fw_cfg) for _ in range(size))
+
+        def fw_cfg_files():
+            select_fw_cfg(0x19)
+            count = int.from_bytes(read_fw_cfg(4), "big")
+            files = {}
+            for _ in range(count):
+                entry = read_fw_cfg(64)
+                size = int.from_bytes(entry[0:4], "big")
+                selector = int.from_bytes(entry[4:6], "big")
+                name = entry[8:].split(b"\0", 1)[0].decode("ascii")
+                files[name] = (selector, size)
+            return files
+
+        def read_fw_cfg_file(files, name):
+            selector, size = files[name]
+            select_fw_cfg(selector)
+            return read_fw_cfg(size)
+
+        def program_flash1(value):
+            writeb(flash1, 0x40)
+            writeb(flash1, value)
+            writeb(flash1, 0xff)
+
+        stacks = tuple(
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(2)
+        )
+        assert len(set(stacks)) == 2
+        files = fw_cfg_files()
+        fdt = read_fw_cfg_file(files, "etc/fdt")
+        assert read_fw_cfg_file(files, "opt/mmix/kernel") == kernel_data
+        assert read_fw_cfg_file(files, "opt/mmix/initrd") == initrd_data
+        assert read_fw_cfg_file(files, "opt/mmix/cmdline") == (
+            command_line.encode("ascii") + b"\0"
+        )
+
+        original_bios = _qtest_read(qtest, flash0, len(firmware))
+        assert original_bios == firmware
+        program_flash1(0xa5)
+        _qtest_write(qtest, ram_marker, ram_value)
+        _qtest_write(qtest, fdt_copy, fdt)
+        for stack, value in zip(stacks, stack_values):
+            _qtest_write(qtest, stack, value)
+        _qtest_writeq(qtest, ipi + 8, 0x2)
+        _qtest_writeq(qtest, timer_context, (1 << 64) - 1)
+        _qtest_writeq(qtest, timer_context + 8, 0x3)
+
+        bios.write_bytes(bytes(len(firmware)))
+        kernel.write_bytes(b"changed kernel\n")
+        initrd.write_bytes(b"changed initrd\n")
+        _qmp_command(process, "system_reset")
+
+        assert _qtest_read(qtest, flash0, len(firmware)) == original_bios
+        assert readb(flash1) == 0xa5
+        assert _qtest_read(qtest, ram_marker, len(ram_value)) == ram_value
+        assert _qtest_read(qtest, fdt_copy, len(fdt)) == fdt
+        for cpu, stack in enumerate(stacks):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == reset_pc
+            assert _hmp_register_value(dump, "npc=0x") == reset_pc + 4
+            assert _hmp_register_value(dump, "r0  =0x") == cpu
+            assert _hmp_register_value(dump, "r32 =0x") == 0
+            assert _hmp_register_value(dump, "rO=0x") == stack
+            assert _hmp_register_value(dump, "rS=0x") == stack
+            assert _qtest_read(qtest, stack, 8) == bytes(8)
+        assert _qtest_readq(qtest, ipi_context1) == 0
+        assert _qtest_readq(qtest, timer_context) == 0
+        assert _qtest_readq(qtest, timer_context + 8) == 0
+        assert _qtest_readq(qtest, timer_context + 0x10) == 0
+        assert read_fw_cfg_file(fw_cfg_files(), "opt/mmix/kernel") == kernel_data
+        assert read_fw_cfg_file(fw_cfg_files(), "opt/mmix/initrd") == initrd_data
+
+        _qmp_command(process, "cont")
+        dumps = _wait_for_cpu_pcs(process, (reset_pc + 4, reset_pc + 4))
+        for cpu, dump in enumerate(dumps):
+            assert _hmp_register_value(dump, "r32 =0x") == 0x40 + cpu
+        for stack, value in zip(stacks, stack_values):
+            _qtest_write(qtest, stack, value)
+        program_flash1(0xa0)
+        _qtest_writeq(qtest, ipi + 8, 0x2)
+        _qtest_writeq(qtest, timer_context, (1 << 64) - 1)
+        _qtest_writeq(qtest, timer_context + 8, 0x3)
+        select_fw_cfg(0)
+        assert read_fw_cfg(2) == b"QE"
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "savevm firmware-state"},
+        )
+        assert not result, result
+
+        _qtest_write(qtest, ram_marker, bytes(len(ram_value)))
+        _qtest_write(qtest, fdt_copy, bytes(len(fdt)))
+        for stack in stacks:
+            _qtest_write(qtest, stack, bytes(8))
+        program_flash1(0x80)
+        _qtest_writeq(qtest, ipi_context1 + 8, 1)
+        _qtest_writeq(qtest, timer_context + 8, 0)
+        select_fw_cfg(1)
+        read_fw_cfg(1)
+        _qmp_command(process, "system_reset")
+
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "loadvm firmware-state"},
+        )
+        assert not result, result
+        for cpu, stack in enumerate(stacks):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == reset_pc + 4
+            assert _hmp_register_value(dump, "r32 =0x") == 0x40 + cpu
+            assert _qtest_read(qtest, stack, 8) == stack_values[cpu]
+        assert _qtest_read(qtest, flash0, len(firmware)) == original_bios
+        assert readb(flash1) == 0xa0
+        assert _qtest_read(qtest, ram_marker, len(ram_value)) == ram_value
+        assert _qtest_read(qtest, fdt_copy, len(fdt)) == fdt
+        assert _qtest_readq(qtest, ipi_context1) == 1
+        assert _qtest_readq(qtest, timer_context) == (1 << 64) - 1
+        assert _qtest_readq(qtest, timer_context + 8) == 0x3
+        assert read_fw_cfg(1) == b"M"
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (bios, kernel, initrd, snapshot, qtest_path):
+            if path.exists():
+                path.unlink()
+
+
+def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
+                              cpu_count, memory, initrd=False,
+                              command_line=None):
+    fdt_address = 0x00100000
+    kernel_address = 0x00200000
+    record_address = 0x00300000
+    release_address = 0x00008000
+    success_address = 0x00300800
+    success_value = 0x4d4d495846574f4b
+    serial = workdir / f"firmware-handoff-{cpu_count}-{memory}.serial"
+    qtest_path = workdir / f"firmware-handoff-{cpu_count}-{memory}.sock"
+    initrd_path = workdir / f"firmware-handoff-{cpu_count}-{memory}.initrd"
+
+    for path in (serial, qtest_path, initrd_path):
+        if path.exists():
+            path.unlink()
+    args = [
+        str(qemu),
+        "-machine", "virt",
+        "-smp", str(cpu_count),
+        "-m", memory,
+        "-accel", "tcg,thread=multi",
+        "-bios", str(firmware),
+        "-kernel", str(kernel),
+        "-display", "none",
+        "-monitor", "none",
+        "-serial", f"file:{serial}",
+        "-S",
+        "-qmp", "stdio",
+        "-qtest", f"unix:{qtest_path}",
+        "-qtest-log", "/dev/null",
+    ]
+    if initrd:
+        initrd_path.write_bytes(b"MMIX firmware initrd fixture\n")
+        args.extend(("-initrd", str(initrd_path)))
+    if command_line is not None:
+        args.extend(("-append", command_line))
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    process = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        _qmp_command(process, "cont")
+
+        deadline = time.monotonic() + 10
+        while _qtest_readq(qtest, success_address) != success_value:
+            if process.poll() is not None:
+                raise AssertionError("QEMU exited before firmware handoff")
+            if time.monotonic() >= deadline:
+                raise AssertionError("timed out waiting for firmware handoff")
+            time.sleep(0.01)
+        _qmp_command(process, "stop")
+
+        def select_fw_cfg(selector):
+            _qtest_command(qtest,
+                           f"writew {0x0001000014000008:#x} {selector:#x}")
+
+        def read_fw_cfg(size):
+            return bytes(
+                int(_qtest_command(
+                    qtest, f"readb {0x0001000014000000:#x}"
+                )[1], 0)
+                for _ in range(size)
+            )
+
+        select_fw_cfg(0x19)
+        count = int.from_bytes(read_fw_cfg(4), "big")
+        files = {}
+        for _ in range(count):
+            entry = read_fw_cfg(64)
+            name = entry[8:].split(b"\0", 1)[0].decode("ascii")
+            files[name] = (
+                int.from_bytes(entry[4:6], "big"),
+                int.from_bytes(entry[0:4], "big"),
+            )
+        fdt_selector, fdt_size = files["etc/fdt"]
+        select_fw_cfg(fdt_selector)
+        fdt = read_fw_cfg(fdt_size)
+
+        assert _qtest_read(qtest, fdt_address, fdt_size) == fdt
+        assert _qtest_read(qtest, kernel_address,
+                           kernel.stat().st_size) == kernel.read_bytes()
+        assert _qtest_readq(qtest, release_address) == fdt_address
+        stacks = []
+        for cpu in range(cpu_count):
+            record = record_address + cpu * 32
+            assert _qtest_readq(qtest, record) == cpu
+            assert _qtest_readq(qtest, record + 8) == fdt_address
+            assert _qtest_readq(qtest, record + 16) == 2
+            stack = _qtest_readq(qtest, record + 24)
+            assert stack != 0
+            stacks.append(stack)
+        assert len(set(stacks)) == cpu_count
+        assert serial.read_bytes() == b"MMIX firmware handoff\n"
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (qtest_path, initrd_path):
+            if path.exists():
+                path.unlink()
+
+
+def run_firmware_no_kernel_test(qemu, workdir, firmware, cpu_count):
+    serial = workdir / f"firmware-no-kernel-{cpu_count}.serial"
+
+    if serial.exists():
+        serial.unlink()
+    try:
+        subprocess.run(
+            [
+                qemu,
+                "-machine", "virt",
+                "-smp", str(cpu_count),
+                "-bios", firmware,
+                "-display", "none",
+                "-monitor", "none",
+                "-serial", f"file:{serial}",
+            ],
+            check=False,
+            timeout=0.25,
+        )
+        raise AssertionError("firmware without a kernel unexpectedly exited")
+    except subprocess.TimeoutExpired:
+        pass
+    assert serial.read_bytes() == b""
+
+
 def _qmp_start_paused(qemu, image, test):
     command = build_kernel_command(
         qemu,
@@ -420,6 +1080,501 @@ def _hmp_register_value(dump, label):
     if match is None:
         raise AssertionError(f"missing {label!r} in register dump")
     return int(match.group(1), 16)
+
+
+def run_linux_entry_state_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+
+    image.write_bytes(test.image)
+    qemu_args = tuple(
+        str(image) if arg == "$IMAGE" else arg for arg in test.qemu_args
+    )
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(*qemu_args, "-S", "-qmp", "stdio"),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    try:
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        cpus = _qmp_command(process, "query-cpus-fast")
+        if len(cpus) != test.cpu_count:
+            raise AssertionError(
+                f"{test.name}: expected {test.cpu_count} CPUs, got {len(cpus)}"
+            )
+
+        fdt = None
+        stacks = []
+        for cpu in range(test.cpu_count):
+            stack = _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            dump = _hmp_register_dump(process, cpu)
+            cpu_fdt = _hmp_register_value(dump, "r1  =0x")
+
+            if _hmp_register_value(dump, "pc=0x") != test.entry:
+                raise AssertionError(f"{test.name}: CPU {cpu} entry mismatch")
+            if _hmp_register_value(dump, "r0  =0x") != cpu:
+                raise AssertionError(f"{test.name}: CPU {cpu} ID mismatch")
+            if _hmp_register_value(dump, "rL=") != 2:
+                raise AssertionError(f"{test.name}: CPU {cpu} rL mismatch")
+            ro = _hmp_register_value(dump, "rO=0x")
+            rs = _hmp_register_value(dump, "rS=0x")
+            if ro != stack or rs != stack:
+                raise AssertionError(f"{test.name}: CPU {cpu} stack mismatch")
+            rk = _hmp_register_value(dump, "rK =0x")
+            rq = _hmp_register_value(dump, "rQ =0x")
+            if rk != 0 or rq != 0:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} interrupts are not masked"
+                )
+            if fdt is None:
+                fdt = cpu_fdt
+            elif cpu_fdt != fdt:
+                raise AssertionError(f"{test.name}: CPU FDT pointers differ")
+            stacks.append(stack)
+
+        if fdt is None or fdt == 0 or fdt < test.minimum_fdt or fdt % 8:
+            raise AssertionError(f"{test.name}: invalid FDT pointer {fdt!r}")
+        if len(set(stacks)) != test.cpu_count:
+            raise AssertionError(f"{test.name}: bootstrap stacks overlap")
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+
+
+def run_linux_smp_entry_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    log = workdir / f"{test.name}.log"
+
+    image.write_bytes(test.image)
+    if log.exists():
+        log.unlink()
+    completed = run_kernel(
+        qemu,
+        image,
+        trace="int",
+        log=log,
+        qemu_args=test.qemu_args,
+        check=False,
+        timeout=10,
+    )
+    result = read_log(log)
+    assert_exit_pc(test.name, result, test.success_pc)
+    assert_exit_status(test.name, completed, 0)
+
+    regs = result.regs
+    expected = {32: 0, 46: 1, 50: 1, 52: 0x1000, 55: 1, 56: 1}
+    assert_regs(test.name, result, expected)
+    if regs[33] == 0 or regs[33] % 8 or regs[33] != regs[51]:
+        raise AssertionError(f"{test.name}: invalid common FDT pointer")
+    if regs[34] != regs[35] or regs[53] != regs[54]:
+        raise AssertionError(f"{test.name}: invalid CPU stack pair")
+    if regs[34] == regs[53]:
+        raise AssertionError(f"{test.name}: CPUs share bootstrap stacks")
+
+
+def _qtest_readq(qtest, address):
+    response = _qtest_command(qtest, f"readq {address:#x}")
+    return int(response[1], 0)
+
+
+def _qtest_writeq(qtest, address, value):
+    _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+
+
+def _qtest_read(qtest, address, size):
+    response = _qtest_command(qtest, f"read {address:#x} {size:#x}")
+    return bytes.fromhex(response[1][2:])
+
+
+def _qtest_write(qtest, address, data):
+    _qtest_command(
+        qtest, f"write {address:#x} {len(data):#x} 0x{data.hex()}"
+    )
+
+
+def _fdt_property(fdt, node_path, property_name):
+    header = struct.unpack_from(">10I", fdt)
+    structure_offset = header[2]
+    strings_offset = header[3]
+    strings_size = header[8]
+    strings = fdt[strings_offset:strings_offset + strings_size]
+    offset = structure_offset
+    nodes = []
+
+    while offset + 4 <= len(fdt):
+        token = struct.unpack_from(">I", fdt, offset)[0]
+        offset += 4
+        if token == 1:
+            end = fdt.index(0, offset)
+            nodes.append(fdt[offset:end].decode("ascii"))
+            offset = (end + 4) & ~3
+        elif token == 2:
+            nodes.pop()
+        elif token == 3:
+            size, name_offset = struct.unpack_from(">II", fdt, offset)
+            offset += 8
+            end = strings.index(0, name_offset)
+            name = strings[name_offset:end].decode("ascii")
+            value = fdt[offset:offset + size]
+            offset = (offset + size + 3) & ~3
+            path = "/" + "/".join(filter(None, nodes))
+            if path == node_path and name == property_name:
+                return value
+        elif token == 4:
+            continue
+        elif token == 9:
+            break
+        else:
+            raise AssertionError(f"invalid FDT token {token}")
+    raise AssertionError(f"missing FDT property {node_path}:{property_name}")
+
+
+def _wait_for_cpu_pcs(process, expected):
+    deadline = time.monotonic() + 5
+
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+        _qmp_command(process, "stop")
+        dumps = [_hmp_register_dump(process, cpu)
+                 for cpu in range(len(expected))]
+        if all(_hmp_register_value(dump, "pc=0x") == pc
+               for dump, pc in zip(dumps, expected)):
+            return dumps
+        _qmp_command(process, "cont")
+    raise AssertionError("CPUs did not reach their expected PCs")
+
+
+def run_linux_state_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    initrd = workdir / f"{test.name}.initrd"
+    snapshot = workdir / f"{test.name}.qcow2"
+    qtest_path = workdir / f"{test.name}.sock"
+    qemu_img = qemu.with_name("qemu-img")
+    saved_code = bytes.fromhex("1020304050607080")
+    saved_bss = bytes.fromhex("8877665544332211")
+    saved_fdt = bytes.fromhex("a5a55a5af0f00f0f")
+    saved_initrd = bytes.fromhex("0123456789abcdef")
+    saved_stacks = (
+        bytes.fromhex("1122334455667788"),
+        bytes.fromhex("99aabbccddeeff00"),
+    )
+
+    image.write_bytes(test.image)
+    initrd.write_bytes(test.initrd)
+    for path in (snapshot, qtest_path):
+        if path.exists():
+            path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot, "1M"),
+        check=True,
+        timeout=10,
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    qemu_args = tuple(
+        str(initrd) if arg == "$INITRD" else arg for arg in test.qemu_args
+    )
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(
+            *qemu_args,
+            "-S",
+            "-qmp", "stdio",
+            "-qtest", f"unix:{qtest_path}",
+            "-qtest-log", "/dev/null",
+            "-drive", f"file={snapshot},format=qcow2,if=none",
+        ),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+
+        stacks = tuple(
+            _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": f"/machine/cpu[{cpu}]",
+                    "property": "initial-stack",
+                },
+            )
+            for cpu in range(2)
+        )
+        dump = _hmp_register_dump(process, 0)
+        fdt_address = _hmp_register_value(dump, "r1  =0x")
+        fdt_header = _qtest_read(qtest, fdt_address, 8)
+        fdt_size = struct.unpack_from(">I", fdt_header, 4)[0]
+        original_fdt = _qtest_read(qtest, fdt_address, fdt_size)
+        initrd_address = struct.unpack(
+            ">Q", _fdt_property(original_fdt, "/chosen",
+                                 "linux,initrd-start")
+        )[0]
+        original_code = _qtest_read(qtest, test.entry, len(saved_code))
+        original_initrd = _qtest_read(qtest, initrd_address,
+                                      len(test.initrd))
+        assert original_initrd == test.initrd
+        assert _qtest_read(qtest, test.bss, len(saved_bss)) == bytes(8)
+        for stack in stacks:
+            assert _qtest_read(qtest, stack, 8) == bytes(8)
+
+        _qmp_command(process, "cont")
+        saved_dumps = _wait_for_cpu_pcs(process, test.idle_pcs)
+        for cpu, dump in enumerate(saved_dumps):
+            assert _hmp_register_value(dump, "r32 =0x") == cpu
+            assert _hmp_register_value(dump, "r33 =0x") == 0x40 + cpu
+
+        _qtest_write(qtest, test.entry, saved_code)
+        _qtest_write(qtest, test.bss, saved_bss)
+        _qtest_write(qtest, fdt_address + 16, saved_fdt)
+        _qtest_write(qtest, initrd_address, saved_initrd)
+        for stack, value in zip(stacks, saved_stacks):
+            _qtest_write(qtest, stack, value)
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "savevm linux-loader-state"},
+        )
+        assert not result, result
+
+        _qmp_command(process, "system_reset")
+        for cpu in range(2):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == test.entry
+            assert _hmp_register_value(dump, "r0  =0x") == cpu
+            assert _hmp_register_value(dump, "r1  =0x") == fdt_address
+            assert _hmp_register_value(dump, "rO=0x") == stacks[cpu]
+            assert _hmp_register_value(dump, "rS=0x") == stacks[cpu]
+        assert _qtest_read(qtest, test.entry, 8) == original_code
+        assert _qtest_read(qtest, test.bss, 8) == bytes(8)
+        assert _qtest_read(qtest, fdt_address, fdt_size) == original_fdt
+        assert _qtest_read(qtest, initrd_address,
+                           len(test.initrd)) == original_initrd
+        for stack in stacks:
+            assert _qtest_read(qtest, stack, 8) == bytes(8)
+
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "loadvm linux-loader-state"},
+        )
+        assert not result, result
+        for cpu, expected_pc in enumerate(test.idle_pcs):
+            dump = _hmp_register_dump(process, cpu)
+            assert _hmp_register_value(dump, "pc=0x") == expected_pc
+            assert _hmp_register_value(dump, "r32 =0x") == cpu
+            assert _hmp_register_value(dump, "r33 =0x") == 0x40 + cpu
+            assert _hmp_register_value(dump, "r1  =0x") == fdt_address
+        assert _qtest_read(qtest, test.entry, 8) == saved_code
+        assert _qtest_read(qtest, test.bss, 8) == saved_bss
+        assert _qtest_read(qtest, fdt_address + 16, 8) == saved_fdt
+        assert _qtest_read(qtest, initrd_address, 8) == saved_initrd
+        for stack, value in zip(stacks, saved_stacks):
+            assert _qtest_read(qtest, stack, 8) == value
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (snapshot, qtest_path):
+            if path.exists():
+                path.unlink()
+
+
+def _wait_for_pc(process, expected):
+    deadline = time.monotonic() + 5
+
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+        _qmp_command(process, "stop")
+        dump = _hmp_register_dump(process, 0)
+        if _hmp_register_value(dump, "pc=0x") == expected:
+            return dump
+        _qmp_command(process, "cont")
+    raise AssertionError(f"CPU did not reach PC 0x{expected:x}")
+
+
+def run_elf_state_test(qemu, workdir, test):
+    image = workdir / f"{test.name}.elf"
+    snapshot = workdir / f"{test.name}.qcow2"
+    qtest_path = workdir / f"{test.name}.sock"
+    qemu_img = qemu.with_name("qemu-img")
+    saved_code = 0x1020304050607080
+    saved_bss = 0x8877665544332211
+    saved_argument = 0xa5a55a5af0f00f0f
+    saved_argument_end = 0x5a5aa5a50f0ff0f0
+    saved_stack = 0x0123456789abcdef
+
+    image.write_bytes(test.image)
+    for path in (snapshot, qtest_path):
+        if path.exists():
+            path.unlink()
+    subprocess.run(
+        (qemu_img, "create", "-q", "-f", "qcow2", snapshot, "1M"),
+        check=True,
+        timeout=10,
+    )
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(qtest_path))
+    listener.listen(1)
+    listener.settimeout(5)
+    command = build_kernel_command(
+        qemu,
+        image,
+        qemu_args=(
+            *test.qemu_args,
+            "-S",
+            "-qmp",
+            "stdio",
+            "-qtest",
+            f"unix:{qtest_path}",
+            "-qtest-log",
+            "/dev/null",
+            "-drive",
+            f"file={snapshot},format=qcow2,if=none",
+        ),
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    connection = None
+    try:
+        connection, _ = listener.accept()
+        connection.settimeout(5)
+        qtest = connection.makefile("rwb", buffering=0)
+        greeting = _read_qmp_message(process)
+        if "QMP" not in greeting:
+            raise AssertionError(f"invalid QMP greeting: {greeting}")
+        _qmp_command(process, "qmp_capabilities")
+        stack = _qmp_command(
+            process,
+            "qom-get",
+            {"path": "/machine/cpu[0]", "property": "initial-stack"},
+        )
+
+        _qmp_command(process, "cont")
+        dump = _wait_for_pc(process, test.idle_pc)
+        argument_argv = _hmp_register_value(dump, "r34 =0x")
+        argument_base = argument_argv - 8
+        argument_end = argument_argv + 40
+        expected_argument = argument_argv + 24
+        assert _hmp_register_value(dump, "r32 =0x") == test.global_value
+        assert _hmp_register_value(dump, "r33 =0x") == 2
+        assert _hmp_register_value(dump, "r35 =0x") == 250
+        assert _qtest_readq(qtest, test.bss) == 0
+        assert _qtest_readq(qtest, argument_base) == argument_end
+        assert _qtest_readq(qtest, argument_argv) == expected_argument
+        assert _qtest_readq(qtest, stack) == 0
+
+        _qtest_writeq(qtest, test.entry, saved_code)
+        _qtest_writeq(qtest, test.bss, saved_bss)
+        _qtest_writeq(qtest, argument_base, saved_argument_end)
+        _qtest_writeq(qtest, argument_argv, saved_argument)
+        _qtest_writeq(qtest, stack, saved_stack)
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "savevm loader-state"},
+        )
+        assert not result, result
+
+        _qmp_command(process, "system_reset")
+        dump = _hmp_register_dump(process, 0)
+        assert _hmp_register_value(dump, "pc=0x") == test.entry
+        assert _hmp_register_value(dump, "r0  =0x") == 2
+        assert _hmp_register_value(dump, "r1  =0x") == argument_argv
+        assert _hmp_register_value(dump, "rG =0x") == 250
+        assert _hmp_register_value(dump, "r250=0x") == test.global_value
+        assert _qtest_readq(qtest, test.entry) != saved_code
+        assert _qtest_readq(qtest, test.bss) == 0
+        assert _qtest_readq(qtest, argument_base) == argument_end
+        assert _qtest_readq(qtest, argument_argv) == expected_argument
+        assert _qtest_readq(qtest, stack) == 0
+
+        result = _qmp_command(
+            process,
+            "human-monitor-command",
+            {"command-line": "loadvm loader-state"},
+        )
+        assert not result, result
+        dump = _hmp_register_dump(process, 0)
+        assert _hmp_register_value(dump, "pc=0x") == test.idle_pc, dump
+        assert _hmp_register_value(dump, "r32 =0x") == test.global_value
+        assert _hmp_register_value(dump, "r33 =0x") == 2
+        assert _hmp_register_value(dump, "r34 =0x") == argument_argv
+        assert _hmp_register_value(dump, "r35 =0x") == 250
+        assert _qtest_readq(qtest, test.entry) == saved_code
+        assert _qtest_readq(qtest, test.bss) == saved_bss
+        assert _qtest_readq(qtest, argument_base) == saved_argument_end
+        assert _qtest_readq(qtest, argument_argv) == saved_argument
+        assert _qtest_readq(qtest, stack) == saved_stack
+
+        _qmp_command(process, "quit")
+        process.communicate(timeout=5)
+    except BaseException:
+        process.kill()
+        _, stderr = process.communicate()
+        if stderr:
+            print(stderr.decode("utf-8", errors="replace"))
+        raise
+    finally:
+        if connection is not None:
+            connection.close()
+        listener.close()
+        for path in (snapshot, qtest_path):
+            if path.exists():
+                path.unlink()
 
 
 def run_mttcg_reset_test(qemu, workdir, test):
@@ -615,7 +1770,6 @@ def _run_smp_interrupt_protocol(qtest, test):
 
     snapshots = []
     for cpu, expected_count in enumerate((2, 3)):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         snapshot = {
             "rWW": read(cpu, test.rww_offset),
             "rXX": read(cpu, test.rxx_offset),
@@ -635,10 +1789,10 @@ def _run_smp_interrupt_protocol(qtest, test):
         assert snapshot["rXX"] & test.dynamic_trap_resume_next
         assert read(cpu, test.handler_rq_offset) & test.interrupt_request
         assert snapshot["rBB"] == test.sentinels[cpu]
-        assert snapshot["rO"] == expected_stack
-        assert snapshot["rS"] == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert snapshot["rO"] == snapshot["rS"]
+        assert snapshot["rO"] % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == snapshot["rO"]
+        assert read(cpu, test.rs_final_offset) == snapshot["rS"]
         assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
         assert read(cpu, test.rk_final_offset) == test.interrupt_request
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -747,7 +1901,6 @@ def _run_smp_timer_protocol(qtest, test):
 
     snapshots = []
     for cpu in range(test.cpu_count):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         snapshot = {
             "rWW": read(cpu, test.rww_offset),
             "rXX": read(cpu, test.rxx_offset),
@@ -767,10 +1920,10 @@ def _run_smp_timer_protocol(qtest, test):
         assert snapshot["rXX"] & test.dynamic_trap_resume_next
         assert read(cpu, test.handler_rq_offset) & test.interrupt_request
         assert snapshot["rBB"] == test.sentinels[cpu]
-        assert snapshot["rO"] == expected_stack
-        assert snapshot["rS"] == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert snapshot["rO"] == snapshot["rS"]
+        assert snapshot["rO"] % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == snapshot["rO"]
+        assert read(cpu, test.rs_final_offset) == snapshot["rS"]
         assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
         assert read(cpu, test.rk_final_offset) == test.interrupt_request
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -822,6 +1975,23 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
         raise AssertionError(
             f"{test.name}: CPU {cpu} timed out while {description}; "
             f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    def wait_at_least(cpu, offset, expected, description):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            stage = read(cpu, test.stage_offset)
+            if stage == test.stage_failure:
+                raise AssertionError(
+                    f"{test.name}: CPU {cpu} failed while {description}"
+                )
+            if actual >= expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected at least {expected:#x}, got {actual:#x}"
         )
 
     def wait_for_progress(cpu, previous, description):
@@ -898,7 +2068,11 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
          "resuming CPU0 after shared-source retrigger")
 
     cpu0_timer_mask = 1 << test.timer_irq_base
-    write_mmio(intc_enable_address(0), cpu0_timer_mask, width="l")
+    write_mmio(intc_enable_address(0), cpu0_timer_mask)
+    write_mmio(
+        intc_enable_address(1),
+        (1 << test.shared_irq) | (1 << (test.timer_irq_base + 1)),
+    )
     set_irq(1)
     wait(1, test.handler_count_offset, 1,
          "retargeting the shared source to CPU1")
@@ -940,7 +2114,6 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
 
     snapshots = []
     for cpu in range(test.cpu_count):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         snapshot = {
             "rWW": read(cpu, test.rww_offset),
             "rXX": read(cpu, test.rxx_offset),
@@ -962,10 +2135,10 @@ def _run_smp_shared_interrupt_protocol(qtest, test):
         assert snapshot["rXX"] & test.dynamic_trap_resume_next
         assert read(cpu, test.handler_rq_offset) & test.interrupt_request
         assert snapshot["rBB"] == test.sentinels[cpu]
-        assert snapshot["rO"] == expected_stack
-        assert snapshot["rS"] == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        assert snapshot["rO"] == snapshot["rS"]
+        assert snapshot["rO"] % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == snapshot["rO"]
+        assert read(cpu, test.rs_final_offset) == snapshot["rS"]
         assert read(cpu, test.rq_final_offset) & test.interrupt_request == 0
         assert read(cpu, test.rk_final_offset) == test.interrupt_request
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -1167,8 +2340,8 @@ def _run_smp_ipi_protocol(qtest, test):
         command(cpu, test.command_finalize, test.stage_final,
                 f"recording CPU{cpu} final state")
 
+    stacks = []
     for cpu in range(test.cpu_count):
-        expected_stack = test.initial_stack + cpu * test.initial_stack_slot_size
         expected_handlers = ipi_counts[cpu] + extra_handlers[cpu]
 
         assert read(cpu, test.handler_count_offset) == expected_handlers
@@ -1186,10 +2359,12 @@ def _run_smp_ipi_protocol(qtest, test):
         assert read(cpu, test.ryy_offset) == 0
         assert read(cpu, test.rzz_offset) == 0
         assert read(cpu, test.rbb_offset) == test.sentinels[cpu]
-        assert read(cpu, test.ro_entry_offset) == expected_stack
-        assert read(cpu, test.rs_entry_offset) == expected_stack
-        assert read(cpu, test.ro_final_offset) == expected_stack
-        assert read(cpu, test.rs_final_offset) == expected_stack
+        stack = read(cpu, test.ro_entry_offset)
+        stacks.append(stack)
+        assert stack == read(cpu, test.rs_entry_offset)
+        assert stack % 0x2000 == 0
+        assert read(cpu, test.ro_final_offset) == stack
+        assert read(cpu, test.rs_final_offset) == stack
         assert read(cpu, test.rq_final_offset) & test.request_mask == 0
         assert read(cpu, test.rk_final_offset) == test.request_mask
         assert read(cpu, test.sentinel_final_offset) == test.sentinels[cpu]
@@ -1197,6 +2372,8 @@ def _run_smp_ipi_protocol(qtest, test):
         assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
         assert read_mmio(ipi_status_address(cpu)) == 0
         assert read_mmio(timer_status_address(cpu)) == 0
+
+    assert len(set(stacks)) == test.cpu_count
 
     write(0, test.command_offset, test.command_halt)
 
@@ -1314,7 +2491,9 @@ def _run_smp_shootdown_protocol(qtest, test):
     write(test.halt_offset, 1)
 
 
-def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
+def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
+                          *, use_loader=False, publish_initial_stack=False,
+                          validate_initial_stacks=False):
     image = workdir / f"{test.name}.elf"
     qtest_path = workdir / socket_name
 
@@ -1326,20 +2505,23 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
     listener.bind(str(qtest_path))
     listener.listen(1)
     listener.settimeout(5)
-    command = build_kernel_command(
-        qemu,
-        image,
-        qemu_args=(
-            *test.qemu_args,
-            "-S",
-            "-qmp",
-            "stdio",
-            "-qtest",
-            f"unix:{qtest_path}",
-            "-qtest-log",
-            "/dev/null",
-        ),
+    qemu_args = (
+        *test.qemu_args,
+        "-S",
+        "-qmp",
+        "stdio",
+        "-qtest",
+        f"unix:{qtest_path}",
+        "-qtest-log",
+        "/dev/null",
     )
+    if use_loader:
+        command = build_smp_elf_loader_command(
+            qemu, image, test.main_start, trace="int",
+            log=workdir / f"{test.name}.log", qemu_args=qemu_args,
+        )
+    else:
+        command = build_kernel_command(qemu, image, qemu_args=qemu_args)
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -1367,6 +2549,34 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
             raise AssertionError(
                 f"{test.name}: vCPUs share host thread ids {thread_ids}"
             )
+        if publish_initial_stack:
+            stack = _qmp_command(
+                process,
+                "qom-get",
+                {
+                    "path": "/machine/cpu[0]",
+                    "property": "initial-stack",
+                },
+            )
+            _qtest_command(
+                qtest, f"writeq {test.cpu_id_stack_phys:#x} {stack:#x}"
+            )
+        if validate_initial_stacks:
+            for cpu in test.cpu_ids:
+                stack = _qmp_command(
+                    process,
+                    "qom-get",
+                    {
+                        "path": f"/machine/cpu[{cpu}]",
+                        "property": "initial-stack",
+                    },
+                )
+                expected = test.initial_stack - cpu * test.initial_stack_slot_size
+                if stack != expected:
+                    raise AssertionError(
+                        f"{test.name}: CPU {cpu} initial stack is "
+                        f"{stack:#x}, expected {expected:#x}"
+                    )
         _qmp_command(process, "cont")
         protocol(qtest, test)
         stdout, stderr = process.communicate(timeout=5)
@@ -1392,33 +2602,191 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name):
 def run_mttcg_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_interrupt_protocol,
-        "m45-qtest.sock",
+        "m45-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_timer_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_timer_protocol,
-        "m46-qtest.sock",
+        "m46-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_shared_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shared_interrupt_protocol,
-        "m47-qtest.sock",
+        "m47-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_ipi_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_ipi_protocol,
-        "m48-qtest.sock",
+        "m48-qtest.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_shootdown_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shootdown_protocol,
-        "m49-qtest.sock",
+        "m49-qtest.sock", use_loader=True, publish_initial_stack=True,
+    )
+
+
+def run_l3_mttcg_shared_interrupt_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_l3_shared_interrupt_protocol,
+        "l3-shared-interrupt-qtest.sock", use_loader=True,
+        publish_initial_stack=True,
+    )
+
+
+def _run_l3_shared_interrupt_protocol(qtest, test):
+    def read(cpu, offset):
+        address = test.mailbox_base + cpu * test.mailbox_slot_size + offset
+        response = _qtest_command(qtest, f"readq {address:#x}")
+        return int(response[1], 0)
+
+    def write(cpu, offset, value):
+        address = test.mailbox_base + cpu * test.mailbox_slot_size + offset
+        _qtest_command(qtest, f"writeq {address:#x} {value:#x}")
+
+    def set_irq(level):
+        _qtest_command(
+            qtest,
+            f"set_irq_in /machine/intc unnamed-gpio-in "
+            f"{test.shared_irq} {level}",
+        )
+
+    def wait_until(predicate, description):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.001)
+        raise AssertionError(f"{test.name}: timed out while {description}")
+
+    for cpu in range(test.cpu_count):
+        wait_until(
+            lambda cpu=cpu: read(cpu, test.stage_offset) == test.stage_ready,
+            f"waiting for CPU{cpu} startup",
+        )
+
+    set_irq(1)
+    wait_until(
+        lambda: sum(read(cpu, test.shared_count_offset)
+                    for cpu in range(test.cpu_count)) == 1,
+        "selecting the first shared-source owner",
+    )
+    first_counts = [read(cpu, test.shared_count_offset)
+                    for cpu in range(test.cpu_count)]
+    assert sorted(first_counts) == [0, 1]
+    owner = first_counts.index(1)
+    assert read(owner, test.claim_offset) == test.shared_irq
+    assert read(owner, test.handler_rq_offset) & test.interrupt_request
+
+    write(owner, test.handler_ack_offset, 1)
+    wait_until(
+        lambda: sum(read(cpu, test.shared_count_offset)
+                    for cpu in range(test.cpu_count)) == 2,
+        "retriggering the still-asserted shared source",
+    )
+    counts = [read(cpu, test.shared_count_offset)
+              for cpu in range(test.cpu_count)]
+    retrigger_owner = next(
+        cpu for cpu in range(test.cpu_count)
+        if counts[cpu] > first_counts[cpu]
+    )
+    assert read(retrigger_owner, test.claim_offset) == test.shared_irq
+    set_irq(0)
+    write(retrigger_owner, test.handler_ack_offset,
+          counts[retrigger_owner])
+    wait_until(
+        lambda: sum(read(cpu, test.handler_done_offset)
+                    for cpu in range(test.cpu_count)) == 2,
+        "completing the retriggered shared source",
+    )
+
+    for cpu, count in enumerate(counts):
+        assert read(cpu, test.handler_done_offset) == count
+        if count:
+            expected_stack = (
+                test.initial_stack + cpu * test.initial_stack_slot_size
+            )
+            assert read(cpu, test.ro_entry_offset) == expected_stack
+            assert read(cpu, test.rs_entry_offset) == expected_stack
+    write(0, test.halt_offset, 1)
+
+
+def _run_l3_cpu_isolation_protocol(qtest, test):
+    def read(cpu, offset):
+        return int.from_bytes(
+            _qtest_read(qtest, test.mailbox(cpu, offset), 8), "big"
+        )
+
+    def write(address, value):
+        _qtest_write(qtest, address, value.to_bytes(8, "big"))
+
+    def read_phys(address):
+        return int.from_bytes(_qtest_read(qtest, address, 8), "big")
+
+    def wait(cpu, offset, expected, description):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            actual = read(cpu, offset)
+            if actual == expected:
+                return
+            time.sleep(0.001)
+        raise AssertionError(
+            f"{test.name}: CPU {cpu} timed out while {description}; "
+            f"expected {expected:#x}, got {actual:#x}"
+        )
+
+    for cpu in test.cpu_ids:
+        wait(cpu, test.ready_offset, 1, "waiting for startup")
+
+    for cpu in test.cpu_ids:
+        irq = 16 + cpu
+        word = irq // 64
+        bit = 1 << (irq % 64)
+        write(test.intc_enable(cpu, word), bit)
+        enable = read_phys(test.intc_enable(cpu, word))
+        assert enable & bit, (
+            f"{test.name}: CPU {cpu} INTC enable word {word} is "
+            f"{enable:#x}"
+        )
+        write(test.timer_context(cpu, 0x00), 0)
+        write(test.timer_context(cpu, 0x08), 0x3)
+    for cpu in test.cpu_ids:
+        wait(cpu, test.timer_count_offset, 1, "handling its timer")
+        rq = read(cpu, test.timer_rq_offset)
+        assert rq & test.timer_request
+        claim = read(cpu, test.timer_claim_offset)
+        assert claim == 16 + cpu, (
+            f"{test.name}: CPU {cpu} claimed {claim}, expected {16 + cpu}"
+        )
+        expected_stack = (
+            test.initial_stack - cpu * test.initial_stack_slot_size
+        )
+        assert read(cpu, test.handler_ro_offset) == expected_stack
+        assert read(cpu, test.handler_rs_offset) == expected_stack
+
+    targets = sum(1 << cpu for cpu in test.cpu_ids)
+    write(test.ipi_base + 0x8, targets)
+    for cpu in test.cpu_ids:
+        wait(cpu, test.ipi_count_offset, 1, "handling its IPI")
+        rq = read(cpu, test.ipi_rq_offset)
+        assert rq & test.ipi_request
+
+    assert read(0, test.handler_ro_offset) != read(
+        63, test.handler_ro_offset
+    )
+    write(test.mailbox(0, test.halt_offset), 1)
+
+
+def run_l3_mttcg_cpu_isolation_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_l3_cpu_isolation_protocol,
+        "l3-cpu-isolation-qtest.sock", validate_initial_stacks=True,
     )

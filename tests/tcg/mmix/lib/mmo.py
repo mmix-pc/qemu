@@ -140,3 +140,21 @@ def mmo_stab_end(symbol_tetras=()):
     return mmo_lop(MMIX_MMO_LOP_STAB, 0) + symbol_data + mmo_lop(
         MMIX_MMO_LOP_END, tetra_count
     )
+
+
+def mmo_hosted_image(items, *, global_base=255, globals_=None):
+    globals_ = {255: 0} if globals_ is None else globals_
+    return mmo_image(
+        [*items, mmo_post(global_base, globals_), mmo_stab_end()]
+    )
+
+
+def mmo_hosted_text_image(data):
+    data += b"\0" * (-len(data) % 4)
+    text = []
+
+    for offset in range(0, len(data), 4):
+        tetra = data[offset:offset + 4]
+        text.append(mmo_quote(tetra) if tetra[0] == MMIX_MMO_ESCAPE
+                    else tetra)
+    return mmo_hosted_image(text, global_base=32, globals_={255: 0})

@@ -11,9 +11,8 @@
 #include "kernel-loader.h"
 #include "mmo-loader.h"
 
-static bool mmix_detect_kernel_image_type(const char *filename,
-                                          MMIXKernelImageType *type,
-                                          Error **errp)
+bool mmix_classify_kernel_image(const char *filename,
+                                MMIXKernelImageType *type, Error **errp)
 {
     Error *local_err = NULL;
 
@@ -39,27 +38,57 @@ static bool mmix_detect_kernel_image_type(const char *filename,
     return true;
 }
 
-static ssize_t mmix_load_raw_kernel(const char *filename,
-                                    const MMIXPhysicalRAMLayout *ram_layout,
-                                    Error **errp)
+bool mmix_preflight_raw_kernel(const char *filename,
+                               const MMIXPhysicalRAM *ram,
+                               MMIXKernelLoadInfo *info,
+                               uint64_t *image_size, Error **errp)
 {
     int64_t size = get_image_size(filename, errp);
 
     if (size < 0) {
-        return -1;
+        return false;
     }
-    if (!mmix_physical_ram_range_contains(&ram_layout->low, 0, size)) {
-        error_setg(errp, "MMIX raw kernel '%s' crosses the low physical RAM "
-                   "boundary",
+    if (size < MMIX_RAW_MIN_SIZE) {
+        error_setg(errp,
+                   "MMIX raw kernel '%s' is too small: got 0x%" PRIx64
+                   ", need at least 0x%x bytes",
+                   filename, (uint64_t)size, MMIX_RAW_MIN_SIZE);
+        return false;
+    }
+    if (!mmix_physical_ram_contains(ram, 0, size)) {
+        error_setg(errp, "MMIX raw kernel '%s' does not fit in physical RAM",
                    filename);
-        return -1;
+        return false;
     }
 
-    return load_image_targphys(filename, 0, ram_layout->low.size, errp);
+    *info = (MMIXKernelLoadInfo) {
+        .entry = MMIX_RAW_ENTRY,
+        .image_type = MMIX_KERNEL_IMAGE_RAW,
+        .boot_cpu_id = 0,
+    };
+    *image_size = size;
+    return true;
+}
+
+ssize_t mmix_commit_raw_kernel(const char *filename,
+                               const MMIXPhysicalRAM *ram,
+                               uint64_t expected_size, Error **errp)
+{
+    ssize_t size = load_image_targphys(filename, 0,
+                                       mmix_phys_range_size(ram), errp);
+
+    if (size >= 0 && (uint64_t)size != expected_size) {
+        error_setg(errp,
+                   "MMIX raw kernel '%s' changed size after preflight: "
+                   "expected 0x%" PRIx64 ", got 0x%" PRIx64,
+                   filename, expected_size, (uint64_t)size);
+        return -1;
+    }
+    return size;
 }
 
 ssize_t mmix_load_kernel(const char *filename,
-                         const MMIXPhysicalRAMLayout *ram_layout,
+                         const MMIXPhysicalRAM *ram,
                          MMIXKernelLoadInfo *info, Error **errp)
 {
     MMIXKernelImageType type;
@@ -69,17 +98,26 @@ ssize_t mmix_load_kernel(const char *filename,
         .image_type = MMIX_KERNEL_IMAGE_RAW,
     };
 
-    if (!mmix_detect_kernel_image_type(filename, &type, errp)) {
+    if (!mmix_classify_kernel_image(filename, &type, errp)) {
         return -1;
     }
 
     switch (type) {
     case MMIX_KERNEL_IMAGE_MMO:
-        return mmix_load_mmo(filename, ram_layout, info, errp);
+        error_setg(errp, "MMIX MMO kernel commit requires hosted sparse "
+                   "memory integration");
+        return -1;
     case MMIX_KERNEL_IMAGE_ELF:
-        return mmix_load_elf(filename, ram_layout, info, errp);
-    case MMIX_KERNEL_IMAGE_RAW:
-        return mmix_load_raw_kernel(filename, ram_layout, errp);
+        return mmix_load_elf(filename, ram, info, errp);
+    case MMIX_KERNEL_IMAGE_RAW: {
+        uint64_t image_size;
+
+        if (!mmix_preflight_raw_kernel(filename, ram, info, &image_size,
+                                       errp)) {
+            return -1;
+        }
+        return mmix_commit_raw_kernel(filename, ram, image_size, errp);
+    }
     default:
         g_assert_not_reached();
     }

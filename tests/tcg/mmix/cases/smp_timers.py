@@ -8,10 +8,12 @@ import dataclasses
 
 from .common import *
 from .smp import (
+    SMP_CPU_ID_STACK_PHYS,
     SMPProgram,
     SMP_ENTRY,
     SMP_WAIT_LIMIT,
     TCG_THREAD_MULTI,
+    smp_cpu_id_from_stack,
     smp_elf_image,
     smp_load,
     smp_store,
@@ -62,6 +64,7 @@ SMP_TIMER_SENTINELS = (0x650, 0x651)
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPTimerTest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
     name: str
     image: bytes
     main_end: int
@@ -199,7 +202,7 @@ def _timer_handler(cpu, handler_address):
         smp_store(R199, R180, SMP_TIMER_HANDLER_RQ),
         insn(LDOUI, R192, R180, SMP_TIMER_HANDLER_COUNT),
         insn(ADDUI, R192, R192, 1),
-        insn(LDTU, R193, R182, 0),
+        insn(LDOU, R193, R182, 0),
         smp_store(R193, R180, SMP_TIMER_CLAIM),
         insn(LDOUI, R194, R181, MMIX_VIRT_TIMER_CONTEXT_STATUS),
         smp_store(R194, R180, SMP_TIMER_STATUS_ENTRY),
@@ -208,7 +211,7 @@ def _timer_handler(cpu, handler_address):
         wyde(SETL, R195, MMIX_VIRT_TIMER_STATUS_PENDING),
         smp_store(R254, R181, MMIX_VIRT_TIMER_CONTEXT_CONTROL),
         insn(STOUI, R195, R181, MMIX_VIRT_TIMER_CONTEXT_STATUS),
-        insn(STTU, R184, R183, 0),
+        insn(STOU, R184, R183, 0),
         insn(PUTI, SR_Q, 0, 0),
         insn(SYNC, 0, 0, 1),
         smp_store(R192, R180, SMP_TIMER_HANDLER_DONE),
@@ -222,7 +225,7 @@ def smp_timer_lifecycle_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *_emit_mailbox_address(R40, R32, R41),
     )
@@ -250,7 +253,7 @@ def smp_timer_lifecycle_program():
 
     program.mark("setup_complete")
     program.emit(
-        insn(STTU, R62, R61, 0),
+        insn(STOU, R62, R61, 0),
         insn(PUT, SR_TT, 0, R63),
         *set_octa(R70, RK_INTERRUPT_CONTROLLER),
         insn(PUT, SR_K, 0, R70),

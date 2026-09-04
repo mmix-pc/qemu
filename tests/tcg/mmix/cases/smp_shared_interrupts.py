@@ -8,10 +8,12 @@ import dataclasses
 
 from .common import *
 from .smp import (
+    SMP_CPU_ID_STACK_PHYS,
     SMPProgram,
     SMP_ENTRY,
     SMP_WAIT_LIMIT,
     TCG_THREAD_MULTI,
+    smp_cpu_id_from_stack,
     smp_elf_image,
     smp_load,
     smp_store,
@@ -48,7 +50,7 @@ SMP_SHARED_HALT = 0xb0
 SMP_SHARED_STAGE_READY = 1
 SMP_SHARED_STAGE_FAILURE = 0xdead
 
-SMP_SHARED_IRQ = 4
+SMP_SHARED_IRQ = MMIX_VIRT_UART0_IRQ
 SMP_SHARED_HANDLER0 = 0x2800
 SMP_SHARED_HANDLER1 = 0x2a00
 SMP_SHARED_SENTINELS = (0x660, 0x661)
@@ -56,6 +58,7 @@ SMP_SHARED_SENTINELS = (0x660, 0x661)
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPSharedInterruptTest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
     name: str
     image: bytes
     main_end: int
@@ -181,10 +184,13 @@ def _shared_interrupt_handler(cpu, handler_address):
         smp_store(R192, R180, SMP_SHARED_RO_ENTRY),
         smp_store(R193, R180, SMP_SHARED_RS_ENTRY),
         smp_store(R199, R180, SMP_SHARED_HANDLER_RQ),
+        insn(LDOU, R195, R181, R0),
+        smp_store(R195, R180, SMP_SHARED_CLAIM),
+    )
+    program.emit_branch(BZ, R195, "resume")
+    program.emit(
         insn(LDOUI, R194, R180, SMP_SHARED_HANDLER_COUNT),
         insn(ADDUI, R194, R194, 1),
-        insn(LDTU, R195, R181, 0),
-        smp_store(R195, R180, SMP_SHARED_CLAIM),
         smp_store(R194, R180, SMP_SHARED_HANDLER_COUNT),
         insn(CMPU, R196, R195, R184),
     )
@@ -220,7 +226,10 @@ def _shared_interrupt_handler(cpu, handler_address):
 
     program.mark("complete_source")
     program.emit(
-        insn(STTU, R195, R182, 0),
+        insn(STOU, R195, R182, R0),
+    )
+    program.mark("resume")
+    program.emit(
         insn(PUTI, SR_Q, 0, 0),
         insn(SYNC, 0, 0, 1),
         smp_store(R194, R180, SMP_SHARED_HANDLER_DONE),
@@ -242,7 +251,7 @@ def smp_shared_interrupt_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *_emit_mailbox_address(R40, R32, R41),
     )
@@ -250,8 +259,7 @@ def smp_shared_interrupt_program():
     program.emit(
         *set_octa(R60, _intc_context_address(
             1, MMIX_VIRT_INTC_CONTEXT_ENABLE)),
-        *set_octa(R61, (1 << SMP_SHARED_IRQ) |
-                  (1 << (MMIX_VIRT_TIMER_IRQ_BASE + 1))),
+        *set_octa(R61, 1 << (MMIX_VIRT_TIMER_IRQ_BASE + 1)),
         *set_octa(R62, SMP_SHARED_HANDLER1),
         *set_octa(R100, SMP_SHARED_SENTINELS[1]),
     )
@@ -269,7 +277,7 @@ def smp_shared_interrupt_program():
 
     program.mark("setup_complete")
     program.emit(
-        insn(STTU, R61, R60, 0),
+        insn(STOU, R61, R60, R0),
         insn(PUT, SR_TT, 0, R62),
         *set_octa(R63, RK_INTERRUPT_CONTROLLER),
         insn(PUT, SR_K, 0, R63),

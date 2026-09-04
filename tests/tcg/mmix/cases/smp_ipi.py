@@ -8,10 +8,12 @@ import dataclasses
 
 from .common import *
 from .smp import (
+    SMP_CPU_ID_STACK_PHYS,
     SMPProgram,
     SMP_ENTRY,
     SMP_WAIT_LIMIT,
     TCG_THREAD_MULTI,
+    smp_cpu_id_from_stack,
     smp_elf_image,
     smp_load,
     smp_store,
@@ -72,7 +74,7 @@ SMP_IPI_STAGE_FINAL = 6
 SMP_IPI_STAGE_ACKED = 7
 SMP_IPI_STAGE_FAILURE = 0xdead
 
-SMP_IPI_SHARED_IRQ = 4
+SMP_IPI_SHARED_IRQ = MMIX_VIRT_UART0_IRQ
 SMP_IPI_HANDLER0 = 0x2c00
 SMP_IPI_HANDLER1 = 0x3000
 SMP_IPI_SENTINELS = (0x680, 0x681)
@@ -80,6 +82,7 @@ SMP_IPI_SENTINELS = (0x680, 0x681)
 
 @dataclasses.dataclass(frozen=True)
 class MMIXSMPIPITest:
+    cpu_id_stack_phys = SMP_CPU_ID_STACK_PHYS
     name: str
     image: bytes
     main_end: int
@@ -287,7 +290,7 @@ def _ipi_handler(cpu, handler_address):
     program.emit(insn(AND, R200, R199, R187))
     program.emit_branch(BZ, R200, "resume")
     program.emit(
-        insn(LDTUI, R201, R183, 0),
+        insn(LDOUI, R201, R183, 0),
         smp_store(R201, R180, SMP_IPI_CLAIM),
         wyde(SETL, R209, 2),
         insn(CMPU, R202, R201, R188),
@@ -324,7 +327,7 @@ def _ipi_handler(cpu, handler_address):
     )
 
     program.mark("complete_controller")
-    program.emit(insn(STTUI, R201, R184, 0))
+    program.emit(insn(STOUI, R201, R184, 0))
 
     program.mark("resume")
     program.emit(
@@ -350,7 +353,7 @@ def smp_ipi_lifecycle_program():
     program = SMPProgram()
 
     program.emit(
-        insn(ADDI, R32, R0, 0),
+        *smp_cpu_id_from_stack(R32, R33, R34),
         wyde(SETL, R254, 0),
         *_emit_mailbox_address(R40, R32, R41),
         *set_octa(R60, MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0] +
@@ -368,8 +371,7 @@ def smp_ipi_lifecycle_program():
         *set_octa(R64, _intc_context_address(
             1, MMIX_VIRT_INTC_CONTEXT_ENABLE)),
         *set_octa(R65, SMP_IPI_HANDLER1),
-        *set_octa(R67, (1 << SMP_IPI_SHARED_IRQ) |
-                  (1 << (MMIX_VIRT_TIMER_IRQ_BASE + 1))),
+        *set_octa(R67, 1 << (MMIX_VIRT_TIMER_IRQ_BASE + 1)),
         *set_octa(R100, SMP_IPI_SENTINELS[1]),
     )
     program.emit_branch(BZ, R254, "setup_complete")
@@ -392,7 +394,7 @@ def smp_ipi_lifecycle_program():
     program.mark("setup_complete")
     program.emit(
         *set_octa(R66, RK_IPI | RK_INTERRUPT_CONTROLLER),
-        insn(STTUI, R67, R64, 0),
+        insn(STOUI, R67, R64, 0),
         insn(PUT, SR_TT, 0, R65),
         insn(PUT, SR_K, 0, R66),
         insn(ADDU, R255, R100, R254),

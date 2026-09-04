@@ -8,18 +8,10 @@ from .common import *
 EXPECTED_FAILURE_TESTS = [
     MMIXExpectedFailure(
         "register-stack-underflow",
-        insn(POP, 0, 0, 0),
+        raw_direct_image(insn(POP, 0, 0, 0)),
         ("MMIX register stack underflow during POP",
-         "rO=0x10000 rS=0x10000",
-         "MMIX emulator failure"),
-    ),
-    MMIXExpectedFailure(
-        "register-stack-underflow-nondefault-bound",
-        insn(POP, 0, 0, 0),
-        ("MMIX register stack underflow during POP",
-         "rO=0x20000 rS=0x20000",
-         "MMIX emulator failure"),
-        qemu_args=("-global", "any-mmix-cpu.initial-stack=0x20000"),
+         "depth=0",
+         "MMIX emulator failure at 0x0000000000000100"),
     ),
 ]
 
@@ -28,10 +20,6 @@ SEMIHOSTING_DISABLED_FAILURE_TESTS = [
         "semihosting-fputs-stdout-disabled",
         b"".join(
             [
-                wyde(SETL, R10, 0x100),
-                insn(PUT, SR_TT, 0, R10),
-                *set_octa(R11, RQ_PROGRAM_B),
-                insn(PUT, SR_K, 0, R11),
                 *set_octa(R255, 0x40),
                 insn(TRAP, 0, MMIX_SEMIHOSTING_FPUTS,
                      MMIX_SEMIHOSTING_STDOUT),
@@ -116,7 +104,7 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
                      MMIX_SEMIHOSTING_STDOUT),
             ]
         ),
-        (f"MMIX hosted Fputs invalid string address "
+        (f"MMIX hosted Fputs invalid sparse string address "
          f"0x{MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS:016x}",
          "MMIX emulator failure"),
     ),
@@ -151,17 +139,9 @@ SEMIHOSTING_EXPECTED_FAILURE_TESTS = [
 
 SEMIHOSTING_PROCESS_FAILURE_TESTS = [
     MMIXProcessFailure(
-        "semihosting-argv-block-outside-ram",
+        "semihosting-argv-below-minimum-ram",
         halt(),
-        ("-m", "16M", "-semihosting-config", "enable=on,arg=prog"),
-        ("could not set up MMIX semihosting arguments",
-         "MMIX semihosting argument block does not fit in machine RAM"),
-    ),
-    MMIXProcessFailure(
-        "semihosting-argv-pool-backing-outside-ram",
-        halt(),
-        ("-m", "64M", "-semihosting-config", "enable=on,arg=prog"),
-        ("could not set up MMIX semihosting arguments",
-         "MMIX semihosting argument block does not fit in machine RAM"),
+        ("-m", "127M", "-semihosting-config", "enable=on,arg=prog"),
+        ("MMIX virt RAM size 0x7f00000 is below the minimum 0x8000000",),
     ),
 ]

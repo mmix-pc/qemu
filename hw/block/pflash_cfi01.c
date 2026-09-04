@@ -69,6 +69,7 @@ struct PFlashCFI01 {
     uint8_t device_width; /* If 0, device width not specified. */
     uint8_t max_device_width;  /* max device width in bytes */
     uint32_t features;
+    bool read_only;
     uint8_t wcycle; /* if 0, the flash is read normally */
     bool ro;
     uint8_t cmd;
@@ -829,14 +830,14 @@ static void pflash_cfi01_realize(DeviceState *dev, Error **errp)
 
     if (pfl->blk) {
         uint64_t perm;
-        pfl->ro = !blk_supports_write_perm(pfl->blk);
+        pfl->ro = pfl->read_only || !blk_supports_write_perm(pfl->blk);
         perm = BLK_PERM_CONSISTENT_READ | (pfl->ro ? 0 : BLK_PERM_WRITE);
         ret = blk_set_perm(pfl->blk, perm, BLK_PERM_ALL, errp);
         if (ret < 0) {
             return;
         }
     } else {
-        pfl->ro = false;
+        pfl->ro = pfl->read_only;
     }
 
     if (pfl->blk) {
@@ -891,6 +892,7 @@ static void pflash_cfi01_system_reset(DeviceState *dev)
 
 static const Property pflash_cfi01_properties[] = {
     DEFINE_PROP_DRIVE("drive", PFlashCFI01, blk),
+    DEFINE_PROP_BOOL("readonly", PFlashCFI01, read_only, false),
     /* num-blocks is the number of blocks actually visible to the guest,
      * ie the total size of the device divided by the sector length.
      * If we're emulating flash devices wired in parallel the actual

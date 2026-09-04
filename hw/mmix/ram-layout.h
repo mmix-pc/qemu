@@ -7,35 +7,23 @@
 #ifndef HW_MMIX_RAM_LAYOUT_H
 #define HW_MMIX_RAM_LAYOUT_H
 
-#include "exec/hwaddr.h"
+#include "physical-layout.h"
 
-typedef struct MMIXPhysicalRAMRange {
-    hwaddr base;
-    uint64_t size;
-} MMIXPhysicalRAMRange;
+typedef MMIXPhysRange MMIXPhysicalRAM;
 
-typedef struct MMIXPhysicalRAMLayout {
-    MMIXPhysicalRAMRange low;
-    MMIXPhysicalRAMRange high;
-} MMIXPhysicalRAMLayout;
-
-static inline bool mmix_physical_ram_range_contains(
-    const MMIXPhysicalRAMRange *ram, hwaddr address, uint64_t size)
+static inline bool mmix_physical_ram_init(MMIXPhysicalRAM *ram,
+                                          uint64_t size)
 {
-    uint64_t offset;
-
-    if (address < ram->base) {
-        return false;
-    }
-    offset = address - ram->base;
-    return offset <= ram->size && size <= ram->size - offset;
+    return mmix_phys_range_init(ram, 0, size);
 }
 
 static inline bool mmix_physical_ram_contains(
-    const MMIXPhysicalRAMLayout *layout, hwaddr address, uint64_t size)
+    const MMIXPhysicalRAM *ram, uint64_t address, uint64_t size)
 {
-    return mmix_physical_ram_range_contains(&layout->low, address, size) ||
-           mmix_physical_ram_range_contains(&layout->high, address, size);
+    MMIXPhysRange range;
+
+    return mmix_phys_range_init(&range, address, size) &&
+           mmix_phys_range_contains(ram, &range);
 }
 
 #endif

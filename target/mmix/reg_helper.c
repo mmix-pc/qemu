@@ -178,7 +178,11 @@ static void mmix_cpu_stack_store(CPUMMIXState *env, uintptr_t ra)
 
     mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SPILL, addr, idx,
                                 value);
-    cpu_stq_be_data_ra(env, addr, value, ra);
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        mmix_cpu_hosted_store_octa(env, addr, value);
+    } else {
+        cpu_stq_be_data_ra(env, addr, value, ra);
+    }
     env->sregs[MMIX_SREG_RS] = addr + 8;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
@@ -190,7 +194,11 @@ static void mmix_cpu_stack_load(CPUMMIXState *env, uintptr_t ra)
     uint64_t value;
 
     mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_FILL, addr, idx, 0);
-    value = cpu_ldq_be_data_ra(env, addr, ra);
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        value = mmix_cpu_hosted_load_octa(env, addr);
+    } else {
+        value = cpu_ldq_be_data_ra(env, addr, ra);
+    }
     env->local_regs[idx] = value;
     env->sregs[MMIX_SREG_RS] = addr;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
@@ -203,7 +211,11 @@ static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val,
 
     mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SAVE, addr,
                                 MMIX_STACK_NO_RING_INDEX, val);
-    cpu_stq_be_data_ra(env, addr, val, ra);
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        mmix_cpu_hosted_store_octa(env, addr, val);
+    } else {
+        cpu_stq_be_data_ra(env, addr, val, ra);
+    }
     env->sregs[MMIX_SREG_RS] = addr + 8;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
 }
@@ -215,7 +227,11 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env, uintptr_t ra)
 
     mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_UNSAVE, addr,
                                 MMIX_STACK_NO_RING_INDEX, 0);
-    value = cpu_ldq_be_data_ra(env, addr, ra);
+    if (mmix_cpu_hosted_memory_enabled(env)) {
+        value = mmix_cpu_hosted_load_octa(env, addr);
+    } else {
+        value = cpu_ldq_be_data_ra(env, addr, ra);
+    }
     env->sregs[MMIX_SREG_RS] = addr;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
     return value;

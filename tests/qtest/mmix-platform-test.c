@@ -1,1212 +1,985 @@
 /*
- * QTest testcase for the MMIX virt platform contract.
+ * QTest testcase for the MMIX virt platform boundary.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
-#include <glib/gstdio.h>
 #include "elf.h"
+#include <glib/gstdio.h>
+#include "hw/pci/pci.h"
 #include "libqtest.h"
 #include "qemu/bswap.h"
+#include "qemu/timer.h"
 #include "qemu/units.h"
-#include "qobject/qdict.h"
-#include "qobject/qlist.h"
+#include "standard-headers/linux/qemu_fw_cfg.h"
+#include "standard-headers/linux/virtio_config.h"
+#include "standard-headers/linux/virtio_ids.h"
 #include "standard-headers/linux/virtio_mmio.h"
 
 #ifndef EM_MMIX
 #define EM_MMIX 80
 #endif
 
-typedef struct MMIXPlatformRegion {
-    const char *name;
+#define MMIX_RAM_DEFAULT_SIZE          (512 * MiB)
+
+#define MMIX_UART_BASE                 UINT64_C(0x0001000010000000)
+#define MMIX_UART_SIZE                 UINT64_C(0x8)
+#define MMIX_UART_LSR                  0x5
+#define MMIX_UART_LSR_THRE             0x20
+#define MMIX_UART_SCRATCH              0x7
+
+#define MMIX_RTC_BASE                  UINT64_C(0x0001000010010000)
+#define MMIX_RTC_SIZE                  UINT64_C(0x24)
+#define MMIX_RTC_IRQ_ENABLED           0x10
+#define MMIX_RTC_ALARM_LOW             0x08
+#define MMIX_RTC_ALARM_HIGH            0x0c
+#define MMIX_WATCHDOG_REFRESH_BASE     UINT64_C(0x0001000010020000)
+#define MMIX_WATCHDOG_CONTROL_BASE     UINT64_C(0x0001000010030000)
+#define MMIX_WATCHDOG_SIZE             UINT64_C(0x1000)
+#define MMIX_WATCHDOG_ID               0x1043b
+#define MMIX_WATCHDOG_IIDR             0xfcc
+#define MMIX_WATCHDOG_WCS              0x000
+#define MMIX_WATCHDOG_WOR              0x008
+#define MMIX_WATCHDOG_WCS_EN           0x1
+#define MMIX_POWER_BASE                UINT64_C(0x0001000010040000)
+#define MMIX_POWER_SIZE                UINT64_C(0x100)
+#define MMIX_POWER_FEATURES            0x00
+#define MMIX_POWER_FEATURE_CONTROL     0x1
+#define MMIX_FW_CFG_BASE               UINT64_C(0x0001000014000000)
+#define MMIX_FW_CFG_SIZE               UINT64_C(0x18)
+#define MMIX_FW_CFG_DATA               0x00
+#define MMIX_FW_CFG_SELECTOR           0x08
+
+#define MMIX_FRAMEBUFFER_BASE          UINT64_C(0x0001000018000000)
+#define MMIX_FRAMEBUFFER_SIZE          UINT64_C(0x1000)
+#define MMIX_FRAMEBUFFER_WIDTH         0x00
+#define MMIX_FRAMEBUFFER_WIDTH_VALUE   1024
+#define MMIX_FRAMEBUFFER_RAM_BASE      0x20
+
+#define MMIX_TIMER_BASE                UINT64_C(0x0001000020000000)
+#define MMIX_TIMER_CONTEXT_BASE        UINT64_C(0x0001000020010000)
+#define MMIX_TIMER_CONTEXT_COMPARE     0x00
+#define MMIX_TIMER_CONTEXT_CONTROL     0x08
+#define MMIX_TIMER_CONTROL_ENABLE      0x01
+
+#define MMIX_IPI_BASE                  UINT64_C(0x0001000024000000)
+#define MMIX_IPI_ACTIVE_TARGETS        0x00
+#define MMIX_IPI_SEND                  0x08
+#define MMIX_IPI_CONTEXT_BASE          UINT64_C(0x0001000024010000)
+#define MMIX_IPI_CONTEXT_STATUS        0x00
+
+#define MMIX_INTC_BASE                 UINT64_C(0x0001000030000000)
+#define MMIX_INTC_SOURCE_COUNT         0x00
+#define MMIX_INTC_CONTEXT_COUNT        0x08
+#define MMIX_INTC_CONTEXT_BASE         UINT64_C(0x0001000034000000)
+#define MMIX_INTC_CONTEXT_ENABLE       0x00
+#define MMIX_INTC_CONTEXT_CLAIM        0x0800
+#define MMIX_INTC_CONTEXT_COMPLETE     0x0808
+#define MMIX_INTC_PENDING_BASE         0x1000
+#define MMIX_INTC_SOURCE_COUNT_VALUE   8192
+
+#define MMIX_VIRTIO_BASE               UINT64_C(0x0001000040000000)
+#define MMIX_DISCOVERABLE_BASE         UINT64_C(0x0001000050000000)
+#define MMIX_PCIE_ECAM_BASE            UINT64_C(0x0001000100000000)
+#define MMIX_PCIE_MMIO32_BASE          UINT64_C(0x0001000200000000)
+#define MMIX_PCIE_DEVICE_SIZE          UINT64_C(0x8000)
+
+#define MMIX_PCIE_INTX_IRQ             6145
+#define MMIX_EDU_BAR_ADDRESS           UINT32_C(0x00200000)
+#define MMIX_EDU_BAR_SIZE              UINT64_C(0x100000)
+#define MMIX_EDU_ID                    UINT32_C(0x010000ed)
+#define MMIX_EDU_IRQ_RAISE             0x60
+#define MMIX_EDU_DMA_SRC               0x80
+#define MMIX_EDU_DMA_DST               0x88
+#define MMIX_EDU_DMA_COUNT             0x90
+#define MMIX_EDU_DMA_COMMAND           0x98
+#define MMIX_EDU_DMA_BUFFER            UINT64_C(0x40000)
+#define MMIX_EDU_DMA_RUN               UINT64_C(0x1)
+#define MMIX_EDU_DMA_TO_PCI            UINT64_C(0x2)
+#define MMIX_E1000_BAR_ADDRESS         UINT32_C(0x00800000)
+#define MMIX_E1000_ICR                 0x00c0
+#define MMIX_E1000_ICS                 0x00c8
+#define MMIX_E1000_IMS                 0x00d0
+#define MMIX_E1000_TEST_CAUSE          UINT32_C(0x1)
+
+#define MMIX_POPULATED_SOURCE_RAM      UINT64_C(0x00100000)
+#define MMIX_POPULATED_DEST_RAM        UINT64_C(0x00101000)
+#define MMIX_POPULATED_RAM_MARKER      UINT64_C(0x1122334455667788)
+#define MMIX_POPULATED_FB_MARKER       UINT64_C(0x8877665544332211)
+
+#define MMIX_CONTEXT_STRIDE            UINT64_C(0x10000)
+#define MMIX_CONTEXT_REGISTER_SIZE     UINT64_C(0x1000)
+#define MMIX_INITIAL_CONTEXT_COUNT     64
+#define MMIX_CONTEXT_CAPACITY          1023
+#define MMIX_VIRTIO_STRIDE             UINT64_C(0x10000)
+#define MMIX_VIRTIO_REGISTER_SIZE      UINT64_C(0x200)
+#define MMIX_VIRTIO_ACTIVE_SLOTS       32
+#define MMIX_VIRTIO_SLOT_CAPACITY      4096
+
+typedef struct MMIXRAMSizeCase {
+    const char *memory;
+    uint64_t size;
+    unsigned int cpus;
+} MMIXRAMSizeCase;
+
+typedef struct MMIXPlatformRange {
     uint64_t base;
     uint64_t size;
-} MMIXPlatformRegion;
+} MMIXPlatformRange;
 
-typedef enum MMIXPlatformRegionIndex {
-    MMIX_REGION_LOW_RAM,
-    MMIX_REGION_POOL,
-    MMIX_REGION_DATA,
-    MMIX_REGION_STACK,
-    MMIX_REGION_PLATFORM_RAM,
-    MMIX_REGION_FRAMEBUFFER,
-    MMIX_REGION_COUNT,
-} MMIXPlatformRegionIndex;
+typedef enum MMIXPlatformBootMode {
+    MMIX_PLATFORM_NO_IMAGE,
+    MMIX_PLATFORM_RAW,
+    MMIX_PLATFORM_BARE_ELF,
+    MMIX_PLATFORM_HOSTED_ELF,
+    MMIX_PLATFORM_MMO,
+    MMIX_PLATFORM_LINUX,
+    MMIX_PLATFORM_FIRMWARE,
+} MMIXPlatformBootMode;
 
-static const MMIXPlatformRegion mmix_regions[MMIX_REGION_COUNT] = {
-    [MMIX_REGION_LOW_RAM] = { "low RAM", 0x00000000, 0x06000000 },
-    [MMIX_REGION_POOL] = { "Pool backing", 0x06000000, 0x00800000 },
-    [MMIX_REGION_DATA] = { "Data backing", 0x06800000, 0x04000000 },
-    [MMIX_REGION_STACK] = { "Stack backing", 0x0a800000, 0x04000000 },
-    [MMIX_REGION_PLATFORM_RAM] = {
-        "platform RAM", 0x0e800000, 0x00800000
-    },
-    [MMIX_REGION_FRAMEBUFFER] = {
-        "framebuffer RAM", 0x0f000000, 0x01000000
-    },
-};
+typedef struct MMIXPlatformBootCase {
+    MMIXPlatformBootMode mode;
+    const char *memory;
+    unsigned int cpus;
+} MMIXPlatformBootCase;
 
-typedef struct MMIXPlatformDevice {
-    const char *name;
-    uint64_t base;
-    uint64_t size;
-    unsigned irq;
-} MMIXPlatformDevice;
-
-typedef enum MMIXPlatformDeviceIndex {
-    MMIX_DEVICE_UART0,
-    MMIX_DEVICE_VIRTIO_BLOCK0,
-    MMIX_DEVICE_FRAMEBUFFER,
-    MMIX_DEVICE_TIMER0,
-    MMIX_DEVICE_INTC,
-    MMIX_DEVICE_IPI,
-    MMIX_DEVICE_COUNT,
-} MMIXPlatformDeviceIndex;
-
-static const MMIXPlatformDevice mmix_devices[MMIX_DEVICE_COUNT] = {
-    [MMIX_DEVICE_UART0] = { "UART0", 0x10000000, 0x100, 1 },
-    [MMIX_DEVICE_VIRTIO_BLOCK0] = {
-        "virtio block 0", 0x10001000, 0x1000, 2
-    },
-    [MMIX_DEVICE_FRAMEBUFFER] = {
-        "framebuffer", 0x10002000, 0x1000, 3
-    },
-    [MMIX_DEVICE_TIMER0] = { "CPU0 timer", 0x10003000, 0x1000, 16 },
-    [MMIX_DEVICE_INTC] = {
-        "interrupt controller", 0x10004000, 0x2000, 0
-    },
-    [MMIX_DEVICE_IPI] = {
-        "inter-processor interrupt", 0x10006000, 0x1000, 0
-    },
-};
-
-static const uint64_t mmix_virt_mmio_base = 0x10000000ULL;
-static const uint64_t mmix_virt_mmio_size = 0x10000000ULL;
-static const uint64_t mmix_bootinfo_base = 0x0e800000ULL;
-static const uint64_t mmix_bootinfo_magic = 0x4d4d4958424f4f54ULL;
-
-enum {
-    MMIX_BOOTINFO_VERSION = 1,
-    MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE = 1,
-    MMIX_BOOTINFO_KERNEL_CMDLINE_MAX = 4095,
-    MMIX_UART_LSR = 0x05,
-    MMIX_UART_LSR_THRE = 0x20,
-    MMIX_FRAMEBUFFER_REG_WIDTH = 0x00,
-    MMIX_FRAMEBUFFER_REG_BASE = 0x20,
-    MMIX_FRAMEBUFFER_REG_SIZE = 0x28,
-    MMIX_FRAMEBUFFER_REG_FLUSH = 0x30,
-    MMIX_TIMER_TIME = 0x0000,
-    MMIX_TIMER_CONTEXT_BASE = 0x0100,
-    MMIX_TIMER_CONTEXT_STRIDE = 0x40,
-    MMIX_TIMER_CONTEXT_COMPARE = 0x00,
-    MMIX_TIMER_CONTEXT_CONTROL = 0x08,
-    MMIX_TIMER_CONTEXT_STATUS = 0x10,
-    MMIX_TIMER_CONTROL_ENABLE = 0x01,
-    MMIX_TIMER_CONTROL_IRQ_ENABLE = 0x02,
-    MMIX_TIMER_STATUS_PENDING = 0x01,
-    MMIX_INTC_PENDING = 0x0000,
-    MMIX_INTC_CONTEXT_BASE = 0x1000,
-    MMIX_INTC_CONTEXT_STRIDE = 0x100,
-    MMIX_INTC_CONTEXT_ENABLE = 0x00,
-    MMIX_IPI_ACTIVE_TARGETS = 0x0000,
-    MMIX_IPI_SEND = 0x0008,
-    MMIX_IPI_CONTEXT_BASE = 0x0100,
-    MMIX_IPI_CONTEXT_STRIDE = 0x20,
-    MMIX_IPI_CONTEXT_STATUS = 0x00,
-    MMIX_IPI_CONTEXT_CLEAR = 0x08,
-    MMIX_IPI_STATUS_PENDING = 0x01,
-    MMIX_TIMER_IRQ_BASE = 16,
-    MMIX_INITIAL_STACK_SLOT_COUNT = 16,
-};
-
-static const uint64_t mmix_initial_stack_base = 0x00010000;
-static const uint64_t mmix_initial_stack_slot_size = 0x00008000;
-static const uint64_t mmix_interrupt_controller_request = 1ULL << 8;
-static const uint64_t mmix_ipi_request = 1ULL << 9;
-static const char *mmix_intc_qom_path = "/machine/intc";
-static const char *mmix_ipi_qom_path = "/machine/ipi";
-static const char *mmix_timer_qom_path = "/machine/timer";
-
-typedef enum MMIXBootInfoOffset {
-    MMIX_BOOTINFO_MAGIC_OFFSET = 0x000,
-    MMIX_BOOTINFO_VERSION_OFFSET = 0x008,
-    MMIX_BOOTINFO_SIZE_OFFSET = 0x010,
-    MMIX_BOOTINFO_FLAGS_OFFSET = 0x018,
-    MMIX_BOOTINFO_CPU_COUNT_OFFSET = 0x020,
-    MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET = 0x028,
-    MMIX_BOOTINFO_RAM_BASE_OFFSET = 0x030,
-    MMIX_BOOTINFO_RAM_SIZE_OFFSET = 0x038,
-    MMIX_BOOTINFO_LOW_RAM_BASE_OFFSET = 0x040,
-    MMIX_BOOTINFO_LOW_RAM_SIZE_OFFSET = 0x048,
-    MMIX_BOOTINFO_POOL_LOGICAL_BASE_OFFSET = 0x050,
-    MMIX_BOOTINFO_POOL_PHYS_BASE_OFFSET = 0x058,
-    MMIX_BOOTINFO_POOL_SIZE_OFFSET = 0x060,
-    MMIX_BOOTINFO_DATA_LOGICAL_BASE_OFFSET = 0x068,
-    MMIX_BOOTINFO_DATA_PHYS_BASE_OFFSET = 0x070,
-    MMIX_BOOTINFO_DATA_SIZE_OFFSET = 0x078,
-    MMIX_BOOTINFO_STACK_LOGICAL_BASE_OFFSET = 0x080,
-    MMIX_BOOTINFO_STACK_PHYS_BASE_OFFSET = 0x088,
-    MMIX_BOOTINFO_STACK_SIZE_OFFSET = 0x090,
-    MMIX_BOOTINFO_MMIO_BASE_OFFSET = 0x098,
-    MMIX_BOOTINFO_UART_BASE_OFFSET = 0x0a0,
-    MMIX_BOOTINFO_UART_IRQ_OFFSET = 0x0a8,
-    MMIX_BOOTINFO_TIMER_BASE_OFFSET = 0x0b0,
-    MMIX_BOOTINFO_TIMER_IRQ_BASE_OFFSET = 0x0b8,
-    MMIX_BOOTINFO_TIMER_IRQ_COUNT_OFFSET = 0x0c0,
-    MMIX_BOOTINFO_INTC_BASE_OFFSET = 0x0c8,
-    MMIX_BOOTINFO_INTC_IRQ_COUNT_OFFSET = 0x0d0,
-    MMIX_BOOTINFO_VIRTIO_MMIO_BASE_OFFSET = 0x0d8,
-    MMIX_BOOTINFO_VIRTIO_MMIO_IRQ_OFFSET = 0x0e0,
-    MMIX_BOOTINFO_VIRTIO_MMIO_COUNT_OFFSET = 0x0e8,
-    MMIX_BOOTINFO_FRAMEBUFFER_CONTROL_BASE_OFFSET = 0x0f0,
-    MMIX_BOOTINFO_FRAMEBUFFER_BASE_OFFSET = 0x0f8,
-    MMIX_BOOTINFO_FRAMEBUFFER_SIZE_OFFSET = 0x100,
-    MMIX_BOOTINFO_FRAMEBUFFER_IRQ_OFFSET = 0x108,
-    MMIX_BOOTINFO_FRAMEBUFFER_WIDTH_OFFSET = 0x110,
-    MMIX_BOOTINFO_FRAMEBUFFER_HEIGHT_OFFSET = 0x118,
-    MMIX_BOOTINFO_FRAMEBUFFER_STRIDE_OFFSET = 0x120,
-    MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_OFFSET = 0x128,
-    MMIX_BOOTINFO_KERNEL_CMDLINE_ADDR_OFFSET = 0x130,
-    MMIX_BOOTINFO_KERNEL_CMDLINE_SIZE_OFFSET = 0x138,
-    MMIX_BOOTINFO_COMPAT_PREFIX_SIZE = 0x140,
-    MMIX_BOOTINFO_IPI_BASE_OFFSET = 0x140,
-    MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET = 0x148,
-    MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET = 0x150,
-    MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET = 0x158,
-    MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET = 0x160,
-    MMIX_BOOTINFO_SIZE = 0x168,
-} MMIXBootInfoOffset;
-
-static const uint64_t mmix_kernel_cmdline_base =
-    0x0e800000ULL + MMIX_BOOTINFO_SIZE;
-
-static uint64_t mmix_bootinfo_read(QTestState *qts,
-                                   MMIXBootInfoOffset offset)
+static uint64_t mmix_context_address(uint64_t base, unsigned int context)
 {
-    return qtest_readq(qts, mmix_bootinfo_base + offset);
+    return base + context * MMIX_CONTEXT_STRIDE;
 }
 
-static QTestState *mmix_start_elf_smp(const char *elf, const char *cmdline,
-                                     unsigned int cpu_count)
+static uint64_t mmix_virtio_address(unsigned int slot)
 {
-    g_autofree char *quoted_elf = g_shell_quote(elf);
+    return MMIX_VIRTIO_BASE + slot * MMIX_VIRTIO_STRIDE;
+}
 
-    if (cmdline) {
-        g_autofree char *quoted_cmdline = g_shell_quote(cmdline);
+static void mmix_assert_mapping(const char *mtree, uint64_t base,
+                                uint64_t size, const char *name)
+{
+    g_autofree char *mapping =
+        g_strdup_printf("%016" PRIx64 "-%016" PRIx64
+                        " (prio 0, i/o): %s",
+                        base, base + size - 1, name);
 
-        return qtest_initf("-machine virt -display none -smp %u -kernel %s "
-                           "-append %s", cpu_count, quoted_elf,
-                           quoted_cmdline);
+    g_assert_nonnull(strstr(mtree, mapping));
+}
+
+static void mmix_assert_unassigned(QTestState *qts, uint64_t address)
+{
+    const uint64_t probe = UINT64_C(0x5aa55aa50ff0f00f);
+
+    qtest_writeq(qts, address, probe);
+    g_assert_cmphex(qtest_readq(qts, address), !=, probe);
+}
+
+static uint32_t mmix_readl_le(QTestState *qts, uint64_t address)
+{
+    uint8_t bytes[sizeof(uint32_t)];
+
+    qtest_memread(qts, address, bytes, sizeof(bytes));
+    return ldl_le_p(bytes);
+}
+
+static void mmix_writel_le(QTestState *qts, uint64_t address, uint32_t value)
+{
+    uint8_t bytes[sizeof(value)];
+
+    stl_le_p(bytes, value);
+    qtest_memwrite(qts, address, bytes, sizeof(bytes));
+}
+
+static void mmix_writew_le(QTestState *qts, uint64_t address, uint16_t value)
+{
+    uint8_t bytes[sizeof(value)];
+
+    stw_le_p(bytes, value);
+    qtest_memwrite(qts, address, bytes, sizeof(bytes));
+}
+
+static uint64_t mmix_pcie_ecam_address(unsigned int device,
+                                       unsigned int reg)
+{
+    return MMIX_PCIE_ECAM_BASE + device * MMIX_PCIE_DEVICE_SIZE + reg;
+}
+
+static uint64_t mmix_intc_source_address(uint64_t base, unsigned int source)
+{
+    return base + (source / 64) * sizeof(uint64_t);
+}
+
+static uint64_t mmix_intc_source_bit(unsigned int source)
+{
+    return UINT64_C(1) << (source % 64);
+}
+
+static void mmix_assert_fw_cfg_signature(QTestState *qts)
+{
+    uint8_t signature[4];
+    unsigned int i;
+
+    qtest_writew(qts, MMIX_FW_CFG_BASE + MMIX_FW_CFG_SELECTOR,
+                 FW_CFG_SIGNATURE);
+    for (i = 0; i < ARRAY_SIZE(signature); i++) {
+        signature[i] = qtest_readb(qts, MMIX_FW_CFG_BASE + MMIX_FW_CFG_DATA);
     }
-
-    return qtest_initf("-machine virt -display none -smp %u -kernel %s",
-                       cpu_count, quoted_elf);
+    g_assert_cmpmem(signature, sizeof(signature), "QEMU", 4);
 }
 
-static QTestState *mmix_start_elf(const char *elf, const char *cmdline)
+static void mmix_edu_dma_run(QTestState *qts, uint64_t bar,
+                             uint64_t source, uint64_t destination,
+                             uint64_t size, uint64_t command)
 {
-    return mmix_start_elf_smp(elf, cmdline, 1);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_SRC, source);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_DST, destination);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_COUNT, size);
+    qtest_writeq(qts, bar + MMIX_EDU_DMA_COMMAND,
+                 command | MMIX_EDU_DMA_RUN);
+    qtest_clock_step(qts, 100 * SCALE_MS);
+    g_assert_cmphex(qtest_readq(qts, bar + MMIX_EDU_DMA_COMMAND) &
+                    MMIX_EDU_DMA_RUN, ==, 0);
 }
 
-static void mmix_assert_kernel_cmdline(QTestState *qts, const char *expected)
+static uint64_t mmix_configure_edu(QTestState *qts)
 {
-    uint64_t address = mmix_bootinfo_read(
-        qts, MMIX_BOOTINFO_KERNEL_CMDLINE_ADDR_OFFSET);
-    uint64_t size = mmix_bootinfo_read(
-        qts, MMIX_BOOTINFO_KERNEL_CMDLINE_SIZE_OFFSET);
-    uint64_t flags = mmix_bootinfo_read(qts, MMIX_BOOTINFO_FLAGS_OFFSET);
-    size_t expected_size = strlen(expected);
-    g_autofree char *actual = NULL;
+    uint64_t config = mmix_pcie_ecam_address(1, 0);
 
-    if (expected_size == 0) {
-        g_assert_cmphex(flags & MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE, ==, 0);
-        g_assert_cmphex(address, ==, 0);
-        g_assert_cmpuint(size, ==, 0);
-        return;
-    }
-
-    g_assert_cmphex(flags, ==, MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE);
-    g_assert_cmphex(address, ==, mmix_kernel_cmdline_base);
-    g_assert_cmpuint(size, ==, expected_size);
-
-    actual = g_malloc(expected_size + 1);
-    qtest_memread(qts, address, actual, expected_size + 1);
-    g_assert_cmpmem(actual, expected_size + 1,
-                    expected, expected_size + 1);
+    mmix_writel_le(qts, config + PCI_BASE_ADDRESS_0,
+                   MMIX_EDU_BAR_ADDRESS);
+    mmix_writew_le(qts, config + PCI_COMMAND,
+                   PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    return MMIX_PCIE_MMIO32_BASE + MMIX_EDU_BAR_ADDRESS;
 }
 
-static void mmix_check_ram_region(QTestState *qts,
-                                  const MMIXPlatformRegion *region,
-                                  uint64_t seed)
+static void mmix_edu_dma_copy(QTestState *qts, uint64_t bar)
 {
-    uint64_t last = region->base + region->size - sizeof(uint64_t);
-
-    qtest_writeq(qts, region->base, seed);
-    qtest_writeq(qts, last, ~seed);
-    g_assert_cmphex(qtest_readq(qts, region->base), ==, seed);
-    g_assert_cmphex(qtest_readq(qts, last), ==, ~seed);
+    mmix_edu_dma_run(qts, bar, MMIX_POPULATED_SOURCE_RAM,
+                     MMIX_EDU_DMA_BUFFER, sizeof(uint64_t), 0);
+    mmix_edu_dma_run(qts, bar, MMIX_EDU_DMA_BUFFER,
+                     MMIX_POPULATED_DEST_RAM, sizeof(uint64_t),
+                     MMIX_EDU_DMA_TO_PCI);
 }
 
-static char *mmix_create_elf(void)
+static void mmix_assert_active_devices(QTestState *qts, unsigned int cpus)
 {
-    struct {
-        Elf64_Ehdr ehdr;
-        Elf64_Phdr phdr;
-        uint32_t insn;
-    } image = { 0 };
-    g_autofree char *path = NULL;
-    GError *error = NULL;
-    int fd;
+    uint64_t active_targets = cpus == 64 ? UINT64_MAX :
+                              (UINT64_C(1) << cpus) - 1;
 
-    memcpy(image.ehdr.e_ident, ELFMAG, SELFMAG);
-    image.ehdr.e_ident[EI_CLASS] = ELFCLASS64;
-    image.ehdr.e_ident[EI_DATA] = ELFDATA2MSB;
-    image.ehdr.e_ident[EI_VERSION] = EV_CURRENT;
-    image.ehdr.e_type = cpu_to_be16(ET_EXEC);
-    image.ehdr.e_machine = cpu_to_be16(EM_MMIX);
-    image.ehdr.e_version = cpu_to_be32(EV_CURRENT);
-    image.ehdr.e_entry = cpu_to_be64(0);
-    image.ehdr.e_phoff = cpu_to_be64(sizeof(Elf64_Ehdr));
-    image.ehdr.e_ehsize = cpu_to_be16(sizeof(Elf64_Ehdr));
-    image.ehdr.e_phentsize = cpu_to_be16(sizeof(Elf64_Phdr));
-    image.ehdr.e_phnum = cpu_to_be16(1);
-
-    image.phdr.p_type = cpu_to_be32(PT_LOAD);
-    image.phdr.p_flags = cpu_to_be32(PF_R | PF_X);
-    image.phdr.p_offset = cpu_to_be64(offsetof(typeof(image), insn));
-    image.phdr.p_vaddr = cpu_to_be64(0);
-    image.phdr.p_paddr = cpu_to_be64(0);
-    image.phdr.p_filesz = cpu_to_be64(sizeof(image.insn));
-    image.phdr.p_memsz = cpu_to_be64(sizeof(image.insn));
-    image.phdr.p_align = cpu_to_be64(4);
-
-    fd = g_file_open_tmp("mmix-platform-XXXXXX.elf", &path, &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(fd, >=, 0);
-    g_assert_cmpint(close(fd), ==, 0);
-    g_assert_true(g_file_set_contents(path, (const char *)&image,
-                                      sizeof(image), &error));
-    g_assert_no_error(error);
-
-    return g_steal_pointer(&path);
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_LSR) &
+                    MMIX_UART_LSR_THRE, ==, MMIX_UART_LSR_THRE);
+    g_assert_cmpuint(qtest_readq(qts, MMIX_FRAMEBUFFER_BASE +
+                                 MMIX_FRAMEBUFFER_WIDTH), ==,
+                     MMIX_FRAMEBUFFER_WIDTH_VALUE);
+    g_assert_cmpuint(qtest_readq(qts, MMIX_IPI_BASE +
+                                 MMIX_IPI_ACTIVE_TARGETS), ==,
+                     active_targets);
+    g_assert_cmpuint(qtest_readq(qts, MMIX_INTC_BASE +
+                                 MMIX_INTC_SOURCE_COUNT), ==,
+                     MMIX_INTC_SOURCE_COUNT_VALUE);
+    g_assert_cmpuint(qtest_readq(qts, MMIX_INTC_BASE +
+                                 MMIX_INTC_CONTEXT_COUNT), ==, cpus);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE +
+                                      MMIX_RTC_IRQ_ENABLED), ==, 0);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_REFRESH_BASE +
+                                      MMIX_WATCHDOG_IIDR), ==,
+                    MMIX_WATCHDOG_ID);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_IIDR), ==,
+                    MMIX_WATCHDOG_ID);
+    g_assert_cmphex(qtest_readl(qts, MMIX_POWER_BASE +
+                                    MMIX_POWER_FEATURES), ==,
+                    MMIX_POWER_FEATURE_CONTROL);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_PCIE_ECAM_BASE), ==,
+                    PCI_DEVICE_ID_REDHAT_PCIE_HOST << 16 |
+                    PCI_VENDOR_ID_REDHAT);
 }
 
-static void test_mmix_platform_memory_layout(void)
+static void test_mmix_platform_mappings(void)
 {
     QTestState *qts = qtest_init("-machine virt");
-    size_t i;
+    g_autofree char *mtree = qtest_hmp(qts, "info mtree -f");
+    unsigned int i;
 
-    for (i = 0; i + 1 < ARRAY_SIZE(mmix_regions); i++) {
-        g_test_message("checking %s/%s boundary",
-                       mmix_regions[i].name, mmix_regions[i + 1].name);
-        g_assert_cmphex(mmix_regions[i].base + mmix_regions[i].size, ==,
-                        mmix_regions[i + 1].base);
+    mmix_assert_mapping(mtree, MMIX_UART_BASE, MMIX_UART_SIZE, "serial");
+    mmix_assert_mapping(mtree, MMIX_RTC_BASE, MMIX_RTC_SIZE,
+                        "goldfish_rtc");
+    mmix_assert_mapping(mtree, MMIX_WATCHDOG_REFRESH_BASE,
+                        MMIX_WATCHDOG_SIZE, "sbsa_gwdt.refresh");
+    mmix_assert_mapping(mtree, MMIX_WATCHDOG_CONTROL_BASE,
+                        MMIX_WATCHDOG_SIZE, "sbsa_gwdt.control");
+    mmix_assert_mapping(mtree, MMIX_POWER_BASE, MMIX_POWER_SIZE,
+                        "virt-ctrl");
+    mmix_assert_mapping(mtree, MMIX_FW_CFG_BASE, 0x8,
+                        "fwcfg.data");
+    mmix_assert_mapping(mtree, MMIX_FW_CFG_BASE + 0x8, 0x2,
+                        "fwcfg.ctl");
+    mmix_assert_mapping(mtree, MMIX_FW_CFG_BASE + 0x10, 0x8,
+                        "fwcfg.dma");
+    mmix_assert_mapping(mtree, MMIX_FRAMEBUFFER_BASE,
+                        MMIX_FRAMEBUFFER_SIZE, "mmix-framebuffer");
+    mmix_assert_mapping(mtree, MMIX_TIMER_BASE,
+                        MMIX_CONTEXT_REGISTER_SIZE, "mmix-timer-global");
+    mmix_assert_mapping(mtree, MMIX_IPI_BASE,
+                        MMIX_CONTEXT_REGISTER_SIZE, "mmix-ipi-global");
+    mmix_assert_mapping(mtree, MMIX_INTC_BASE, MMIX_CONTEXT_STRIDE,
+                        "mmix-intc-global");
+
+    for (i = 0; i < MMIX_INITIAL_CONTEXT_COUNT; i++) {
+        g_autofree char *timer =
+            g_strdup_printf("mmix-timer-context[%u]", i);
+        g_autofree char *ipi = g_strdup_printf("mmix-ipi-context[%u]", i);
+        g_autofree char *intc =
+            g_strdup_printf("mmix-intc-context[%u]", i);
+
+        mmix_assert_mapping(mtree,
+                            mmix_context_address(MMIX_TIMER_CONTEXT_BASE, i),
+                            MMIX_CONTEXT_REGISTER_SIZE, timer);
+        mmix_assert_mapping(mtree,
+                            mmix_context_address(MMIX_IPI_CONTEXT_BASE, i),
+                            MMIX_CONTEXT_REGISTER_SIZE, ipi);
+        mmix_assert_mapping(mtree,
+                            mmix_context_address(MMIX_INTC_CONTEXT_BASE, i),
+                            MMIX_CONTEXT_REGISTER_SIZE, intc);
     }
-    g_assert_cmphex(mmix_regions[MMIX_REGION_FRAMEBUFFER].base +
-                    mmix_regions[MMIX_REGION_FRAMEBUFFER].size, ==,
-                    mmix_virt_mmio_base);
-
-    for (i = 0; i < ARRAY_SIZE(mmix_regions); i++) {
-        uint64_t seed = 0x0102030405060708ULL + i * 0x1010101010101010ULL;
-
-        g_test_message("checking %s endpoints", mmix_regions[i].name);
-        mmix_check_ram_region(qts, &mmix_regions[i], seed);
+    for (i = 0; i < MMIX_VIRTIO_ACTIVE_SLOTS; i++) {
+        mmix_assert_mapping(mtree, mmix_virtio_address(i),
+                            MMIX_VIRTIO_REGISTER_SIZE, "virtio-mmio");
     }
 
     qtest_quit(qts);
 }
 
-static void test_mmix_platform_configurable_ram(void)
+static void test_mmix_platform_slot_boundaries(void)
 {
-    const uint64_t low_last = 0x0ffffff8;
-    const uint64_t high_base = 0x20000000;
-    const uint64_t high_last = 0x2ffffff8;
-    const uint64_t high_alias_probe = 0x28000000;
-    const uint64_t aperture_alias_probe = 0x18000000;
-    const uint64_t low_value = 0x0123456789abcdefULL;
-    const uint64_t high_value = 0xfedcba9876543210ULL;
-    const uint64_t alias_value = 0xa5a55a5af0f00f0fULL;
-    g_autofree char *elf = mmix_create_elf();
-    g_autofree char *quoted_elf = g_shell_quote(elf);
-    QTestState *qts;
+    QTestState *qts = qtest_init("-machine virt");
+    uint64_t address;
 
-    qts = qtest_init("-machine virt -m 128M");
-    qtest_writeq(qts, 0x07fffff8, low_value);
-    g_assert_cmphex(qtest_readq(qts, 0x07fffff8), ==, low_value);
-    qtest_writeq(qts, 0x08000000, ~low_value);
-    g_assert_cmphex(qtest_readq(qts, 0x08000000), !=, ~low_value);
-    qtest_quit(qts);
+    mmix_assert_active_devices(qts, 1);
+    mmix_assert_fw_cfg_signature(qts);
 
-    qts = qtest_initf("-machine virt -m 512M -kernel %s", quoted_elf);
-    qtest_writeq(qts, low_last, low_value);
-    qtest_writeq(qts, high_base, high_value);
-    qtest_writeq(qts, high_last, ~high_value);
-    qtest_writeq(qts, high_alias_probe, alias_value);
-    qtest_writeq(qts, aperture_alias_probe, ~alias_value);
+    mmix_assert_unassigned(qts, MMIX_UART_BASE + MMIX_UART_SIZE);
+    mmix_assert_unassigned(qts, MMIX_RTC_BASE + MMIX_RTC_SIZE);
+    mmix_assert_unassigned(qts, MMIX_RTC_BASE + MMIX_CONTEXT_STRIDE - 8);
+    mmix_assert_unassigned(qts, MMIX_WATCHDOG_REFRESH_BASE +
+                                MMIX_WATCHDOG_SIZE);
+    mmix_assert_unassigned(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                MMIX_WATCHDOG_SIZE);
+    mmix_assert_unassigned(qts, MMIX_POWER_BASE + MMIX_POWER_SIZE);
+    mmix_assert_unassigned(qts, MMIX_FW_CFG_BASE + MMIX_FW_CFG_SIZE);
+    mmix_assert_unassigned(qts, MMIX_FRAMEBUFFER_BASE +
+                                MMIX_FRAMEBUFFER_SIZE);
+    mmix_assert_unassigned(qts, MMIX_TIMER_BASE +
+                                MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(qts, MMIX_IPI_BASE +
+                                MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(qts, MMIX_INTC_BASE + MMIX_CONTEXT_STRIDE);
 
-    g_assert_cmphex(qtest_readq(qts, low_last), ==, low_value);
-    g_assert_cmphex(qtest_readq(qts, high_base), ==, high_value);
-    g_assert_cmphex(qtest_readq(qts, high_last), ==, ~high_value);
-    g_assert_cmphex(qtest_readq(qts, high_alias_probe), ==, alias_value);
-    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_RAM_BASE_OFFSET),
+    address = mmix_context_address(MMIX_TIMER_CONTEXT_BASE, 1);
+    qtest_writeq(qts, address + MMIX_TIMER_CONTEXT_CONTROL, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, address +
+                                MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
+    address = mmix_context_address(MMIX_IPI_CONTEXT_BASE, 1);
+    g_assert_cmphex(qtest_readq(qts, address + MMIX_IPI_CONTEXT_STATUS),
                     ==, 0);
-    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_RAM_SIZE_OFFSET),
-                    ==, 512 * MiB);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
-                    ==, high_base);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
-                    ==, 256 * MiB);
+    address = mmix_context_address(MMIX_INTC_CONTEXT_BASE, 1);
+    qtest_writeq(qts, address + MMIX_INTC_CONTEXT_ENABLE, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, address +
+                                MMIX_INTC_CONTEXT_ENABLE), ==, 0);
+
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_TIMER_CONTEXT_BASE, 0) +
+             MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_TIMER_CONTEXT_BASE,
+                                  MMIX_INITIAL_CONTEXT_COUNT - 1) +
+             MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_TIMER_CONTEXT_BASE,
+                                  MMIX_INITIAL_CONTEXT_COUNT));
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_TIMER_CONTEXT_BASE,
+                                  MMIX_CONTEXT_CAPACITY - 1));
+    g_assert_cmpuint(qtest_readq(
+                         qts, mmix_context_address(MMIX_TIMER_CONTEXT_BASE,
+                                                   MMIX_CONTEXT_CAPACITY)),
+                     ==, 1);
+
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_IPI_CONTEXT_BASE, 0) +
+             MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_IPI_CONTEXT_BASE,
+                                  MMIX_INITIAL_CONTEXT_COUNT - 1) +
+             MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_IPI_CONTEXT_BASE,
+                                  MMIX_INITIAL_CONTEXT_COUNT));
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_IPI_CONTEXT_BASE,
+                                  MMIX_CONTEXT_CAPACITY - 1));
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_IPI_CONTEXT_BASE,
+                                  MMIX_CONTEXT_CAPACITY));
+
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_INTC_CONTEXT_BASE, 0) +
+             MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_INTC_CONTEXT_BASE,
+                                  MMIX_INITIAL_CONTEXT_COUNT - 1) +
+             MMIX_CONTEXT_REGISTER_SIZE);
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_INTC_CONTEXT_BASE,
+                                  MMIX_INITIAL_CONTEXT_COUNT));
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_INTC_CONTEXT_BASE,
+                                  MMIX_CONTEXT_CAPACITY - 1));
+    mmix_assert_unassigned(
+        qts, mmix_context_address(MMIX_INTC_CONTEXT_BASE,
+                                  MMIX_CONTEXT_CAPACITY));
+
+    g_assert_cmphex(qtest_readl(qts, mmix_virtio_address(0) +
+                                VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
+    g_assert_cmphex(qtest_readl(
+                        qts, mmix_virtio_address(
+                                 MMIX_VIRTIO_ACTIVE_SLOTS - 1) +
+                             VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
+    mmix_assert_unassigned(qts, mmix_virtio_address(0) +
+                                MMIX_VIRTIO_REGISTER_SIZE);
+    mmix_assert_unassigned(qts,
+                           mmix_virtio_address(MMIX_VIRTIO_ACTIVE_SLOTS - 1) +
+                           MMIX_VIRTIO_REGISTER_SIZE);
+    mmix_assert_unassigned(qts,
+                           mmix_virtio_address(MMIX_VIRTIO_ACTIVE_SLOTS));
+    mmix_assert_unassigned(qts,
+                           mmix_virtio_address(MMIX_VIRTIO_SLOT_CAPACITY - 1));
+    mmix_assert_unassigned(qts,
+                           mmix_virtio_address(MMIX_VIRTIO_SLOT_CAPACITY));
 
     qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
-static void mmix_assert_split_ram_devices(QTestState *qts)
+static void test_mmix_platform_ram_size_independence(gconstpointer opaque)
 {
-    const uint64_t uart = mmix_devices[MMIX_DEVICE_UART0].base;
-    const uint64_t virtio = mmix_devices[MMIX_DEVICE_VIRTIO_BLOCK0].base;
-    const uint64_t framebuffer = mmix_devices[MMIX_DEVICE_FRAMEBUFFER].base;
-    const uint64_t timer = mmix_devices[MMIX_DEVICE_TIMER0].base;
-    const uint64_t intc = mmix_devices[MMIX_DEVICE_INTC].base;
-    const uint64_t ipi = mmix_devices[MMIX_DEVICE_IPI].base;
+    const MMIXRAMSizeCase *test = opaque;
+    g_autofree char *args = test->memory ?
+        g_strdup_printf("-machine virt -m %s -smp %u", test->memory,
+                        test->cpus) :
+        g_strdup_printf("-machine virt -smp %u", test->cpus);
+    QTestState *qts = qtest_init(args);
+    g_autofree char *mtree = qtest_hmp(qts, "info mtree -f");
+    g_autofree char *ram =
+        g_strdup_printf("%016x-%016" PRIx64 " (prio 0, ram): mmix.ram",
+                        0, test->size - 1);
 
-    g_assert_cmphex(qtest_readb(qts, uart + MMIX_UART_LSR) &
-                    MMIX_UART_LSR_THRE, ==, MMIX_UART_LSR_THRE);
-    g_assert_cmphex(qtest_readl(qts, virtio + VIRTIO_MMIO_MAGIC_VALUE), ==,
-                    0x74726976);
-    g_assert_cmpuint(qtest_readq(qts, framebuffer +
-                                 MMIX_FRAMEBUFFER_REG_WIDTH), ==, 1024);
-    g_assert_cmpuint(qtest_readq(qts, timer + MMIX_TIMER_CONTEXT_BASE +
-                                 MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
-    g_assert_cmpuint(qtest_readl(qts, intc + MMIX_INTC_PENDING), ==, 0);
-    g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_ACTIVE_TARGETS), ==, 3);
-}
-
-static void test_mmix_platform_split_ram_contract(void)
-{
-    const char *cmdline = "console=ttyS0 split-ram=1";
-    const uint64_t framebuffer_base =
-        mmix_regions[MMIX_REGION_FRAMEBUFFER].base;
-    const uint64_t framebuffer_value = 0x0011223344556677ULL;
-    g_autofree char *elf = mmix_create_elf();
-    g_autofree char *quoted_elf = g_shell_quote(elf);
-    g_autofree char *quoted_cmdline = g_shell_quote(cmdline);
-    QTestState *qts = qtest_initf(
-        "-machine virt -m 512M -display none -smp 2 -kernel %s -append %s",
-        quoted_elf, quoted_cmdline);
-
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
-                     ==, 2);
-    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_RAM_SIZE_OFFSET),
-                    ==, 512 * MiB);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
-                    ==, 0x20000000);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
-                    ==, 256 * MiB);
-    mmix_assert_kernel_cmdline(qts, cmdline);
-    mmix_assert_split_ram_devices(qts);
-
-    qtest_writeq(qts, framebuffer_base, framebuffer_value);
-    g_assert_cmphex(qtest_readq(qts, framebuffer_base), ==,
-                    framebuffer_value);
-
-    qtest_system_reset(qts);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
-                     ==, 2);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
-                    ==, 0x20000000);
-    mmix_assert_kernel_cmdline(qts, cmdline);
-    mmix_assert_split_ram_devices(qts);
-
+    g_assert_nonnull(strstr(mtree, ram));
+    mmix_assert_active_devices(qts, test->cpus);
     qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
 }
 
-static void test_mmix_platform_aperture_isolation(void)
+static void test_mmix_platform_low_address_isolation(void)
 {
-    static const struct {
-        uint64_t aperture;
-        uint64_t high_ram;
-        uint64_t value;
-    } probes[] = {
-        { 0x10008000, 0x20008000, 0x0123456789abcdefULL },
-        { 0x18000000, 0x28000000, 0xa5a55a5af0f00f0fULL },
-        { 0x1ffffff8, 0x2ffffff8, 0xfedcba9876543210ULL },
+    static const uint64_t low_addresses[] = {
+        0x10000000,
+        0x10001000,
+        0x10002000,
+        0x10003000,
+        0x10004000,
+        0x10006000,
+        0x18000000,
+        0x20000000,
+        0x24000000,
+        0x30000000,
+        0x40000000,
     };
-    const uint64_t low_last = 0x0fffffff;
-    const uint64_t aperture_last = 0x1fffffff;
-    QTestState *qts = qtest_init("-machine virt -m 512M");
+    QTestState *qts = qtest_init("-machine virt -m 8G");
     size_t i;
 
-    qtest_writeb(qts, low_last, 0x5a);
-    g_assert_cmphex(qtest_readb(qts, low_last), ==, 0x5a);
-    qtest_writeb(qts, aperture_last, 0xa5);
-    g_assert_cmphex(qtest_readb(qts, aperture_last), !=, 0xa5);
+    for (i = 0; i < ARRAY_SIZE(low_addresses); i++) {
+        uint64_t value = UINT64_C(0x1020304050607000) + i;
 
-    for (i = 0; i < ARRAY_SIZE(probes); i++) {
-        qtest_writeq(qts, probes[i].high_ram, probes[i].value);
-        qtest_writeq(qts, probes[i].aperture, ~probes[i].value);
-        g_assert_cmphex(qtest_readq(qts, probes[i].high_ram), ==,
-                        probes[i].value);
-        g_assert_cmphex(qtest_readq(qts, probes[i].aperture), !=,
-                        ~probes[i].value);
+        qtest_writeq(qts, low_addresses[i], value);
+        g_assert_cmphex(qtest_readq(qts, low_addresses[i]), ==, value);
     }
-
-    qtest_system_reset(qts);
-    for (i = 0; i < ARRAY_SIZE(probes); i++) {
-        g_assert_cmphex(qtest_readq(qts, probes[i].high_ram), ==,
-                        probes[i].value);
-        qtest_writeq(qts, probes[i].aperture, probes[i].value);
-        g_assert_cmphex(qtest_readq(qts, probes[i].high_ram), ==,
-                        probes[i].value);
-    }
+    mmix_assert_active_devices(qts, 1);
 
     qtest_quit(qts);
 }
 
-static void test_mmix_platform_mmio_layout(void)
+static void mmix_assert_deferred_apertures(QTestState *qts)
 {
-    uint64_t aperture_end = mmix_virt_mmio_base + mmix_virt_mmio_size;
+    static const uint64_t addresses[] = {
+        UINT64_C(0x0001000000000000),
+        UINT64_C(0x0001000010050000),
+        UINT64_C(0x0001000014010000),
+        UINT64_C(0x0001000018010000),
+        MMIX_DISCOVERABLE_BASE,
+        UINT64_C(0x0001000080000000),
+        UINT64_C(0x0001000110000000),
+        UINT64_C(0x0001000300000000),
+        UINT64_C(0x0001110000000000),
+    };
     size_t i;
-    size_t j;
 
-    g_assert_cmphex(mmix_virt_mmio_base, ==, 0x10000000);
-    g_assert_cmphex(aperture_end, ==, 0x20000000);
+    for (i = 0; i < ARRAY_SIZE(addresses); i++) {
+        mmix_assert_unassigned(qts, addresses[i]);
+    }
+}
 
-    for (i = 0; i < ARRAY_SIZE(mmix_devices); i++) {
-        const MMIXPlatformDevice *device = &mmix_devices[i];
-        uint64_t device_end = device->base + device->size;
+static void test_mmix_platform_deferred_apertures(void)
+{
+    QTestState *qts = qtest_init("-machine virt");
 
-        g_test_message("checking %s MMIO window", device->name);
-        g_assert_cmphex(device->size, >, 0);
-        g_assert_cmphex(device->base, >=, mmix_virt_mmio_base);
-        g_assert_cmphex(device_end, <=, aperture_end);
+    mmix_assert_deferred_apertures(qts);
+    qtest_quit(qts);
+}
 
-        for (j = 0; j < i; j++) {
-            const MMIXPlatformDevice *other = &mmix_devices[j];
-            uint64_t other_end = other->base + other->size;
+static void test_mmix_platform_nonoverlapping_extents(void)
+{
+    static const MMIXPlatformRange ranges[] = {
+        { MMIX_UART_BASE, MMIX_UART_SIZE },
+        { MMIX_RTC_BASE, MMIX_RTC_SIZE },
+        { MMIX_WATCHDOG_REFRESH_BASE, MMIX_WATCHDOG_SIZE },
+        { MMIX_WATCHDOG_CONTROL_BASE, MMIX_WATCHDOG_SIZE },
+        { MMIX_POWER_BASE, MMIX_POWER_SIZE },
+        { MMIX_FW_CFG_BASE, MMIX_FW_CFG_SIZE },
+        { MMIX_FRAMEBUFFER_BASE, MMIX_FRAMEBUFFER_SIZE },
+        { MMIX_TIMER_BASE, MMIX_CONTEXT_REGISTER_SIZE },
+        { MMIX_IPI_BASE, MMIX_CONTEXT_REGISTER_SIZE },
+        { MMIX_INTC_BASE, MMIX_CONTEXT_STRIDE },
+        { MMIX_VIRTIO_BASE,
+          MMIX_VIRTIO_ACTIVE_SLOTS * MMIX_VIRTIO_STRIDE },
+        { UINT64_C(0x0001000100000000), UINT64_C(0x10000000) },
+        { UINT64_C(0x0001000200000000), UINT64_C(0x100000000) },
+        { UINT64_C(0x0001010000000000), UINT64_C(0x100000000000) },
+    };
+    unsigned int i;
+    unsigned int j;
 
-            g_assert_true(device_end <= other->base ||
-                          other_end <= device->base);
+    for (i = 0; i < ARRAY_SIZE(ranges); i++) {
+        for (j = i + 1; j < ARRAY_SIZE(ranges); j++) {
+            g_assert_true(ranges[i].base + ranges[i].size <= ranges[j].base ||
+                          ranges[j].base + ranges[j].size <= ranges[i].base);
         }
     }
 }
 
-static void test_mmix_platform_initial_stack_layout(void)
+static char *mmix_write_platform_image(const char *directory,
+                                       const char *name,
+                                       const uint8_t *contents, size_t size)
 {
-    const MMIXPlatformRegion *low_ram = &mmix_regions[MMIX_REGION_LOW_RAM];
-    const MMIXPlatformRegion *platform_ram =
-        &mmix_regions[MMIX_REGION_PLATFORM_RAM];
-    const MMIXPlatformRegion *framebuffer =
-        &mmix_regions[MMIX_REGION_FRAMEBUFFER];
-    uint64_t previous_end = mmix_initial_stack_base;
-    uint64_t area_end;
-    unsigned int i;
-
-    for (i = 0; i < MMIX_INITIAL_STACK_SLOT_COUNT; i++) {
-        uint64_t slot_base =
-            mmix_initial_stack_base + i * mmix_initial_stack_slot_size;
-        uint64_t slot_end = slot_base + mmix_initial_stack_slot_size;
-
-        g_assert_cmphex(slot_base & (sizeof(uint64_t) - 1), ==, 0);
-        g_assert_cmphex(slot_base, ==, previous_end);
-        g_assert_cmphex(slot_base, >=, low_ram->base);
-        g_assert_cmphex(slot_end, <=, low_ram->base + low_ram->size);
-        previous_end = slot_end;
-    }
-
-    area_end = mmix_initial_stack_base +
-               MMIX_INITIAL_STACK_SLOT_COUNT *
-               mmix_initial_stack_slot_size;
-    g_assert_cmphex(mmix_initial_stack_base, ==, 0x00010000);
-    g_assert_cmphex(mmix_initial_stack_base + mmix_initial_stack_slot_size,
-                    ==, 0x00018000);
-    g_assert_cmphex(mmix_initial_stack_base +
-                    15 * mmix_initial_stack_slot_size, ==, 0x00088000);
-    g_assert_cmphex(previous_end, ==, area_end);
-    g_assert_cmphex(area_end, ==, 0x00090000);
-    g_assert_cmphex(area_end, <=, platform_ram->base);
-    g_assert_cmphex(area_end, <=, framebuffer->base);
-}
-
-static void test_mmix_platform_bootinfo_headless(void)
-{
-    g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = mmix_start_elf(elf, NULL);
-    const MMIXBootInfoOffset implemented_device_offsets[] = {
-        MMIX_BOOTINFO_UART_BASE_OFFSET,
-        MMIX_BOOTINFO_UART_IRQ_OFFSET,
-        MMIX_BOOTINFO_TIMER_BASE_OFFSET,
-        MMIX_BOOTINFO_TIMER_IRQ_BASE_OFFSET,
-        MMIX_BOOTINFO_TIMER_IRQ_COUNT_OFFSET,
-        MMIX_BOOTINFO_INTC_BASE_OFFSET,
-        MMIX_BOOTINFO_INTC_IRQ_COUNT_OFFSET,
-        MMIX_BOOTINFO_VIRTIO_MMIO_BASE_OFFSET,
-        MMIX_BOOTINFO_VIRTIO_MMIO_IRQ_OFFSET,
-        MMIX_BOOTINFO_VIRTIO_MMIO_COUNT_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_CONTROL_BASE_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_BASE_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_SIZE_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_IRQ_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_WIDTH_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_HEIGHT_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_STRIDE_OFFSET,
-        MMIX_BOOTINFO_FRAMEBUFFER_FORMAT_OFFSET,
-        MMIX_BOOTINFO_IPI_BASE_OFFSET,
-        MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET,
-        MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET,
-    };
-    uint64_t uart_base;
-    uint64_t timer_base;
-    uint64_t intc_base;
-    uint64_t ipi_base;
-    uint64_t virtio_base;
-    uint64_t framebuffer_control_base;
-    uint64_t uart_irq;
-    uint64_t virtio_irq;
-    uint64_t framebuffer_irq;
-    uint64_t timer_irq;
-    size_t i;
-
-    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_MAGIC_OFFSET), ==,
-                    mmix_bootinfo_magic);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_VERSION_OFFSET), ==,
-                     MMIX_BOOTINFO_VERSION);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_SIZE_OFFSET), ==,
-                     MMIX_BOOTINFO_SIZE);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_FLAGS_OFFSET), ==,
-                     0);
-    mmix_assert_kernel_cmdline(qts, "");
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
-                     ==, 1);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
-                     ==, 0);
-    g_assert_cmphex(mmix_bootinfo_read(qts, MMIX_BOOTINFO_MMIO_BASE_OFFSET),
-                    ==, mmix_virt_mmio_base);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_BASE_OFFSET),
-                    ==, 0);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_HIGH_RAM_SIZE_OFFSET),
-                    ==, 0);
-    for (i = 0; i < ARRAY_SIZE(implemented_device_offsets); i++) {
-        g_assert_cmpuint(mmix_bootinfo_read(qts,
-                                           implemented_device_offsets[i]),
-                         >, 0);
-    }
-
-    uart_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_UART_BASE_OFFSET);
-    timer_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_TIMER_BASE_OFFSET);
-    intc_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_INTC_BASE_OFFSET);
-    ipi_base = mmix_bootinfo_read(qts, MMIX_BOOTINFO_IPI_BASE_OFFSET);
-    virtio_base = mmix_bootinfo_read(
-        qts, MMIX_BOOTINFO_VIRTIO_MMIO_BASE_OFFSET);
-    framebuffer_control_base = mmix_bootinfo_read(
-        qts, MMIX_BOOTINFO_FRAMEBUFFER_CONTROL_BASE_OFFSET);
-    g_assert_cmphex(uart_base, ==, mmix_devices[MMIX_DEVICE_UART0].base);
-    g_assert_cmphex(timer_base, ==, mmix_devices[MMIX_DEVICE_TIMER0].base);
-    g_assert_cmphex(intc_base, ==, mmix_devices[MMIX_DEVICE_INTC].base);
-    g_assert_cmphex(ipi_base, ==, mmix_devices[MMIX_DEVICE_IPI].base);
-    g_assert_cmphex(virtio_base, ==,
-                    mmix_devices[MMIX_DEVICE_VIRTIO_BLOCK0].base);
-    g_assert_cmphex(framebuffer_control_base, ==,
-                    mmix_devices[MMIX_DEVICE_FRAMEBUFFER].base);
-
-    g_assert_cmphex(qtest_readb(qts, uart_base + MMIX_UART_LSR) &
-                    MMIX_UART_LSR_THRE, ==, MMIX_UART_LSR_THRE);
-    g_assert_cmphex(qtest_readl(qts, virtio_base + VIRTIO_MMIO_MAGIC_VALUE),
-                    ==, 0x74726976);
-    g_assert_cmphex(qtest_readq(qts, framebuffer_control_base +
-                                MMIX_FRAMEBUFFER_REG_BASE), ==,
-                    mmix_bootinfo_read(qts,
-                                       MMIX_BOOTINFO_FRAMEBUFFER_BASE_OFFSET));
-    g_assert_cmphex(qtest_readq(qts, framebuffer_control_base +
-                                MMIX_FRAMEBUFFER_REG_SIZE), ==,
-                    mmix_bootinfo_read(qts,
-                                       MMIX_BOOTINFO_FRAMEBUFFER_SIZE_OFFSET));
-    g_assert_cmpuint(qtest_readq(qts, framebuffer_control_base +
-                                 MMIX_FRAMEBUFFER_REG_WIDTH), ==,
-                     mmix_bootinfo_read(
-                         qts, MMIX_BOOTINFO_FRAMEBUFFER_WIDTH_OFFSET));
-    g_assert_cmpuint(qtest_readq(qts, timer_base +
-                                 MMIX_TIMER_CONTEXT_BASE +
-                                 MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
-    g_assert_cmpuint(qtest_readl(qts, intc_base + MMIX_INTC_PENDING),
-                     ==, 0);
-    g_assert_cmphex(qtest_readq(qts, ipi_base + MMIX_IPI_ACTIVE_TARGETS),
-                    ==, 1);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET),
-                    ==, mmix_ipi_request);
-    g_assert_cmpuint(MMIX_BOOTINFO_IPI_BASE_OFFSET, ==,
-                     MMIX_BOOTINFO_COMPAT_PREFIX_SIZE);
-
-    uart_irq = mmix_bootinfo_read(qts, MMIX_BOOTINFO_UART_IRQ_OFFSET);
-    virtio_irq = mmix_bootinfo_read(qts,
-                                   MMIX_BOOTINFO_VIRTIO_MMIO_IRQ_OFFSET);
-    framebuffer_irq = mmix_bootinfo_read(qts,
-                                        MMIX_BOOTINFO_FRAMEBUFFER_IRQ_OFFSET);
-    timer_irq = mmix_bootinfo_read(qts,
-                                  MMIX_BOOTINFO_TIMER_IRQ_BASE_OFFSET);
-    g_assert_cmpuint(uart_irq, ==, mmix_devices[MMIX_DEVICE_UART0].irq);
-    g_assert_cmpuint(virtio_irq, ==,
-                     mmix_devices[MMIX_DEVICE_VIRTIO_BLOCK0].irq);
-    g_assert_cmpuint(framebuffer_irq, ==,
-                     mmix_devices[MMIX_DEVICE_FRAMEBUFFER].irq);
-    g_assert_cmpuint(timer_irq, ==, mmix_devices[MMIX_DEVICE_TIMER0].irq);
-    g_assert_cmpuint(uart_irq, !=, virtio_irq);
-    g_assert_cmpuint(uart_irq, !=, framebuffer_irq);
-    g_assert_cmpuint(uart_irq, !=, timer_irq);
-    g_assert_cmpuint(virtio_irq, !=, framebuffer_irq);
-    g_assert_cmpuint(virtio_irq, !=, timer_irq);
-    g_assert_cmpuint(framebuffer_irq, !=, timer_irq);
-
-    qtest_writeq(qts, framebuffer_control_base +
-                  MMIX_FRAMEBUFFER_REG_FLUSH, 1);
-    g_assert_cmphex(qtest_readl(qts, intc_base + MMIX_INTC_PENDING) &
-                    (1U << framebuffer_irq), ==, 0);
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_kernel_cmdline(void)
-{
-    const char *cmdline = "console=ttyS0 root=/dev/vda";
-    g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = mmix_start_elf(elf, cmdline);
-
-    mmix_assert_kernel_cmdline(qts, cmdline);
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_empty_kernel_cmdline(void)
-{
-    g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = mmix_start_elf(elf, "");
-
-    /* MachineState normalizes absent and explicitly empty values to "". */
-    mmix_assert_kernel_cmdline(qts, "");
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_max_kernel_cmdline(void)
-{
-    g_autofree char *cmdline =
-        g_strnfill(MMIX_BOOTINFO_KERNEL_CMDLINE_MAX, 'x');
-    g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = mmix_start_elf(elf, cmdline);
-
-    mmix_assert_kernel_cmdline(qts, cmdline);
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_smp_accepted(gconstpointer opaque)
-{
-    const char *smp = opaque;
-    QTestState *qts = qtest_initf("-machine virt -smp %s", smp);
-
-    qtest_quit(qts);
-}
-
-static void mmix_assert_smp_topology(QTestState *qts,
-                                     unsigned int expected_count)
-{
-    bool seen[MMIX_INITIAL_STACK_SLOT_COUNT] = { false };
-    g_autoptr(QDict) response = NULL;
-    QList *cpus;
-    QObject *entry;
-
-    response = qtest_qmp(qts, "{ 'execute': 'query-cpus-fast' }");
-    g_assert(qdict_haskey(response, "return"));
-    cpus = qdict_get_qlist(response, "return");
-    g_assert_cmpuint(qlist_size(cpus), ==, expected_count);
-
-    while ((entry = qlist_pop(cpus))) {
-        QDict *cpu = qobject_to(QDict, entry);
-        unsigned int index = qdict_get_int(cpu, "cpu-index");
-        const char *path = qdict_get_str(cpu, "qom-path");
-        g_autofree char *expected_path =
-            g_strdup_printf("/machine/cpu[%u]", index);
-        g_autoptr(QDict) stack_response = NULL;
-        uint64_t expected_stack =
-            mmix_initial_stack_base + index * mmix_initial_stack_slot_size;
-
-        g_assert_cmpuint(index, <, expected_count);
-        g_assert_false(seen[index]);
-        seen[index] = true;
-        g_assert_cmpstr(path, ==, expected_path);
-
-        stack_response = qtest_qmp(
-            qts,
-            "{ 'execute': 'qom-get', "
-            "  'arguments': { 'path': %s, "
-            "                 'property': 'initial-stack' } }",
-            path);
-        g_assert_cmphex(qdict_get_int(stack_response, "return"), ==,
-                        expected_stack);
-        qobject_unref(entry);
-    }
-
-    for (unsigned int i = 0; i < expected_count; i++) {
-        g_assert_true(seen[i]);
-    }
-}
-
-static void mmix_assert_stack_slots_writable(QTestState *qts,
-                                             unsigned int cpu_count)
-{
-    unsigned int i;
-
-    for (i = 0; i < cpu_count; i++) {
-        uint64_t base = mmix_initial_stack_base +
-                        i * mmix_initial_stack_slot_size;
-        uint64_t end = base + mmix_initial_stack_slot_size - sizeof(uint64_t);
-
-        qtest_writeq(qts, base, 0x1000000000000000ULL + i);
-        qtest_writeq(qts, end, 0xf000000000000000ULL + i);
-    }
-    for (i = 0; i < cpu_count; i++) {
-        uint64_t base = mmix_initial_stack_base +
-                        i * mmix_initial_stack_slot_size;
-        uint64_t end = base + mmix_initial_stack_slot_size - sizeof(uint64_t);
-
-        g_assert_cmphex(qtest_readq(qts, base), ==,
-                        0x1000000000000000ULL + i);
-        g_assert_cmphex(qtest_readq(qts, end), ==,
-                        0xf000000000000000ULL + i);
-    }
-}
-
-static void test_mmix_platform_smp_cpus(gconstpointer opaque)
-{
-    unsigned int expected_count = GPOINTER_TO_UINT(opaque);
-    g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = mmix_start_elf_smp(elf, NULL, expected_count);
-
-    mmix_assert_smp_topology(qts, expected_count);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
-                     ==, expected_count);
-    g_assert_cmpuint(mmix_bootinfo_read(qts,
-                                       MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
-                     ==, 0);
-    mmix_assert_stack_slots_writable(qts, expected_count);
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static uint64_t mmix_register_dump_value(const char *dump, const char *label)
-{
-    const char *value = strstr(dump, label);
-    uint64_t result;
-
-    g_assert_nonnull(value);
-    g_assert_cmpint(sscanf(value + strlen(label), "%" SCNx64, &result), ==, 1);
-    return result;
-}
-
-static uint64_t mmix_cpu_rq(QTestState *qts, unsigned int cpu_index)
-{
-    g_autofree char *dump = qtest_hmp(qts, "info registers %u", cpu_index);
-
-    return mmix_register_dump_value(dump, "rQ =0x");
-}
-
-static void mmix_wait_cpu_rq(QTestState *qts, unsigned int cpu_index,
-                             uint64_t expected)
-{
-    gint64 deadline = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
-
-    while (mmix_cpu_rq(qts, cpu_index) != expected) {
-        g_assert_cmpint(g_get_monotonic_time(), <, deadline);
-        g_usleep(1000);
-    }
-}
-
-static uint64_t mmix_intc_enable_address(unsigned int cpu_index)
-{
-    return mmix_devices[MMIX_DEVICE_INTC].base + MMIX_INTC_CONTEXT_BASE +
-           cpu_index * MMIX_INTC_CONTEXT_STRIDE + MMIX_INTC_CONTEXT_ENABLE;
-}
-
-static uint64_t mmix_timer_context_address(unsigned int cpu_index,
-                                           uint64_t reg)
-{
-    return mmix_devices[MMIX_DEVICE_TIMER0].base + MMIX_TIMER_CONTEXT_BASE +
-           cpu_index * MMIX_TIMER_CONTEXT_STRIDE + reg;
-}
-
-static uint64_t mmix_ipi_context_address(unsigned int cpu_index,
-                                         uint64_t reg)
-{
-    return mmix_devices[MMIX_DEVICE_IPI].base + MMIX_IPI_CONTEXT_BASE +
-           cpu_index * MMIX_IPI_CONTEXT_STRIDE + reg;
-}
-
-static void mmix_set_intc_irq(QTestState *qts, unsigned int irq, int level)
-{
-    qtest_set_irq_in(qts, mmix_intc_qom_path, "unnamed-gpio-in", irq, level);
-}
-
-static void mmix_assert_cpu_startup(QTestState *qts, unsigned int cpu_index)
-{
-    g_autofree char *dump = qtest_hmp(qts, "info registers %u", cpu_index);
-    uint64_t stack = mmix_initial_stack_base +
-                     cpu_index * mmix_initial_stack_slot_size;
-
-    g_assert_cmphex(mmix_register_dump_value(dump, "pc=0x"), ==, 0);
-    g_assert_cmphex(mmix_register_dump_value(dump, "rO=0x"), ==, stack);
-    g_assert_cmphex(mmix_register_dump_value(dump, "rS=0x"), ==, stack);
-    g_assert_cmphex(mmix_register_dump_value(dump, "stack-bottom=0x"), ==,
-                    stack);
-    g_assert_cmphex(mmix_register_dump_value(dump, "r0  =0x"), ==,
-                    cpu_index);
-    g_assert_cmphex(mmix_register_dump_value(dump, "r1  =0x"), ==,
-                    mmix_bootinfo_base);
-}
-
-static void test_mmix_platform_smp_interrupt_wiring(gconstpointer opaque)
-{
-    unsigned int cpu_count = GPOINTER_TO_UINT(opaque);
-    unsigned int target_cpu = cpu_count - 1;
-    unsigned int irq = MMIX_TIMER_IRQ_BASE + target_cpu;
-    uint32_t mask = 1U << irq;
-    uint64_t baseline[MMIX_INITIAL_STACK_SLOT_COUNT];
-    g_autoptr(QDict) response = NULL;
-    QTestState *qts = qtest_initf("-machine virt -smp %u", cpu_count);
-    unsigned int i;
-
-    response = qtest_qmp(
-        qts,
-        "{ 'execute': 'qom-get', "
-        "  'arguments': { 'path': %s, 'property': 'num-cpus' } }",
-        mmix_intc_qom_path);
-    g_assert_cmpuint(qdict_get_int(response, "return"), ==, cpu_count);
-
-    for (i = 0; i < cpu_count; i++) {
-        baseline[i] = mmix_cpu_rq(qts, i);
-    }
-    qtest_writel(qts, mmix_intc_enable_address(target_cpu), mask);
-    mmix_set_intc_irq(qts, irq, 1);
-    mmix_wait_cpu_rq(qts, target_cpu,
-                     baseline[target_cpu] |
-                     mmix_interrupt_controller_request);
-
-    for (i = 0; i < cpu_count; i++) {
-        g_assert_cmphex(mmix_cpu_rq(qts, i), ==,
-                        i == target_cpu ?
-                        baseline[i] | mmix_interrupt_controller_request :
-                        baseline[i]);
-    }
-
-    mmix_set_intc_irq(qts, irq, 0);
-    qtest_system_reset(qts);
-    for (i = 0; i < cpu_count; i++) {
-        mmix_wait_cpu_rq(qts, i, baseline[i]);
-    }
-
-    qtest_quit(qts);
-}
-
-static void test_mmix_platform_smp_timer_wiring(gconstpointer opaque)
-{
-    unsigned int cpu_count = GPOINTER_TO_UINT(opaque);
-    unsigned int target_cpu = cpu_count - 1;
-    unsigned int irq = MMIX_TIMER_IRQ_BASE + target_cpu;
-    uint32_t mask = 1U << irq;
-    uint64_t baseline[MMIX_INITIAL_STACK_SLOT_COUNT];
-    uint64_t timer_base = mmix_devices[MMIX_DEVICE_TIMER0].base;
-    uint64_t now;
-    g_autofree char *elf = mmix_create_elf();
-    g_autoptr(QDict) response = NULL;
-    QTestState *qts = mmix_start_elf_smp(elf, NULL, cpu_count);
-    unsigned int i;
-
-    response = qtest_qmp(
-        qts,
-        "{ 'execute': 'qom-get', "
-        "  'arguments': { 'path': %s, 'property': 'num-cpus' } }",
-        mmix_timer_qom_path);
-    g_assert_cmpuint(qdict_get_int(response, "return"), ==, cpu_count);
-    g_assert_cmpuint(mmix_bootinfo_read(qts,
-                                       MMIX_BOOTINFO_TIMER_IRQ_BASE_OFFSET),
-                     ==, MMIX_TIMER_IRQ_BASE);
-    g_assert_cmpuint(mmix_bootinfo_read(qts,
-                                       MMIX_BOOTINFO_TIMER_IRQ_COUNT_OFFSET),
-                     ==, cpu_count);
-
-    for (i = 0; i < cpu_count; i++) {
-        baseline[i] = mmix_cpu_rq(qts, i);
-    }
-
-    qtest_writel(qts, mmix_intc_enable_address(target_cpu), mask);
-    now = qtest_readq(qts, timer_base + MMIX_TIMER_TIME);
-    qtest_writeq(qts,
-                 mmix_timer_context_address(
-                     target_cpu, MMIX_TIMER_CONTEXT_COMPARE),
-                 now + 10);
-    qtest_writeq(qts,
-                 mmix_timer_context_address(
-                     target_cpu, MMIX_TIMER_CONTEXT_CONTROL),
-                 MMIX_TIMER_CONTROL_ENABLE |
-                 MMIX_TIMER_CONTROL_IRQ_ENABLE);
-    qtest_clock_step(qts, 10);
-
-    g_assert_cmphex(qtest_readq(
-                        qts,
-                        mmix_timer_context_address(
-                            target_cpu, MMIX_TIMER_CONTEXT_STATUS)),
-                    ==, MMIX_TIMER_STATUS_PENDING);
-    g_assert_cmphex(qtest_readl(
-                        qts,
-                        mmix_devices[MMIX_DEVICE_INTC].base +
-                        MMIX_INTC_PENDING),
-                    ==, mask);
-    mmix_wait_cpu_rq(qts, target_cpu,
-                     baseline[target_cpu] |
-                     mmix_interrupt_controller_request);
-
-    for (i = 0; i < cpu_count; i++) {
-        g_assert_cmphex(mmix_cpu_rq(qts, i), ==,
-                        i == target_cpu ?
-                        baseline[i] | mmix_interrupt_controller_request :
-                        baseline[i]);
-    }
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_smp_ipi_wiring(gconstpointer opaque)
-{
-    unsigned int cpu_count = GPOINTER_TO_UINT(opaque);
-    unsigned int target_cpu = cpu_count - 1;
-    uint64_t active_targets = (1ULL << cpu_count) - 1;
-    uint64_t invalid_target = 1ULL << cpu_count;
-    uint64_t baseline[MMIX_INITIAL_STACK_SLOT_COUNT];
-    uint64_t ipi_base = mmix_devices[MMIX_DEVICE_IPI].base;
-    g_autofree char *elf = mmix_create_elf();
-    g_autoptr(QDict) response = NULL;
-    QTestState *qts = mmix_start_elf_smp(elf, NULL, cpu_count);
-    unsigned int i;
-
-    response = qtest_qmp(
-        qts,
-        "{ 'execute': 'qom-get', "
-        "  'arguments': { 'path': %s, 'property': 'num-cpus' } }",
-        mmix_ipi_qom_path);
-    g_assert_cmpuint(qdict_get_int(response, "return"), ==, cpu_count);
-    g_assert_cmphex(qtest_readq(qts, ipi_base + MMIX_IPI_ACTIVE_TARGETS),
-                    ==, active_targets);
-    g_assert_cmphex(mmix_bootinfo_read(qts,
-                                      MMIX_BOOTINFO_IPI_BASE_OFFSET),
-                    ==, ipi_base);
-    g_assert_cmpuint(mmix_bootinfo_read(
-                         qts, MMIX_BOOTINFO_IPI_TARGET_COUNT_OFFSET),
-                     ==, cpu_count);
-    g_assert_cmphex(mmix_bootinfo_read(
-                        qts, MMIX_BOOTINFO_IPI_REQUEST_MASK_OFFSET),
-                    ==, mmix_ipi_request);
-
-    for (i = 0; i < cpu_count; i++) {
-        baseline[i] = mmix_cpu_rq(qts, i);
-    }
-
-    qtest_writeq(qts, ipi_base + MMIX_IPI_SEND,
-                 (1ULL << target_cpu) | invalid_target);
-    mmix_wait_cpu_rq(qts, target_cpu,
-                     baseline[target_cpu] | mmix_ipi_request);
-    for (i = 0; i < cpu_count; i++) {
-        g_assert_cmphex(mmix_cpu_rq(qts, i), ==,
-                        i == target_cpu ?
-                        baseline[i] | mmix_ipi_request : baseline[i]);
-    }
-    g_assert_cmphex(qtest_readq(
-                        qts,
-                        mmix_ipi_context_address(
-                            target_cpu, MMIX_IPI_CONTEXT_STATUS)),
-                    ==, MMIX_IPI_STATUS_PENDING);
-    if (cpu_count < MMIX_INITIAL_STACK_SLOT_COUNT) {
-        g_assert_cmphex(qtest_readq(
-                            qts,
-                            mmix_ipi_context_address(
-                                cpu_count, MMIX_IPI_CONTEXT_STATUS)),
-                        ==, 0);
-    }
-
-    qtest_writeq(qts,
-                 mmix_ipi_context_address(target_cpu,
-                                          MMIX_IPI_CONTEXT_CLEAR),
-                 MMIX_IPI_STATUS_PENDING);
-    g_assert_cmphex(qtest_readq(
-                        qts,
-                        mmix_ipi_context_address(
-                            target_cpu, MMIX_IPI_CONTEXT_STATUS)),
-                    ==, 0);
-    qtest_system_reset(qts);
-    for (i = 0; i < cpu_count; i++) {
-        mmix_wait_cpu_rq(qts, i, baseline[i]);
-    }
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_smp_reset(void)
-{
-    g_autofree char *elf = mmix_create_elf();
-    QTestState *qts = mmix_start_elf_smp(elf, NULL, 2);
-    uint64_t baseline_rq[2];
-    unsigned int i;
-
-    for (i = 0; i < 2; i++) {
-        mmix_assert_cpu_startup(qts, i);
-        baseline_rq[i] = mmix_cpu_rq(qts, i);
-    }
-
-    qtest_writel(qts, mmix_intc_enable_address(1),
-                 1U << (MMIX_TIMER_IRQ_BASE + 1));
-    mmix_set_intc_irq(qts, MMIX_TIMER_IRQ_BASE + 1, 1);
-    mmix_wait_cpu_rq(qts, 1,
-                     baseline_rq[1] | mmix_interrupt_controller_request);
-    g_assert_cmphex(mmix_cpu_rq(qts, 0), ==, baseline_rq[0]);
-
-    mmix_set_intc_irq(qts, MMIX_TIMER_IRQ_BASE + 1, 0);
-    qtest_system_reset(qts);
-    mmix_assert_smp_topology(qts, 2);
-    g_assert_cmpuint(mmix_bootinfo_read(qts, MMIX_BOOTINFO_CPU_COUNT_OFFSET),
-                     ==, 2);
-    g_assert_cmpuint(mmix_bootinfo_read(qts,
-                                       MMIX_BOOTINFO_BOOT_CPU_ID_OFFSET),
-                     ==, 0);
-    for (i = 0; i < 2; i++) {
-        mmix_assert_cpu_startup(qts, i);
-        mmix_wait_cpu_rq(qts, i, baseline_rq[i]);
-    }
-
-    qtest_quit(qts);
-    g_assert_cmpint(g_unlink(elf), ==, 0);
-}
-
-static void test_mmix_platform_smp_rejected(gconstpointer opaque)
-{
-    const char *smp = opaque;
     g_autoptr(GError) error = NULL;
-    g_autofree char *stderr_text = NULL;
-    const char *argv[] = {
-        qtest_qemu_binary(NULL),
-        "-machine", "virt", "-smp", smp,
-        "-display", "none", "-monitor", "none", "-serial", "none", NULL,
-    };
-    int wait_status;
+    char *filename = g_build_filename(directory, name, NULL);
 
-    g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
-                               G_SPAWN_STDOUT_TO_DEV_NULL,
-                               NULL, NULL, NULL, &stderr_text,
-                               &wait_status, &error));
+    g_assert_true(g_file_set_contents(filename, (const char *)contents,
+                                      size, &error));
     g_assert_no_error(error);
-    g_assert_cmpint(wait_status, !=, 0);
+    return filename;
+}
 
-    if (!strcmp(smp, "17")) {
-        g_assert_nonnull(strstr(stderr_text,
-                               "max CPUs supported by machine 'virt' is 16"));
-    } else {
-        g_assert_nonnull(strstr(stderr_text,
-                               "CPU topology parameters must be greater "
-                               "than zero"));
+static char *mmix_create_platform_elf(const char *directory)
+{
+    enum { CODE_OFFSET = 0x100 };
+    const uint64_t entry = 0x10000;
+    const uint8_t code[] = { 0xfd, 0x00, 0x00, 0x00 };
+    uint8_t image[CODE_OFFSET + sizeof(code)] = { 0 };
+    Elf64_Ehdr ehdr = { 0 };
+    Elf64_Phdr phdr = { 0 };
+
+    memcpy(ehdr.e_ident, ELFMAG, SELFMAG);
+    ehdr.e_ident[EI_CLASS] = ELFCLASS64;
+    ehdr.e_ident[EI_DATA] = ELFDATA2MSB;
+    ehdr.e_ident[EI_VERSION] = EV_CURRENT;
+    ehdr.e_type = cpu_to_be16(ET_EXEC);
+    ehdr.e_machine = cpu_to_be16(EM_MMIX);
+    ehdr.e_version = cpu_to_be32(EV_CURRENT);
+    ehdr.e_entry = cpu_to_be64(entry);
+    ehdr.e_phoff = cpu_to_be64(sizeof(ehdr));
+    ehdr.e_ehsize = cpu_to_be16(sizeof(ehdr));
+    ehdr.e_phentsize = cpu_to_be16(sizeof(phdr));
+    ehdr.e_phnum = cpu_to_be16(1);
+
+    phdr.p_type = cpu_to_be32(PT_LOAD);
+    phdr.p_flags = cpu_to_be32(PF_R | PF_X);
+    phdr.p_offset = cpu_to_be64(CODE_OFFSET);
+    phdr.p_vaddr = cpu_to_be64(entry);
+    phdr.p_paddr = cpu_to_be64(entry);
+    phdr.p_filesz = cpu_to_be64(sizeof(code));
+    phdr.p_memsz = cpu_to_be64(sizeof(code));
+    phdr.p_align = cpu_to_be64(1);
+
+    memcpy(image, &ehdr, sizeof(ehdr));
+    memcpy(image + sizeof(ehdr), &phdr, sizeof(phdr));
+    memcpy(image + CODE_OFFSET, code, sizeof(code));
+    return mmix_write_platform_image(directory, "kernel.elf", image,
+                                     sizeof(image));
+}
+
+static char *mmix_create_platform_image(const char *directory,
+                                        MMIXPlatformBootMode mode)
+{
+    static const uint8_t mmo[] = {
+        0x98, 0x09, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x98, 0x0a, 0x00, 0xff,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x98, 0x0b, 0x00, 0x00,
+        0x98, 0x0c, 0x00, 0x00,
+    };
+    uint8_t raw[0x104] = { 0 };
+    const uint8_t firmware[] = { 0xfd, 0x00, 0x00, 0x00 };
+
+    switch (mode) {
+    case MMIX_PLATFORM_RAW:
+        raw[0x100] = 0xfd;
+        return mmix_write_platform_image(directory, "kernel.raw", raw,
+                                         sizeof(raw));
+    case MMIX_PLATFORM_BARE_ELF:
+    case MMIX_PLATFORM_HOSTED_ELF:
+    case MMIX_PLATFORM_LINUX:
+        return mmix_create_platform_elf(directory);
+    case MMIX_PLATFORM_MMO:
+        return mmix_write_platform_image(directory, "kernel.mmo", mmo,
+                                         sizeof(mmo));
+    case MMIX_PLATFORM_FIRMWARE:
+        return mmix_write_platform_image(directory, "firmware.bin", firmware,
+                                         sizeof(firmware));
+    case MMIX_PLATFORM_NO_IMAGE:
+        return NULL;
     }
+    g_assert_not_reached();
+}
+
+static void test_mmix_platform_boot_mode(gconstpointer opaque)
+{
+    const MMIXPlatformBootCase *test = opaque;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *directory = NULL;
+    g_autofree char *image = NULL;
+    g_autoptr(GString) args = g_string_new(NULL);
+    const char *machine = test->mode == MMIX_PLATFORM_HOSTED_ELF ?
+                          "virt,elf-startup-abi=argc-argv" :
+                          test->mode == MMIX_PLATFORM_LINUX ?
+                          "virt,elf-startup-abi=linux" : "virt";
+    QTestState *qts;
+
+    g_string_append_printf(args, "-machine %s -m %s -smp %u",
+                           machine, test->memory, test->cpus);
+    if (test->mode != MMIX_PLATFORM_NO_IMAGE) {
+        directory = g_dir_make_tmp("mmix-platform-mode-XXXXXX", &error);
+        g_assert_no_error(error);
+        g_assert_nonnull(directory);
+        image = mmix_create_platform_image(directory, test->mode);
+    }
+
+    switch (test->mode) {
+    case MMIX_PLATFORM_NO_IMAGE:
+        break;
+    case MMIX_PLATFORM_RAW:
+    case MMIX_PLATFORM_BARE_ELF:
+    case MMIX_PLATFORM_MMO:
+        g_string_append_printf(args, " -kernel %s", image);
+        break;
+    case MMIX_PLATFORM_HOSTED_ELF:
+        g_string_append_printf(args, " -semihosting -kernel %s", image);
+        break;
+    case MMIX_PLATFORM_LINUX:
+        g_string_append_printf(args, " -kernel %s", image);
+        break;
+    case MMIX_PLATFORM_FIRMWARE:
+        g_string_append_printf(args, " -bios %s", image);
+        break;
+    }
+
+    qts = qtest_init(args->str);
+    mmix_assert_active_devices(qts, test->cpus);
+    qtest_quit(qts);
+
+    if (image) {
+        g_assert_cmpint(g_unlink(image), ==, 0);
+        g_assert_cmpint(g_rmdir(directory), ==, 0);
+    }
+}
+
+static const char mmix_populated_devices[] =
+    "-rtc clock=vm "
+    "-watchdog-action none "
+    "-object rng-builtin,id=rng0 "
+    "-device virtio-rng-device,id=vrng,rng=rng0 "
+    "-device edu,bus=pcie.0,addr=1.0,dma_mask=0xffffffffffffffff "
+    "-device e1000,bus=pcie.0,addr=2.0";
+
+static uint64_t mmix_configure_e1000(QTestState *qts)
+{
+    uint64_t config = mmix_pcie_ecam_address(2, 0);
+
+    g_assert_cmphex(mmix_readl_le(qts, config), ==, 0x100e8086);
+    mmix_writel_le(qts, config + PCI_BASE_ADDRESS_0,
+                   MMIX_E1000_BAR_ADDRESS);
+    mmix_writew_le(qts, config + PCI_COMMAND,
+                   PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    return MMIX_PCIE_MMIO32_BASE + MMIX_E1000_BAR_ADDRESS;
+}
+
+static void mmix_populated_program_state(QTestState *qts,
+                                         unsigned int target_cpu)
+{
+    const uint64_t timer =
+        mmix_context_address(MMIX_TIMER_CONTEXT_BASE, target_cpu);
+    const uint64_t ipi =
+        mmix_context_address(MMIX_IPI_CONTEXT_BASE, target_cpu);
+    const uint64_t intc =
+        mmix_context_address(MMIX_INTC_CONTEXT_BASE, target_cpu);
+    const uint64_t irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    const uint64_t irq_enable =
+        mmix_intc_source_address(intc + MMIX_INTC_CONTEXT_ENABLE,
+                                 MMIX_PCIE_INTX_IRQ);
+    const uint64_t framebuffer =
+        qtest_readq(qts, MMIX_FRAMEBUFFER_BASE + MMIX_FRAMEBUFFER_RAM_BASE);
+    const uint64_t bar = mmix_configure_edu(qts);
+
+    g_assert_cmphex(qtest_readl(qts, bar), ==, MMIX_EDU_ID);
+    qtest_writeq(qts, MMIX_POPULATED_SOURCE_RAM,
+                 MMIX_POPULATED_RAM_MARKER);
+    mmix_edu_dma_copy(qts, bar);
+    g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
+                    MMIX_POPULATED_RAM_MARKER);
+
+    qtest_writeb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH, 0x5a);
+    mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_LOW, 0x89abcdef);
+    mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_HIGH, 0x01234567);
+    mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_IRQ_ENABLED, 1);
+    mmix_writel_le(qts, MMIX_WATCHDOG_CONTROL_BASE + MMIX_WATCHDOG_WOR,
+                   1000);
+    mmix_writel_le(qts, MMIX_WATCHDOG_CONTROL_BASE + MMIX_WATCHDOG_WCS,
+                   MMIX_WATCHDOG_WCS_EN);
+    qtest_writeq(qts, framebuffer, MMIX_POPULATED_FB_MARKER);
+    qtest_writeq(qts, timer + MMIX_TIMER_CONTEXT_COMPARE, UINT64_MAX);
+    qtest_writeq(qts, timer + MMIX_TIMER_CONTEXT_CONTROL,
+                 MMIX_TIMER_CONTROL_ENABLE);
+    qtest_writeq(qts, MMIX_IPI_BASE + MMIX_IPI_SEND,
+                 UINT64_C(1) << target_cpu);
+    qtest_writeq(qts, irq_enable, irq_bit);
+    qtest_writel(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
+                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    mmix_writel_le(qts, bar + MMIX_EDU_IRQ_RAISE, 1);
+
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
+                    0x5a);
+    g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_CONTEXT_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readq(qts, irq_enable), ==, irq_bit);
+    g_assert_cmphex(qtest_readq(
+                        qts,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, irq_bit);
+}
+
+static void mmix_populated_assert_preserved(QTestState *qts,
+                                            unsigned int target_cpu)
+{
+    const uint64_t timer =
+        mmix_context_address(MMIX_TIMER_CONTEXT_BASE, target_cpu);
+    const uint64_t ipi =
+        mmix_context_address(MMIX_IPI_CONTEXT_BASE, target_cpu);
+    const uint64_t intc =
+        mmix_context_address(MMIX_INTC_CONTEXT_BASE, target_cpu);
+    const uint64_t irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    const uint64_t irq_enable =
+        mmix_intc_source_address(intc + MMIX_INTC_CONTEXT_ENABLE,
+                                 MMIX_PCIE_INTX_IRQ);
+    const uint64_t framebuffer =
+        qtest_readq(qts, MMIX_FRAMEBUFFER_BASE + MMIX_FRAMEBUFFER_RAM_BASE);
+
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
+                    0x5a);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_LOW),
+                    ==, 0x89abcdef);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_HIGH),
+                    ==, 0x01234567);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE +
+                                      MMIX_RTC_IRQ_ENABLED), ==, 1);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_WOR), ==, 1000);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_WCS), ==,
+                    MMIX_WATCHDOG_WCS_EN);
+    g_assert_cmphex(qtest_readq(qts, framebuffer), ==,
+                    MMIX_POPULATED_FB_MARKER);
+    g_assert_cmphex(qtest_readq(qts, timer + MMIX_TIMER_CONTEXT_COMPARE), ==,
+                    UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, timer + MMIX_TIMER_CONTEXT_CONTROL), ==,
+                    MMIX_TIMER_CONTROL_ENABLE);
+    g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_CONTEXT_STATUS), ==, 1);
+    g_assert_cmphex(qtest_readq(qts, irq_enable), ==, irq_bit);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS),
+                    ==, VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
+                    MMIX_POPULATED_RAM_MARKER);
+}
+
+static void test_mmix_platform_populated_reset(void)
+{
+    QTestState *qts = qtest_initf("-machine virt -m 512M -smp 1 %s",
+                                  mmix_populated_devices);
+    const uint64_t irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    const uint64_t framebuffer =
+        qtest_readq(qts, MMIX_FRAMEBUFFER_BASE + MMIX_FRAMEBUFFER_RAM_BASE);
+
+    mmix_populated_program_state(qts, 0);
+    qtest_system_reset(qts);
+
+    mmix_assert_active_devices(qts, 1);
+    g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
+                    0);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE + MMIX_RTC_ALARM_LOW),
+                    ==, 0);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_CONTROL_BASE +
+                                      MMIX_WATCHDOG_WCS), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, MMIX_TIMER_CONTEXT_BASE +
+                                    MMIX_TIMER_CONTEXT_COMPARE), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, MMIX_TIMER_CONTEXT_BASE +
+                                    MMIX_TIMER_CONTEXT_CONTROL), ==, 0);
+    g_assert_cmphex(qtest_readq(qts, MMIX_IPI_CONTEXT_BASE +
+                                    MMIX_IPI_CONTEXT_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readq(
+                        qts,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, 0);
+    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS),
+                    ==, 0);
+    g_assert_cmphex(mmix_readl_le(
+                        qts, mmix_pcie_ecam_address(1, PCI_BASE_ADDRESS_0)) &
+                    PCI_BASE_ADDRESS_MEM_MASK, ==, 0);
+    g_assert_cmphex(qtest_readq(qts, framebuffer), ==,
+                    MMIX_POPULATED_FB_MARKER);
+    g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
+                    MMIX_POPULATED_RAM_MARKER);
+    mmix_assert_deferred_apertures(qts);
+    qtest_quit(qts);
+}
+
+static void test_mmix_platform_populated_migration(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-platform-state-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    g_autofree char *args = NULL;
+    QTestState *from;
+    QTestState *to;
+    uint64_t e1000_bar;
+    uint64_t intc;
+    uint64_t irq_bit;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    args = g_strdup_printf("-machine virt -m 512M -smp 2 %s",
+                           mmix_populated_devices);
+    incoming = g_strdup_printf("%s -incoming %s", args, uri);
+    from = qtest_init(args);
+    to = qtest_init(incoming);
+
+    mmix_populated_program_state(from, 1);
+    intc = mmix_context_address(MMIX_INTC_CONTEXT_BASE, 1);
+    irq_bit = mmix_intc_source_bit(MMIX_PCIE_INTX_IRQ);
+    g_assert_cmpuint(qtest_readq(from, intc + MMIX_INTC_CONTEXT_CLAIM), ==,
+                     MMIX_PCIE_INTX_IRQ);
+    e1000_bar = mmix_configure_e1000(from);
+    mmix_writel_le(from, e1000_bar + MMIX_E1000_IMS,
+                   MMIX_E1000_TEST_CAUSE);
+    mmix_writel_le(from, e1000_bar + MMIX_E1000_ICS,
+                   MMIX_E1000_TEST_CAUSE);
+    qtest_qmp_assert_success(from,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_eventwait(from, "STOP");
+    qtest_qmp_eventwait(to, "RESUME");
+
+    mmix_populated_assert_preserved(to, 1);
+    mmix_assert_fw_cfg_signature(to);
+    g_assert_cmphex(qtest_readq(
+                        to,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, 0);
+    qtest_writeq(to, intc + MMIX_INTC_CONTEXT_COMPLETE,
+                 MMIX_PCIE_INTX_IRQ);
+    g_assert_cmphex(qtest_readq(
+                        to,
+                        mmix_intc_source_address(
+                            MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
+                            MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, irq_bit);
+    g_assert_cmphex(mmix_readl_le(
+                        to, mmix_pcie_ecam_address(2, PCI_BASE_ADDRESS_0)) &
+                    PCI_BASE_ADDRESS_MEM_MASK, ==, MMIX_E1000_BAR_ADDRESS);
+    g_assert_cmphex(mmix_readl_le(to, e1000_bar + MMIX_E1000_ICR) &
+                    MMIX_E1000_TEST_CAUSE, ==, MMIX_E1000_TEST_CAUSE);
+    mmix_assert_deferred_apertures(to);
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
 }
 
 int main(int argc, char **argv)
 {
+    static const MMIXRAMSizeCase ram_sizes[] = {
+        { "128M", 128 * MiB, 1 },
+        { NULL, MMIX_RAM_DEFAULT_SIZE, 1 },
+        { "8G", 8 * GiB, 64 },
+    };
+    static const MMIXPlatformBootCase boot_modes[] = {
+        { MMIX_PLATFORM_NO_IMAGE, "512M", 1 },
+        { MMIX_PLATFORM_RAW, "128M", 1 },
+        { MMIX_PLATFORM_BARE_ELF, "512M", 1 },
+        { MMIX_PLATFORM_HOSTED_ELF, "512M", 1 },
+        { MMIX_PLATFORM_MMO, "128M", 1 },
+        { MMIX_PLATFORM_LINUX, "8G", 64 },
+        { MMIX_PLATFORM_FIRMWARE, "512M", 2 },
+    };
+    static const char * const boot_mode_names[] = {
+        "no-image", "raw", "bare-elf", "hosted-elf", "mmo", "linux",
+        "firmware",
+    };
+    unsigned int i;
+
     g_test_init(&argc, &argv, NULL);
 
-    qtest_add_func("/mmix/platform/memory-layout",
-                   test_mmix_platform_memory_layout);
-    qtest_add_func("/mmix/platform/configurable-ram",
-                   test_mmix_platform_configurable_ram);
-    qtest_add_func("/mmix/platform/split-ram-contract",
-                   test_mmix_platform_split_ram_contract);
-    qtest_add_func("/mmix/platform/aperture-isolation",
-                   test_mmix_platform_aperture_isolation);
-    qtest_add_func("/mmix/platform/mmio-layout",
-                   test_mmix_platform_mmio_layout);
-    qtest_add_func("/mmix/platform/initial-stack-layout",
-                   test_mmix_platform_initial_stack_layout);
-    qtest_add_func("/mmix/platform/bootinfo-headless",
-                   test_mmix_platform_bootinfo_headless);
-    qtest_add_func("/mmix/platform/kernel-cmdline",
-                   test_mmix_platform_kernel_cmdline);
-    qtest_add_func("/mmix/platform/empty-kernel-cmdline",
-                   test_mmix_platform_empty_kernel_cmdline);
-    qtest_add_func("/mmix/platform/max-kernel-cmdline",
-                   test_mmix_platform_max_kernel_cmdline);
-    qtest_add_data_func("/mmix/platform/smp/accepted/1",
-                        "1",
-                        test_mmix_platform_smp_accepted);
-    qtest_add_data_func("/mmix/platform/smp/accepted/2",
-                        "2",
-                        test_mmix_platform_smp_accepted);
-    qtest_add_data_func("/mmix/platform/smp/accepted/16",
-                        "16",
-                        test_mmix_platform_smp_accepted);
-    qtest_add_data_func("/mmix/platform/smp/accepted/actual-below-maximum",
-                        "cpus=2,maxcpus=16",
-                        test_mmix_platform_smp_accepted);
-    qtest_add_data_func("/mmix/platform/smp/cpus/1",
-                        GUINT_TO_POINTER(1),
-                        test_mmix_platform_smp_cpus);
-    qtest_add_data_func("/mmix/platform/smp/cpus/2",
-                        GUINT_TO_POINTER(2),
-                        test_mmix_platform_smp_cpus);
-    qtest_add_data_func("/mmix/platform/smp/cpus/16",
-                        GUINT_TO_POINTER(16),
-                        test_mmix_platform_smp_cpus);
-    qtest_add_data_func("/mmix/platform/smp/interrupt-wiring/1",
-                        GUINT_TO_POINTER(1),
-                        test_mmix_platform_smp_interrupt_wiring);
-    qtest_add_data_func("/mmix/platform/smp/interrupt-wiring/2",
-                        GUINT_TO_POINTER(2),
-                        test_mmix_platform_smp_interrupt_wiring);
-    qtest_add_data_func("/mmix/platform/smp/interrupt-wiring/16",
-                        GUINT_TO_POINTER(16),
-                        test_mmix_platform_smp_interrupt_wiring);
-    qtest_add_data_func("/mmix/platform/smp/timer-wiring/1",
-                        GUINT_TO_POINTER(1),
-                        test_mmix_platform_smp_timer_wiring);
-    qtest_add_data_func("/mmix/platform/smp/timer-wiring/2",
-                        GUINT_TO_POINTER(2),
-                        test_mmix_platform_smp_timer_wiring);
-    qtest_add_data_func("/mmix/platform/smp/timer-wiring/16",
-                        GUINT_TO_POINTER(16),
-                        test_mmix_platform_smp_timer_wiring);
-    qtest_add_data_func("/mmix/platform/smp/ipi-wiring/1",
-                        GUINT_TO_POINTER(1),
-                        test_mmix_platform_smp_ipi_wiring);
-    qtest_add_data_func("/mmix/platform/smp/ipi-wiring/2",
-                        GUINT_TO_POINTER(2),
-                        test_mmix_platform_smp_ipi_wiring);
-    qtest_add_data_func("/mmix/platform/smp/ipi-wiring/16",
-                        GUINT_TO_POINTER(16),
-                        test_mmix_platform_smp_ipi_wiring);
-    qtest_add_func("/mmix/platform/smp/reset",
-                   test_mmix_platform_smp_reset);
-    qtest_add_data_func("/mmix/platform/smp/rejected/zero", "0",
-                        test_mmix_platform_smp_rejected);
-    qtest_add_data_func("/mmix/platform/smp/rejected/above-maximum", "17",
-                        test_mmix_platform_smp_rejected);
+    qtest_add_func("/mmix/platform/mappings",
+                   test_mmix_platform_mappings);
+    qtest_add_func("/mmix/platform/slot-boundaries",
+                   test_mmix_platform_slot_boundaries);
+    qtest_add_data_func("/mmix/platform/ram-size/minimum", &ram_sizes[0],
+                        test_mmix_platform_ram_size_independence);
+    qtest_add_data_func("/mmix/platform/ram-size/default", &ram_sizes[1],
+                        test_mmix_platform_ram_size_independence);
+    qtest_add_data_func("/mmix/platform/ram-size/above-4g", &ram_sizes[2],
+                        test_mmix_platform_ram_size_independence);
+    qtest_add_func("/mmix/platform/low-address-isolation",
+                   test_mmix_platform_low_address_isolation);
+    qtest_add_func("/mmix/platform/deferred-apertures",
+                   test_mmix_platform_deferred_apertures);
+    qtest_add_func("/mmix/platform/nonoverlapping-extents",
+                   test_mmix_platform_nonoverlapping_extents);
+    qtest_add_func("/mmix/platform/populated/reset",
+                   test_mmix_platform_populated_reset);
+    qtest_add_func("/mmix/platform/populated/migration",
+                   test_mmix_platform_populated_migration);
+    for (i = 0; i < ARRAY_SIZE(boot_modes); i++) {
+        g_autofree char *name = g_strdup_printf(
+            "/mmix/platform/boot-mode/%s", boot_mode_names[i]);
+
+        qtest_add_data_func(name, &boot_modes[i],
+                            test_mmix_platform_boot_mode);
+    }
 
     return g_test_run();
 }

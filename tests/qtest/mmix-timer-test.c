@@ -7,24 +7,27 @@
 #include "qemu/osdep.h"
 #include "libqtest.h"
 
-#define MMIX_VIRT_INTC_BASE 0x10004000ULL
-#define MMIX_VIRT_INTC_PENDING 0x0000
-#define MMIX_VIRT_INTC_CONTEXT_BASE 0x1000
-#define MMIX_VIRT_INTC_CONTEXT_STRIDE 0x100
+#define MMIX_VIRT_INTC_BASE UINT64_C(0x0001000030000000)
+#define MMIX_VIRT_INTC_PENDING 0x1000
+#define MMIX_VIRT_INTC_CONTEXT_BASE 0x04000000
+#define MMIX_VIRT_INTC_CONTEXT_STRIDE 0x10000
 #define MMIX_VIRT_INTC_CONTEXT_ENABLE 0x00
-#define MMIX_VIRT_INTC_CONTEXT_CLAIM 0x04
-#define MMIX_VIRT_INTC_CONTEXT_COMPLETE 0x08
+#define MMIX_VIRT_INTC_CONTEXT_CLAIM 0x800
+#define MMIX_VIRT_INTC_CONTEXT_COMPLETE 0x808
 
-#define MMIX_VIRT_TIMER_BASE 0x10003000ULL
+#define MMIX_VIRT_TIMER_BASE UINT64_C(0x0001000020000000)
 #define MMIX_VIRT_TIMER_TIME 0x0000
-#define MMIX_VIRT_TIMER_CONTEXT_BASE 0x0100
-#define MMIX_VIRT_TIMER_CONTEXT_STRIDE 0x40
+#define MMIX_VIRT_TIMER_CONTEXT_BASE 0x10000
+#define MMIX_VIRT_TIMER_CONTEXT_STRIDE 0x10000
 #define MMIX_VIRT_TIMER_CONTEXT_COMPARE 0x00
 #define MMIX_VIRT_TIMER_CONTEXT_CONTROL 0x08
 #define MMIX_VIRT_TIMER_CONTEXT_STATUS 0x10
 #define MMIX_VIRT_TIMER_CONTROL_ENABLE 0x01
 #define MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE 0x02
 #define MMIX_VIRT_TIMER_STATUS_PENDING 0x01
+#define MMIX_VIRT_TIMER_REGISTER_SIZE 0x1000
+#define MMIX_VIRT_TIMER_CONTEXT_CAPACITY 1023
+#define MMIX_VIRT_TIMER_INITIAL_CONTEXTS 64
 
 #define MMIX_VIRT_TIMER_CPU0_IRQ 16
 
@@ -39,33 +42,43 @@ static uint64_t mmix_intc_context_reg(unsigned cpu, uint64_t reg)
            cpu * MMIX_VIRT_INTC_CONTEXT_STRIDE + reg;
 }
 
-static uint32_t mmix_intc_irq_mask(unsigned irq)
+static uint64_t mmix_intc_irq_mask(unsigned irq)
 {
-    return 1U << irq;
+    return UINT64_C(1) << (irq % 64);
 }
 
-static uint32_t mmix_intc_read_pending(QTestState *qts)
+static uint64_t mmix_intc_read_pending(QTestState *qts)
 {
-    return qtest_readl(qts, MMIX_VIRT_INTC_BASE + MMIX_VIRT_INTC_PENDING);
+    return qtest_readq(qts, MMIX_VIRT_INTC_BASE + MMIX_VIRT_INTC_PENDING);
 }
 
-static uint32_t mmix_intc_claim(QTestState *qts, unsigned cpu)
+static uint64_t mmix_intc_claim(QTestState *qts, unsigned cpu)
 {
-    return qtest_readl(qts, mmix_intc_context_reg(cpu,
+    return qtest_readq(qts, mmix_intc_context_reg(cpu,
                                                  MMIX_VIRT_INTC_CONTEXT_CLAIM));
 }
 
 static void mmix_intc_write_enable(QTestState *qts, unsigned cpu,
-                                   uint32_t value)
+                                   uint64_t value)
 {
-    qtest_writel(qts, mmix_intc_context_reg(cpu,
+    qtest_writeq(qts, mmix_intc_context_reg(cpu,
                                             MMIX_VIRT_INTC_CONTEXT_ENABLE),
                  value);
 }
 
-static void mmix_intc_complete(QTestState *qts, unsigned cpu, uint32_t irq)
+static void mmix_intc_enable_source(QTestState *qts, unsigned cpu,
+                                    unsigned source)
 {
-    qtest_writel(qts, mmix_intc_context_reg(cpu,
+    qtest_writeq(qts,
+                 mmix_intc_context_reg(cpu,
+                                       MMIX_VIRT_INTC_CONTEXT_ENABLE +
+                                       (source / 64) * sizeof(uint64_t)),
+                 mmix_intc_irq_mask(source));
+}
+
+static void mmix_intc_complete(QTestState *qts, unsigned cpu, uint64_t irq)
+{
+    qtest_writeq(qts, mmix_intc_context_reg(cpu,
                                             MMIX_VIRT_INTC_CONTEXT_COMPLETE),
                  irq);
 }
@@ -207,10 +220,9 @@ static void test_mmix_timer_pending_w1c(void)
 static void test_mmix_timer_irq(void)
 {
     QTestState *qts = mmix_timer_start();
-    uint32_t timer_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
+    uint64_t timer_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
     uint64_t now = mmix_timer_read_time(qts);
 
-    mmix_intc_write_enable(qts, 0, timer_mask);
     mmix_timer_write_compare(qts, 0, now + 10);
     mmix_timer_write_control(qts, 0,
                              MMIX_VIRT_TIMER_CONTROL_ENABLE |
@@ -222,9 +234,17 @@ static void test_mmix_timer_irq(void)
     g_assert_cmphex(mmix_timer_read_status(qts, 0), ==,
                     MMIX_VIRT_TIMER_STATUS_PENDING);
     g_assert_cmphex(mmix_intc_read_pending(qts), ==, timer_mask);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_write_enable(qts, 0, timer_mask);
     g_assert_true(qtest_get_irq(qts, 0));
     g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, MMIX_VIRT_TIMER_CPU0_IRQ);
     g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_complete(qts, 0, MMIX_VIRT_TIMER_CPU0_IRQ);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==,
+                     MMIX_VIRT_TIMER_CPU0_IRQ);
 
     mmix_timer_write_compare(qts, 0, mmix_timer_read_time(qts) + 10);
     mmix_timer_write_status(qts, 0, MMIX_VIRT_TIMER_STATUS_PENDING);
@@ -324,8 +344,8 @@ static void test_mmix_timer_context_deadlines(void)
 static void test_mmix_timer_independent_lifecycle(void)
 {
     QTestState *qts = mmix_timer_start_intc_contexts(2);
-    uint32_t cpu0_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
-    uint32_t cpu1_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ + 1);
+    uint64_t cpu0_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
+    uint64_t cpu1_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ + 1);
     uint64_t enabled = MMIX_VIRT_TIMER_CONTROL_ENABLE |
                        MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
     uint64_t now = mmix_timer_read_time(qts);
@@ -396,8 +416,8 @@ static void test_mmix_timer_simultaneous_expiry(void)
     uint64_t now = mmix_timer_read_time(qts);
     uint64_t enabled = MMIX_VIRT_TIMER_CONTROL_ENABLE |
                        MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
-    uint32_t cpu0_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
-    uint32_t cpu1_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ + 1);
+    uint64_t cpu0_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ);
+    uint64_t cpu1_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ + 1);
 
     mmix_intc_write_enable(qts, 0, cpu0_mask | cpu1_mask);
     mmix_intc_write_enable(qts, 1, cpu0_mask | cpu1_mask);
@@ -429,7 +449,7 @@ static void test_mmix_timer_reset_contexts(void)
     uint64_t now = mmix_timer_read_time(qts);
     uint64_t enabled = MMIX_VIRT_TIMER_CONTROL_ENABLE |
                        MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE;
-    uint32_t cpu1_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ + 1);
+    uint64_t cpu1_mask = mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ + 1);
 
     mmix_intc_write_enable(qts, 0,
                            mmix_intc_irq_mask(MMIX_VIRT_TIMER_CPU0_IRQ));
@@ -461,10 +481,12 @@ static void test_mmix_timer_reset_contexts(void)
 
 static void test_mmix_timer_context_limit(void)
 {
-    QTestState *qts = mmix_timer_start_contexts(16);
-    unsigned cpu = 15;
+    QTestState *qts = mmix_timer_start_intc_contexts(64);
+    unsigned cpu = 63;
+    unsigned source = MMIX_VIRT_TIMER_CPU0_IRQ + cpu;
     uint64_t now = mmix_timer_read_time(qts);
 
+    mmix_intc_enable_source(qts, cpu, source);
     mmix_timer_write_compare(qts, cpu, now + 10);
     mmix_timer_write_control(qts, cpu,
                              MMIX_VIRT_TIMER_CONTROL_ENABLE |
@@ -474,6 +496,58 @@ static void test_mmix_timer_context_limit(void)
     g_assert_cmphex(mmix_timer_read_status(qts, cpu), ==,
                     MMIX_VIRT_TIMER_STATUS_PENDING);
     g_assert_true(qtest_get_irq(qts, cpu));
+    g_assert_cmpuint(mmix_intc_claim(qts, cpu), ==, source);
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_timer_reserved_boundaries(void)
+{
+    QTestState *qts = mmix_timer_start_contexts(2);
+    uint64_t global_tail =
+        MMIX_VIRT_TIMER_BASE + MMIX_VIRT_TIMER_REGISTER_SIZE;
+    uint64_t context0_tail =
+        mmix_timer_context_reg(0, MMIX_VIRT_TIMER_REGISTER_SIZE);
+    uint64_t context64 =
+        mmix_timer_context_reg(MMIX_VIRT_TIMER_INITIAL_CONTEXTS, 0);
+    uint64_t context1022 =
+        mmix_timer_context_reg(MMIX_VIRT_TIMER_CONTEXT_CAPACITY - 1, 0);
+    uint64_t context_domain_end =
+        mmix_timer_context_reg(MMIX_VIRT_TIMER_CONTEXT_CAPACITY, 0);
+
+    qtest_writeq(qts, global_tail, UINT64_MAX);
+    qtest_writeq(qts, context0_tail, UINT64_MAX);
+    qtest_writeq(qts, context64, UINT64_MAX);
+    qtest_writeq(qts, context1022, UINT64_MAX);
+    qtest_writeq(qts, context_domain_end, UINT64_MAX);
+    mmix_timer_write_compare(qts, 63, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, global_tail), !=, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, context0_tail), !=, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, context64), !=, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, context1022), !=, UINT64_MAX);
+    g_assert_cmphex(qtest_readq(qts, context_domain_end), !=, UINT64_MAX);
+    g_assert_cmphex(mmix_timer_read_compare(qts, 0), ==, 0);
+    g_assert_cmphex(mmix_timer_read_compare(qts, 1), ==, 0);
+    g_assert_cmphex(mmix_timer_read_compare(qts, 63), ==, 0);
+    g_assert_false(qtest_get_irq(qts, 63));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_timer_invalid_access_width(void)
+{
+    QTestState *qts = mmix_timer_start_contexts(1);
+    uint64_t compare =
+        mmix_timer_context_reg(0, MMIX_VIRT_TIMER_CONTEXT_COMPARE);
+    uint64_t control =
+        mmix_timer_context_reg(0, MMIX_VIRT_TIMER_CONTEXT_CONTROL);
+
+    qtest_writeb(qts, compare, 0xff);
+    qtest_writel(qts, compare, UINT32_MAX);
+    qtest_writeb(qts, control, MMIX_VIRT_TIMER_CONTROL_ENABLE);
+    qtest_writel(qts, control, MMIX_VIRT_TIMER_CONTROL_ENABLE);
+    g_assert_cmphex(mmix_timer_read_compare(qts, 0), ==, 0);
+    g_assert_cmphex(mmix_timer_read_control(qts, 0), ==, 0);
 
     qtest_quit(qts);
 }
@@ -500,6 +574,10 @@ int main(int argc, char **argv)
                    test_mmix_timer_reset_contexts);
     qtest_add_func("/mmix/timer/context-limit",
                    test_mmix_timer_context_limit);
+    qtest_add_func("/mmix/timer/reserved-boundaries",
+                   test_mmix_timer_reserved_boundaries);
+    qtest_add_func("/mmix/timer/invalid-access-width",
+                   test_mmix_timer_invalid_access_width);
 
     return g_test_run();
 }

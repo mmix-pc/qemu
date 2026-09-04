@@ -9,22 +9,8 @@ SERIAL_TX_PROGRAM = serial_tx_program()
 SERIAL_TESTS = [
     MMIXSerialTest(
         "serial-tx-output",
-        SERIAL_TX_PROGRAM[0],
-        pc=SERIAL_TX_PROGRAM[1],
-        output=b"MMIX\n",
-    ),
-    MMIXSerialTest(
-        "mmo-serial-tx-output",
-        mmo_image(
-            [
-                mmo_file(1, "mmo-serial.mms"),
-                mmo_line(1),
-                SERIAL_TX_PROGRAM[0],
-                mmo_post(R255, {R255: 0}),
-                mmo_stab_end(),
-            ]
-        ),
-        pc=SERIAL_TX_PROGRAM[1],
+        raw_direct_image(SERIAL_TX_PROGRAM[0]),
+        pc=MMIX_RAW_ENTRY + SERIAL_TX_PROGRAM[1],
         output=b"MMIX\n",
     ),
 ]

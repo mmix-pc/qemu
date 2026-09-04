@@ -28,6 +28,7 @@ typedef struct DisasContext {
     TCGv_i64 replay_z;
     bool replay;
     bool substitute_operands;
+    bool hosted_memory;
 } DisasContext;
 
 typedef enum MMIXALUKind {
@@ -1052,7 +1053,12 @@ static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, align_mask);
-    tcg_gen_qemu_ld_i64(val, addr, 0, memop);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_load(val, tcg_env, addr,
+                                    tcg_constant_i32(memop));
+    } else {
+        tcg_gen_qemu_ld_i64(val, addr, 0, memop);
+    }
     gen_store_reg(a->x, val);
     return true;
 }
@@ -1063,7 +1069,12 @@ static bool gen_ldht(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
-    tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_load(val, tcg_env, addr,
+                                    tcg_constant_i32(MO_BEUL));
+    } else {
+        tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
+    }
     tcg_gen_shli_i64(val, val, 32);
     gen_store_reg(a->x, val);
     return true;
@@ -1110,7 +1121,12 @@ static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
-    tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_load(val, tcg_env, addr,
+                                    tcg_constant_i32(MO_BEUL));
+    } else {
+        tcg_gen_qemu_ld_i64(val, addr, 0, MO_BEUL);
+    }
     gen_helper_mmix_ldsf(val, val);
     gen_store_reg(a->x, val);
     return true;
@@ -1130,7 +1146,12 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_effective_address(addr, a, immediate, 7);
     gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
-    tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_cmpxchg(old, tcg_env, addr, rp, new);
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    } else {
+        tcg_gen_atomic_cmpxchg_i64(old, addr, rp, new, 0, MO_BEUQ);
+    }
 
     tcg_gen_movcond_i64(TCG_COND_EQ, next_rp, old, rp, rp, old);
     gen_helper_mmix_put_sreg(tcg_env, tcg_constant_i32(ctx->insn),
@@ -1155,7 +1176,13 @@ static bool gen_store_value(DisasContext *ctx, arg_xyz *a, bool immediate,
     TCGv_i64 addr = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, align_mask);
-    tcg_gen_qemu_st_i64(val, addr, 0, memop);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_store(tcg_env, addr, val,
+                                     tcg_constant_i32(memop));
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    } else {
+        tcg_gen_qemu_st_i64(val, addr, 0, memop);
+    }
     return true;
 }
 
@@ -1180,7 +1207,13 @@ static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_effective_address(addr, a, immediate, 3);
     tcg_gen_shri_i64(val, gen_load_reg(a->x), 32);
-    tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_store(tcg_env, addr, val,
+                                     tcg_constant_i32(MO_BEUL));
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    } else {
+        tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
+    }
     return true;
 }
 
@@ -1216,7 +1249,13 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
                          gen_load_reg(a->x));
     gen_data_access_value(val);
-    tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_store(tcg_env, addr, val,
+                                     tcg_constant_i32(MO_BEUL));
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    } else {
+        tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
+    }
     return true;
 }
 
@@ -1265,6 +1304,7 @@ static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     target_ulong page_insns;
 
     ctx->env = cpu_env(cs);
+    ctx->hosted_memory = mmix_cpu_hosted_memory_enabled(ctx->env);
     ctx->replay = dcbase->tb->cs_base & MMIX_TB_REPLAY_FLAG;
     ctx->substitute_operands =
         dcbase->tb->cs_base & MMIX_TB_REPLAY_SUBSTITUTE_FLAG;
@@ -1289,6 +1329,7 @@ static void mmix_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
 
     ctx->insn_pc = pc;
     ctx->insn = ctx->replay ? dcbase->tb->cs_base :
+                ctx->hosted_memory ? mmix_cpu_hosted_fetch(ctx->env, pc) :
                 translator_ldl_end(ctx->env, dcbase, pc, MO_BE);
     tcg_gen_insn_start(pc, ctx->insn, 0);
 }

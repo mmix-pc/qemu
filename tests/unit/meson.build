@@ -52,6 +52,46 @@ tests = {
   'test-envlist': [],
 }
 
+if config_all_devices.has_key('CONFIG_MMIX_VIRT')
+  tests += {
+    'test-mmix-boot-payload': [
+      meson.project_source_root() / 'hw/mmix/boot-payload.c'
+    ],
+    'test-mmix-boot-plan': [
+      meson.project_source_root() / 'hw/mmix/boot-plan.c',
+      meson.project_source_root() / 'hw/mmix/physical-layout.c',
+      meson.project_source_root() / 'hw/mmix/ram-reservation.c'
+    ],
+    'test-mmix-fdt-builder': [
+      fdt,
+      meson.project_source_root() / 'hw/mmix/fdt-builder.c',
+      meson.project_source_root() / 'hw/mmix/fdt-validator.c',
+      meson.project_source_root() / 'hw/mmix/physical-layout.c'
+    ],
+    'test-mmix-mmo-plan': [
+      meson.project_source_root() / 'hw/mmix/mmo-hosted-plan.c',
+      meson.project_source_root() / 'hw/mmix/mmo-loader.c',
+      meson.project_source_root() / 'hw/mmix/sparse-memory.c'
+    ],
+    'test-mmix-mmo-hosted-state': [
+      migration,
+      io,
+      meson.project_source_root() / 'hw/mmix/mmo-hosted-state.c',
+      meson.project_source_root() / 'hw/mmix/sparse-memory.c'
+    ],
+    'test-mmix-physical-layout': [
+      meson.project_source_root() / 'hw/mmix/physical-layout.c'
+    ],
+    'test-mmix-ram-reservation': [
+      meson.project_source_root() / 'hw/mmix/physical-layout.c',
+      meson.project_source_root() / 'hw/mmix/ram-reservation.c'
+    ],
+    'test-mmix-sparse-memory': [
+      meson.project_source_root() / 'hw/mmix/sparse-memory.c'
+    ],
+  }
+endif
+
 if have_system or have_tools
   tests += {
     'test-qmp-event': [testqapi],

@@ -2,7 +2,19 @@ config MMIX_VIRT
     bool
     default y
     depends on MMIX
-    select FRAMEBUFFER
+    select DEVICE_TREE
+    select E1000_PCI
+    select EDU
     select SERIAL_MM
-    select VIRTIO_BLK
+    select FRAMEBUFFER
+    select GOLDFISH_RTC
+    select MSI_NONBROKEN
+    select PCI_BRIDGE
+    select PCIE_PCI_BRIDGE
+    select PCIE_PORT
+    select PCI_EXPRESS_GENERIC_BRIDGE
+    select PCI_TESTDEV
+    select PFLASH_CFI01
+    select VIRT_CTRL
     select VIRTIO_MMIO
+    select WDT_SBSA

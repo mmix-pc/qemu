@@ -38,22 +38,6 @@ Main    ADDU    $2,Ptr,0
         TRAP    0,0,0
 """
 
-MMIXAL_UART_SOURCE = """\
-Uart    GREG    #10000000
-        LOC     #0
-Main    SETL    $2,'Q'
-        STBU    $2,Uart,#0
-        SETL    $2,'E'
-        STBU    $2,Uart,#0
-        SETL    $2,'M'
-        STBU    $2,Uart,#0
-        SETL    $2,'U'
-        STBU    $2,Uart,#0
-        SETL    $2,#a
-        STBU    $2,Uart,#0
-        TRAP    0,0,0
-"""
-
 MMIXAL_HOSTED_SOURCE = """\
         LOC     Data_Segment
 Msg     BYTE    "Hosted MMIXAL",#a,0
@@ -252,16 +236,6 @@ def mmixal_file_write_case(pathname, data):
         qemu_args=("-semihosting-config", f"enable=on,arg={pathname}"),
     )
 
-
-MMIXAL_SERIAL_TESTS = [
-    MMIXALSerialCase(
-        "mmixal-mmo-uart-output",
-        "uart",
-        pc=0x28,
-        output=b"QEMU\n",
-        source=MMIXAL_UART_SOURCE,
-    ),
-]
 
 MMIXAL_SEMIHOSTING_CONSOLE_TESTS = [
     MMIXALSerialCase(

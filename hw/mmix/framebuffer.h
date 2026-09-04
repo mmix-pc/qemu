@@ -22,6 +22,8 @@ struct MMIXFramebufferState {
     MemoryRegion iomem;
     MemoryRegionSection fbsection;
     QemuConsole *con;
+    uint64_t base;
+    uint64_t size;
     bool invalidate;
     bool refresh_pending;
 };

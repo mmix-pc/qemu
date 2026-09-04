@@ -17,6 +17,7 @@
 #include "exec/cpu-common.h"
 #include "exec/cpu-interrupt.h"
 #include "exec/mmu-access-type.h"
+#include "hosted-memory.h"
 
 #ifdef CONFIG_USER_ONLY
 #error "MMIX does not support user mode emulation"
@@ -36,67 +37,6 @@
 #define MMIX_INITIAL_RG MMIX_GLOBAL_REG_MIN
 #define MMIX_INITIAL_RL 0
 #define MMIX_INITIAL_STACK 0x0000000000010000ULL
-
-#define MMIX_POOL_SEGMENT_BASE 0x4000000000000000ULL
-#define MMIX_POOL_SEGMENT_PHYS_BASE 0x0000000006000000ULL
-#define MMIX_POOL_SEGMENT_SIZE 0x0000000000800000ULL
-#define MMIX_DATA_SEGMENT_BASE 0x2000000000000000ULL
-#define MMIX_DATA_SEGMENT_PHYS_BASE 0x0000000006800000ULL
-#define MMIX_DATA_SEGMENT_SIZE 0x0000000004000000ULL
-#define MMIX_STACK_SEGMENT_BASE 0x6000000000000000ULL
-#define MMIX_STACK_SEGMENT_PHYS_BASE 0x000000000a800000ULL
-#define MMIX_STACK_SEGMENT_SIZE 0x0000000004000000ULL
-#define MMIX_POSITIVE_HIGH_SEGMENT_BASE 0x2000000000000000ULL
-#define MMIX_NEGATIVE_SEGMENT_BASE 0x8000000000000000ULL
-
-static inline bool mmix_bare_segment_to_phys(uint64_t address, uint64_t base,
-                                             hwaddr phys_base, uint64_t size,
-                                             hwaddr *physical)
-{
-    uint64_t offset = address - base;
-
-    if (address < base || offset >= size) {
-        return false;
-    }
-
-    *physical = phys_base + offset;
-    return true;
-}
-
-static inline bool mmix_bare_data_segment_to_phys(uint64_t address,
-                                                  hwaddr *physical)
-{
-    return mmix_bare_segment_to_phys(address, MMIX_DATA_SEGMENT_BASE,
-                                     MMIX_DATA_SEGMENT_PHYS_BASE,
-                                     MMIX_DATA_SEGMENT_SIZE, physical);
-}
-
-static inline bool mmix_bare_pool_segment_to_phys(uint64_t address,
-                                                  hwaddr *physical)
-{
-    return mmix_bare_segment_to_phys(address, MMIX_POOL_SEGMENT_BASE,
-                                     MMIX_POOL_SEGMENT_PHYS_BASE,
-                                     MMIX_POOL_SEGMENT_SIZE, physical);
-}
-
-static inline bool mmix_bare_stack_segment_to_phys(uint64_t address,
-                                                   hwaddr *physical)
-{
-    return mmix_bare_segment_to_phys(address, MMIX_STACK_SEGMENT_BASE,
-                                     MMIX_STACK_SEGMENT_PHYS_BASE,
-                                     MMIX_STACK_SEGMENT_SIZE, physical);
-}
-
-static inline bool mmix_bare_unsupported_high_segment(uint64_t address)
-{
-    hwaddr physical;
-
-    return address >= MMIX_POSITIVE_HIGH_SEGMENT_BASE &&
-           address < MMIX_NEGATIVE_SEGMENT_BASE &&
-           !mmix_bare_data_segment_to_phys(address, &physical) &&
-           !mmix_bare_pool_segment_to_phys(address, &physical) &&
-           !mmix_bare_stack_segment_to_phys(address, &physical);
-}
 
 typedef enum MMIXSpecialReg {
     MMIX_SREG_RB = 0,
@@ -298,6 +238,9 @@ typedef struct CPUArchState {
     uint8_t semihosting_pending_open_handle;
     uint8_t semihosting_pending_open_mode;
     uint64_t semihosting_pending_io_length;
+    uint64_t semihosting_pending_io_address;
+    bool semihosting_pending_io_to_guest;
+    bool semihosting_bounce_active;
 
     struct {} end_reset_fields;
 } CPUMMIXState;
@@ -321,6 +264,8 @@ struct ArchCPU {
     GArray *data_translation_cache;
     /* Internal restart state for nested architectural dynamic traps. */
     GArray *trap_restart_stack;
+    const MMIXHostedMemoryOps *hosted_memory_ops;
+    void *hosted_memory_opaque;
 };
 
 struct MMIXCPUClass {
@@ -342,6 +287,8 @@ bool mmix_cpu_gdb_write_registers(CPUState *cs, const uint8_t *buf,
                                   size_t len);
 int mmix_cpu_gdb_memory_rw_debug(CPUState *cs, vaddr addr, uint8_t *buf,
                                  size_t len, bool is_write);
+int mmix_cpu_memory_rw_debug(CPUState *cs, vaddr address, uint8_t *buffer,
+                             size_t length, bool is_write);
 
 uint64_t mmix_cpu_read_reg(CPUMMIXState *env, unsigned reg);
 void mmix_cpu_write_reg(CPUMMIXState *env, unsigned reg, uint64_t val);
@@ -357,6 +304,23 @@ bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);
 void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 void mmix_cpu_set_ipi(CPUState *cs, int level);
+void mmix_cpu_set_hosted_memory(CPUState *cs,
+                                const MMIXHostedMemoryOps *ops,
+                                void *opaque);
+bool mmix_cpu_hosted_memory_enabled(CPUMMIXState *env);
+bool mmix_cpu_hosted_memory_validate(CPUMMIXState *env, uint64_t address,
+                                     size_t size, size_t alignment,
+                                     Error **errp);
+bool mmix_cpu_hosted_memory_read(CPUMMIXState *env, uint64_t address,
+                                 void *buffer, size_t size, size_t alignment,
+                                 Error **errp);
+bool mmix_cpu_hosted_memory_write(CPUMMIXState *env, uint64_t address,
+                                  const void *buffer, size_t size,
+                                  size_t alignment, Error **errp);
+uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address);
+uint64_t mmix_cpu_hosted_load_octa(CPUMMIXState *env, uint64_t address);
+void mmix_cpu_hosted_store_octa(CPUMMIXState *env, uint64_t address,
+                                uint64_t value);
 G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
                                            const char *reason, int exit_code);
 bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,

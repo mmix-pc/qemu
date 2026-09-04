@@ -14,81 +14,35 @@
 #include "qemu/log.h"
 #include "ipi.h"
 
-static uint64_t mmix_ipi_active_targets(MMIXIPIState *s)
+static uint64_t mmix_ipi_active_targets(const MMIXIPIState *s)
 {
-    return MAKE_64BIT_MASK(0, s->num_cpus);
+    return s->num_cpus == 64 ? UINT64_MAX :
+           MAKE_64BIT_MASK(0, s->num_cpus);
 }
 
-static void mmix_ipi_update(MMIXIPIState *s)
+static void mmix_ipi_update_locked(MMIXIPIState *s, uint64_t changed)
 {
-    uint32_t cpu;
+    while (changed) {
+        unsigned int cpu = ctz64(changed);
+        uint64_t bit = BIT_ULL(cpu);
 
-    for (cpu = 0; cpu < MMIX_VIRT_MAX_CPUS; cpu++) {
-        qemu_set_irq(s->irq[cpu], extract16(s->pending, cpu, 1));
+        qemu_set_irq(s->irq[cpu], !!(s->pending & bit));
+        changed &= ~bit;
     }
 }
 
-static void mmix_ipi_set_pending(MMIXIPIState *s, uint16_t pending)
+static void mmix_ipi_set_pending_locked(MMIXIPIState *s, uint64_t pending)
 {
-    uint16_t changed = s->pending ^ pending;
-    uint32_t cpu;
+    uint64_t changed = s->pending ^ pending;
 
     s->pending = pending;
-    for (cpu = 0; cpu < MMIX_VIRT_MAX_CPUS; cpu++) {
-        if (extract16(changed, cpu, 1)) {
-            qemu_set_irq(s->irq[cpu], extract16(pending, cpu, 1));
-        }
-    }
-}
-
-static bool mmix_ipi_context_offset(hwaddr addr, uint32_t *cpu, hwaddr *reg)
-{
-    hwaddr context;
-
-    if (addr < MMIX_VIRT_IPI_CONTEXT_BASE) {
-        return false;
-    }
-
-    context = addr - MMIX_VIRT_IPI_CONTEXT_BASE;
-    *cpu = context / MMIX_VIRT_IPI_CONTEXT_STRIDE;
-    if (*cpu >= MMIX_VIRT_MAX_CPUS) {
-        return false;
-    }
-
-    *reg = context % MMIX_VIRT_IPI_CONTEXT_STRIDE;
-    return true;
-}
-
-static uint64_t mmix_ipi_read(void *opaque, hwaddr addr, unsigned size)
-{
-    MMIXIPIState *s = opaque;
-    uint32_t cpu;
-    hwaddr reg;
-
-    (void)size;
-
-    if (addr == MMIX_VIRT_IPI_ACTIVE_TARGETS) {
-        return mmix_ipi_active_targets(s);
-    }
-    if (mmix_ipi_context_offset(addr, &cpu, &reg) &&
-        reg == MMIX_VIRT_IPI_CONTEXT_STATUS) {
-        if (cpu >= s->num_cpus) {
-            return 0;
-        }
-        return extract16(s->pending, cpu, 1);
-    }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "%s: unimplemented register read 0x%02" HWADDR_PRIx "\n",
-                  __func__, addr);
-    return 0;
+    mmix_ipi_update_locked(s, changed);
 }
 
 static void mmix_ipi_send(MMIXIPIState *s, uint64_t targets)
 {
     uint64_t active = mmix_ipi_active_targets(s);
     uint64_t invalid = targets & ~active;
-    uint16_t valid = targets & active;
 
     if (invalid) {
         qemu_log_mask(LOG_GUEST_ERROR,
@@ -96,41 +50,96 @@ static void mmix_ipi_send(MMIXIPIState *s, uint64_t targets)
                       "\n", __func__, invalid);
     }
 
-    mmix_ipi_set_pending(s, s->pending | valid);
+    qemu_mutex_lock(&s->lock);
+    mmix_ipi_set_pending_locked(s, s->pending | (targets & active));
+    qemu_mutex_unlock(&s->lock);
 }
 
-static void mmix_ipi_write(void *opaque, hwaddr addr,
-                           uint64_t value, unsigned size)
+static uint64_t mmix_ipi_global_read(void *opaque, hwaddr addr,
+                                     unsigned int size)
 {
     MMIXIPIState *s = opaque;
-    uint32_t cpu;
-    hwaddr reg;
+
+    (void)size;
+
+    if (addr == MMIX_VIRT_IPI_ACTIVE_TARGETS) {
+        return mmix_ipi_active_targets(s);
+    }
+    return 0;
+}
+
+static void mmix_ipi_global_write(void *opaque, hwaddr addr,
+                                  uint64_t value, unsigned int size)
+{
+    MMIXIPIState *s = opaque;
 
     (void)size;
 
     if (addr == MMIX_VIRT_IPI_SEND) {
         mmix_ipi_send(s, value);
-        return;
     }
-    if (mmix_ipi_context_offset(addr, &cpu, &reg) &&
-        reg == MMIX_VIRT_IPI_CONTEXT_CLEAR) {
-        if (cpu < s->num_cpus && (value & MMIX_VIRT_IPI_STATUS_PENDING)) {
-            mmix_ipi_set_pending(s, s->pending & ~(1U << cpu));
-        }
-        return;
-    }
-
-    qemu_log_mask(LOG_UNIMP,
-                  "%s: unimplemented register write 0x%02" HWADDR_PRIx "\n",
-                  __func__, addr);
 }
 
-static const MemoryRegionOps mmix_ipi_ops = {
-    .read = mmix_ipi_read,
-    .write = mmix_ipi_write,
+static uint64_t mmix_ipi_context_read(void *opaque, hwaddr addr,
+                                      unsigned int size)
+{
+    MMIXIPIContext *context = opaque;
+    MMIXIPIState *s = context->ipi;
+    uint64_t status = 0;
+
+    (void)size;
+
+    if (context->cpu >= s->num_cpus ||
+        addr != MMIX_VIRT_IPI_CONTEXT_STATUS) {
+        return 0;
+    }
+
+    qemu_mutex_lock(&s->lock);
+    if (s->pending & BIT_ULL(context->cpu)) {
+        status = MMIX_VIRT_IPI_STATUS_PENDING;
+    }
+    qemu_mutex_unlock(&s->lock);
+    return status;
+}
+
+static void mmix_ipi_context_write(void *opaque, hwaddr addr,
+                                   uint64_t value, unsigned int size)
+{
+    MMIXIPIContext *context = opaque;
+    MMIXIPIState *s = context->ipi;
+
+    (void)size;
+
+    if (context->cpu >= s->num_cpus ||
+        addr != MMIX_VIRT_IPI_CONTEXT_CLEAR ||
+        !(value & MMIX_VIRT_IPI_STATUS_PENDING)) {
+        return;
+    }
+
+    qemu_mutex_lock(&s->lock);
+    mmix_ipi_set_pending_locked(s,
+                                s->pending & ~BIT_ULL(context->cpu));
+    qemu_mutex_unlock(&s->lock);
+}
+
+static const MemoryRegionOps mmix_ipi_global_ops = {
+    .read = mmix_ipi_global_read,
+    .write = mmix_ipi_global_write,
     .endianness = DEVICE_BIG_ENDIAN,
     .valid.min_access_size = 8,
     .valid.max_access_size = 8,
+    .valid.unaligned = false,
+    .impl.min_access_size = 8,
+    .impl.max_access_size = 8,
+};
+
+static const MemoryRegionOps mmix_ipi_context_ops = {
+    .read = mmix_ipi_context_read,
+    .write = mmix_ipi_context_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid.min_access_size = 8,
+    .valid.max_access_size = 8,
+    .valid.unaligned = false,
     .impl.min_access_size = 8,
     .impl.max_access_size = 8,
 };
@@ -139,21 +148,44 @@ static void mmix_ipi_reset(DeviceState *dev)
 {
     MMIXIPIState *s = MMIX_IPI(dev);
 
-    mmix_ipi_set_pending(s, 0);
+    qemu_mutex_lock(&s->lock);
+    mmix_ipi_set_pending_locked(s, 0);
+    qemu_mutex_unlock(&s->lock);
 }
 
 static void mmix_ipi_realize(DeviceState *dev, Error **errp)
 {
     MMIXIPIState *s = MMIX_IPI(dev);
+    uint32_t cpu;
 
-    if (s->num_cpus == 0 || s->num_cpus > MMIX_VIRT_MAX_CPUS) {
+    if (s->num_cpus == 0 || s->num_cpus > MMIX_VIRT_IPI_CONTEXT_COUNT) {
         error_setg(errp, "num-cpus must be between 1 and %u",
-                   MMIX_VIRT_MAX_CPUS);
+                   MMIX_VIRT_IPI_CONTEXT_COUNT);
         return;
     }
 
-    memory_region_init_io(&s->iomem, OBJECT(s), &mmix_ipi_ops, s,
-                          TYPE_MMIX_IPI, MMIX_VIRT_IPI_SIZE);
+    memory_region_init(&s->container, OBJECT(s), TYPE_MMIX_IPI,
+                       MMIX_VIRT_IPI_RESERVATION_SIZE);
+    memory_region_init_io(&s->global_iomem, OBJECT(s), &mmix_ipi_global_ops,
+                          s, "mmix-ipi-global",
+                          MMIX_VIRT_IPI_GLOBAL_REGISTER_SIZE);
+    memory_region_add_subregion(&s->container, 0, &s->global_iomem);
+
+    for (cpu = 0; cpu < MMIX_VIRT_IPI_CONTEXT_COUNT; cpu++) {
+        MMIXIPIContext *context = &s->context[cpu];
+        g_autofree char *name = g_strdup_printf("mmix-ipi-context[%u]", cpu);
+
+        context->ipi = s;
+        context->cpu = cpu;
+        memory_region_init_io(&context->iomem, OBJECT(s),
+                              &mmix_ipi_context_ops, context, name,
+                              MMIX_VIRT_IPI_CONTEXT_REGISTER_SIZE);
+        memory_region_add_subregion(
+            &s->container,
+            MMIX_VIRT_IPI_CONTEXTS_OFFSET +
+            cpu * MMIX_VIRT_IPI_CONTEXT_STRIDE,
+            &context->iomem);
+    }
 }
 
 static int mmix_ipi_post_load(void *opaque, int version_id)
@@ -162,7 +194,13 @@ static int mmix_ipi_post_load(void *opaque, int version_id)
 
     (void)version_id;
 
-    mmix_ipi_update(s);
+    if (s->pending & ~mmix_ipi_active_targets(s)) {
+        return -EINVAL;
+    }
+
+    qemu_mutex_lock(&s->lock);
+    mmix_ipi_update_locked(s, mmix_ipi_active_targets(s));
+    qemu_mutex_unlock(&s->lock);
     return 0;
 }
 
@@ -172,7 +210,7 @@ static const VMStateDescription vmstate_mmix_ipi = {
     .minimum_version_id = 1,
     .post_load = mmix_ipi_post_load,
     .fields = (const VMStateField[]) {
-        VMSTATE_UINT16(pending, MMIXIPIState),
+        VMSTATE_UINT64(pending, MMIXIPIState),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -188,10 +226,18 @@ static void mmix_ipi_instance_init(Object *obj)
     MMIXIPIState *s = MMIX_IPI(obj);
     uint32_t cpu;
 
-    sysbus_init_mmio(dev, &s->iomem);
-    for (cpu = 0; cpu < MMIX_VIRT_MAX_CPUS; cpu++) {
+    qemu_mutex_init(&s->lock);
+    sysbus_init_mmio(dev, &s->container);
+    for (cpu = 0; cpu < MMIX_VIRT_IPI_CONTEXT_COUNT; cpu++) {
         sysbus_init_irq(dev, &s->irq[cpu]);
     }
+}
+
+static void mmix_ipi_instance_finalize(Object *obj)
+{
+    MMIXIPIState *s = MMIX_IPI(obj);
+
+    qemu_mutex_destroy(&s->lock);
 }
 
 static void mmix_ipi_class_init(ObjectClass *oc, const void *data)
@@ -210,6 +256,7 @@ static const TypeInfo mmix_ipi_info = {
     .name = TYPE_MMIX_IPI,
     .parent = TYPE_SYS_BUS_DEVICE,
     .instance_init = mmix_ipi_instance_init,
+    .instance_finalize = mmix_ipi_instance_finalize,
     .instance_size = sizeof(MMIXIPIState),
     .class_init = mmix_ipi_class_init,
 };

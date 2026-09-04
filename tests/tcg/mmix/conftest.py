@@ -10,6 +10,13 @@ import shutil
 import pytest
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "boot_integration: integrated coverage for supported boot modes",
+    )
+
+
 def pytest_addoption(parser):
     group = parser.getgroup("mmix")
     group.addoption("--qemu", action="store", help="qemu-system-mmix binary")
@@ -39,4 +46,12 @@ def mmixal():
     path = shutil.which("mmixal")
     if path is None:
         pytest.skip("mmixal not found")
+    return path
+
+
+@pytest.fixture(scope="session")
+def mmixware_simulator():
+    path = shutil.which("mmix")
+    if path is None:
+        pytest.skip("MMIXWare mmix simulator not found")
     return path

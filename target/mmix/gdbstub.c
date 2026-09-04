@@ -110,6 +110,9 @@ static bool mmix_cpu_gdb_memory_access_valid(CPUState *cs, vaddr addr,
 int mmix_cpu_gdb_memory_rw_debug(CPUState *cs, vaddr addr, uint8_t *buf,
                                  size_t len, bool is_write)
 {
+    if (mmix_cpu_hosted_memory_enabled(cpu_env(cs))) {
+        return mmix_cpu_memory_rw_debug(cs, addr, buf, len, is_write);
+    }
     if (!mmix_cpu_gdb_memory_access_valid(cs, addr, len, is_write)) {
         return -1;
     }

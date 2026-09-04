@@ -27,8 +27,31 @@ typedef struct MMIXKernelLoadInfo {
     uint64_t globals[256];
 } MMIXKernelLoadInfo;
 
+typedef struct MMIXKernelImageRange {
+    hwaddr address;
+    uint64_t size;
+    uint16_t index;
+} MMIXKernelImageRange;
+
+enum {
+    MMIX_RAW_ENTRY = 0x100,
+    MMIX_RAW_MIN_SIZE = MMIX_RAW_ENTRY + 4,
+};
+
+bool mmix_classify_kernel_image(const char *filename,
+                                MMIXKernelImageType *type, Error **errp);
+
+bool mmix_preflight_raw_kernel(const char *filename,
+                               const MMIXPhysicalRAM *ram,
+                               MMIXKernelLoadInfo *info,
+                               uint64_t *image_size, Error **errp);
+
+ssize_t mmix_commit_raw_kernel(const char *filename,
+                               const MMIXPhysicalRAM *ram,
+                               uint64_t expected_size, Error **errp);
+
 ssize_t mmix_load_kernel(const char *filename,
-                         const MMIXPhysicalRAMLayout *ram_layout,
+                         const MMIXPhysicalRAM *ram,
                          MMIXKernelLoadInfo *info, Error **errp);
 
 #endif

@@ -7,13 +7,7 @@
 import struct
 import xml.etree.ElementTree as ET
 
-from cases.common import (
-    INITIAL_STACK,
-    MMIX_DATA_SEGMENT_BASE,
-    MMIX_DATA_SEGMENT_SIZE,
-    MMIX_VIRT_BOOTINFO,
-    MMIX_VIRT_MEMMAP,
-)
+from cases.common import INITIAL_STACK
 from cases.debugger import (
     DEBUGGER_ELF_IMAGE,
     DEBUGGER_DATA_ADDRESS,
@@ -57,6 +51,7 @@ MMIX_GDB_GENERIC_ROLES = {
 }
 MMIX_GDB_PC_REG = MMIX_GDB_GENERAL_REGS + len(MMIX_GDB_SPECIAL_REGS)
 MMIX_GDB_REGS = MMIX_GDB_PC_REG + 1
+MMIX_VIRT_DEFAULT_RAM_SIZE = 512 * 1024 * 1024
 
 
 def _write_debugger_fixture(workdir):
@@ -188,9 +183,7 @@ def test_rsp_register_description_and_reads(qemu, workdir):
             assert value == register_data[offset:offset + 8]
 
         ro = MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index("rO")
-        assert register_data[8:16] == struct.pack(
-            ">Q", MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0]
-        )
+        assert register_data[8:16] == bytes(8)
         assert register_data[ro * 8:(ro + 1) * 8] == struct.pack(
             ">Q", INITIAL_STACK
         )
@@ -318,7 +311,7 @@ def test_rsp_general_register_writes_follow_logical_window(qemu, workdir):
         initial_ro = _read_register(client, ro)
         initial_rs = _read_register(client, rs)
 
-        assert _read_register(client, rl) == 2
+        assert _read_register(client, rl) == 0
         assert _read_register(client, rg) == 32
         for number, value in values.items():
             _write_register(client, number, value)
@@ -479,12 +472,6 @@ def test_rsp_memory_access_uses_mmix_virtual_translation(qemu, workdir):
         assert _write_memory(client, DEBUGGER_DATA_ADDRESS, data_patch) == b"OK"
         assert _read_memory(client, DEBUGGER_DATA_ADDRESS, 8) == data_patch
 
-        high_address = MMIX_DATA_SEGMENT_BASE + 0xFFD
-        high_data = bytes(range(1, 18))
-        assert high_address > 0xFFFFFFFF
-        assert _write_memory(client, high_address, high_data) == b"OK"
-        assert _read_memory(client, high_address, len(high_data)) == high_data
-
 
 def test_rsp_memory_write_failures_do_not_modify_accessible_prefix(qemu,
                                                                     workdir):
@@ -492,7 +479,7 @@ def test_rsp_memory_write_failures_do_not_modify_accessible_prefix(qemu,
 
     with QEMURSPServer(qemu, image, workdir) as server:
         client = server.client
-        boundary = MMIX_DATA_SEGMENT_BASE + MMIX_DATA_SEGMENT_SIZE
+        boundary = MMIX_VIRT_DEFAULT_RAM_SIZE
         prefix_address = boundary - 4
         original = _read_memory(client, prefix_address, 4)
         payload = bytes.fromhex("a1a2a3a4b1b2b3b4")

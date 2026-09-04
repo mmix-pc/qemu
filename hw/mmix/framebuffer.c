@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "hw/core/sysbus.h"
+#include "hw/core/qdev-properties.h"
 #include "ui/console.h"
 #include "hw/display/framebuffer.h"
 #include "migration/vmstate.h"
@@ -102,7 +103,8 @@ static const GraphicHwOps mmix_framebuffer_graphic_ops = {
 static uint64_t mmix_framebuffer_read(void *opaque, hwaddr addr,
                                       unsigned size)
 {
-    (void)opaque;
+    MMIXFramebufferState *s = opaque;
+
     (void)size;
 
     switch (addr) {
@@ -115,9 +117,9 @@ static uint64_t mmix_framebuffer_read(void *opaque, hwaddr addr,
     case MMIX_VIRT_FRAMEBUFFER_REG_FORMAT:
         return MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888;
     case MMIX_VIRT_FRAMEBUFFER_REG_BASE:
-        return mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER].base;
+        return s->base;
     case MMIX_VIRT_FRAMEBUFFER_REG_SIZE:
-        return mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER].size;
+        return s->size;
     case MMIX_VIRT_FRAMEBUFFER_REG_FLUSH:
         return 0;
     default:
@@ -177,16 +179,27 @@ static void mmix_framebuffer_realize(DeviceState *dev, Error **errp)
 {
     MMIXFramebufferState *s = MMIX_FRAMEBUFFER(dev);
 
-    (void)errp;
+    if (s->size != MMIX_VIRT_FRAMEBUFFER_SIZE ||
+        s->base % MMIX_VIRT_FRAMEBUFFER_ALIGN != 0) {
+        error_setg(errp,
+                   "MMIX framebuffer backing must be 0x%x bytes and "
+                   "0x%x-byte aligned",
+                   MMIX_VIRT_FRAMEBUFFER_SIZE,
+                   MMIX_VIRT_FRAMEBUFFER_ALIGN);
+        return;
+    }
 
     memory_region_init_io(&s->iomem, OBJECT(s), &mmix_framebuffer_ops, s,
                           TYPE_MMIX_FRAMEBUFFER,
                           MMIX_VIRT_FRAMEBUFFER_CONTROL_MMIO_SIZE);
 
     framebuffer_update_memory_section(
-        &s->fbsection, get_system_memory(),
-        mmix_virt_memmap[MMIX_VIRT_FRAMEBUFFER].base,
+        &s->fbsection, get_system_memory(), s->base,
         MMIX_VIRT_FRAMEBUFFER_HEIGHT, MMIX_VIRT_FRAMEBUFFER_STRIDE);
+    if (!s->fbsection.mr) {
+        error_setg(errp, "MMIX framebuffer backing is not writable RAM");
+        return;
+    }
 
     s->invalidate = true;
     s->con = qemu_graphic_console_create(dev, 0,
@@ -220,6 +233,11 @@ static const VMStateDescription vmstate_mmix_framebuffer = {
     },
 };
 
+static const Property mmix_framebuffer_properties[] = {
+    DEFINE_PROP_UINT64("base", MMIXFramebufferState, base, 0),
+    DEFINE_PROP_UINT64("size", MMIXFramebufferState, size, 0),
+};
+
 static void mmix_framebuffer_instance_init(Object *obj)
 {
     SysBusDevice *dev = SYS_BUS_DEVICE(obj);
@@ -239,6 +257,7 @@ static void mmix_framebuffer_class_init(ObjectClass *oc, const void *data)
     dc->realize = mmix_framebuffer_realize;
     dc->unrealize = mmix_framebuffer_unrealize;
     dc->vmsd = &vmstate_mmix_framebuffer;
+    device_class_set_props(dc, mmix_framebuffer_properties);
 }
 
 static const TypeInfo mmix_framebuffer_info = {

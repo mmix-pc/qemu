@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "mmix-helper.h"
+#include "semihosting.h"
 #include "accel/tcg/cpu-loop.h"
 #include "exec/helper-proto.h"
 #include "exec/log.h"
@@ -986,6 +987,11 @@ hwaddr mmix_cpu_get_phys_addr_debug(CPUState *cs, vaddr addr)
 {
     CPUMMIXState *env = cpu_env(cs);
     MMIXAddressTranslation translation;
+    hwaddr physical;
+
+    if (mmix_semihosting_get_phys_addr_debug(env, addr, &physical)) {
+        return physical;
+    }
 
     if (mmix_translate_address(env, addr, MMU_DATA_LOAD, true, false,
                                &translation)) {

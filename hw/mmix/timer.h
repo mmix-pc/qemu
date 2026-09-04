@@ -14,10 +14,18 @@
 #define TYPE_MMIX_TIMER "mmix-timer"
 OBJECT_DECLARE_SIMPLE_TYPE(MMIXTimerState, MMIX_TIMER)
 
+typedef struct MMIXTimerContext {
+    MemoryRegion iomem;
+    MMIXTimerState *timer;
+    uint32_t cpu;
+} MMIXTimerContext;
+
 struct MMIXTimerState {
     SysBusDevice parent_obj;
 
-    MemoryRegion iomem;
+    MemoryRegion container;
+    MemoryRegion global_iomem;
+    MMIXTimerContext context[MMIX_VIRT_TIMER_CONTEXT_COUNT];
     qemu_irq irq[MMIX_VIRT_TIMER_CONTEXT_COUNT];
     QEMUTimer *timer;
 

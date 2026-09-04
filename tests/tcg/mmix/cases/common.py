@@ -22,6 +22,7 @@ from lib.mmo import (
     mmo_fixo,
     mmo_fixr,
     mmo_fixrx,
+    mmo_hosted_image,
     mmo_image,
     mmo_line,
     mmo_loc,
@@ -34,7 +35,7 @@ from lib.mmo import (
 )
 
 MASK64 = (1 << 64) - 1
-INITIAL_STACK = 0x00010000
+INITIAL_STACK = 0x1fcf8000
 MMIX_VIRT_INITIAL_STACK_SLOT_SIZE = 0x00008000
 RA_EVENT_X = 0x01
 RA_EVENT_Z = 0x02
@@ -60,45 +61,38 @@ VM_RV_PAGE0 = 0x11110d0000002000
 VM_RV_SOFTWARE = VM_RV_PAGE0 | 1
 VM_PAGE_TABLE_ROOT2 = 0x4000
 VM_RV_ROOT2 = 0x11110d0000004000
+VM_STACK_POINTER_TABLE = 0x4000
+VM_STACK_LEAF_TABLE = 0x6000
+VM_STACK_PTP_ADDRESS = (VM_STACK_POINTER_TABLE +
+                        ((INITIAL_STACK >> 23) & 0x3ff) * 8)
+VM_STACK_PTP = (1 << 63) | VM_STACK_LEAF_TABLE
+VM_STACK_PTE = (VM_STACK_LEAF_TABLE +
+                ((INITIAL_STACK >> 13) & 0x3ff) * 8)
+VM_RV_STACK = 0x22220d0000002000
 NEGATIVE_HANDLER = 0x8000000000000080
-MMIX_VIRT_LOW_RAM = "low_ram"
-MMIX_VIRT_POOL = "pool"
-MMIX_VIRT_DATA = "data"
-MMIX_VIRT_STACK = "stack"
-MMIX_VIRT_PLATFORM_RAM = "platform_ram"
-MMIX_VIRT_BOOTINFO = "bootinfo"
-MMIX_VIRT_KERNEL_CMDLINE = "kernel_cmdline"
-MMIX_VIRT_FRAMEBUFFER = "framebuffer"
-MMIX_VIRT_MMIO = "mmio"
 MMIX_VIRT_UART0 = "uart0"
 MMIX_VIRT_VIRTIO_MMIO = "virtio_mmio"
 MMIX_VIRT_FRAMEBUFFER_CONTROL = "framebuffer_control"
 MMIX_VIRT_TIMER = "timer"
 MMIX_VIRT_INTC = "intc"
 MMIX_VIRT_IPI = "ipi"
-MMIX_VIRT_INTC_CONTEXT_COUNT = 16
-MMIX_VIRT_INTC_CONTEXT_BASE = 0x1000
-MMIX_VIRT_INTC_CONTEXT_STRIDE = 0x100
-MMIX_VIRT_INTC_SIZE = (
-    MMIX_VIRT_INTC_CONTEXT_BASE +
-    MMIX_VIRT_INTC_CONTEXT_COUNT * MMIX_VIRT_INTC_CONTEXT_STRIDE
-)
+MMIX_VIRT_PCIE_ECAM = "pcie_ecam"
+MMIX_VIRT_PCIE_MMIO32 = "pcie_mmio32"
+MMIX_VIRT_PCIE_MMIO64 = "pcie_mmio64"
+MMIX_VIRT_INTC_CONTEXT_COUNT = 64
+MMIX_VIRT_INTC_CONTEXT_BASE = 0x04000000
+MMIX_VIRT_INTC_CONTEXT_STRIDE = 0x10000
+MMIX_VIRT_INTC_SIZE = 0x08000000
 MMIX_VIRT_MEMMAP = {
-    MMIX_VIRT_LOW_RAM: (0x00000000, 0x06000000),
-    MMIX_VIRT_POOL: (0x06000000, 0x00800000),
-    MMIX_VIRT_DATA: (0x06800000, 0x04000000),
-    MMIX_VIRT_STACK: (0x0A800000, 0x04000000),
-    MMIX_VIRT_PLATFORM_RAM: (0x0E800000, 0x00800000),
-    MMIX_VIRT_BOOTINFO: (0x0E800000, 0),
-    MMIX_VIRT_KERNEL_CMDLINE: (0, 0x1000),
-    MMIX_VIRT_FRAMEBUFFER: (0x0F000000, 0x01000000),
-    MMIX_VIRT_MMIO: (0x10000000, 0x10000000),
-    MMIX_VIRT_UART0: (0x10000000, 0x100),
-    MMIX_VIRT_VIRTIO_MMIO: (0x10001000, 0x1000),
-    MMIX_VIRT_FRAMEBUFFER_CONTROL: (0x10002000, 0x1000),
-    MMIX_VIRT_TIMER: (0x10003000, 0),
-    MMIX_VIRT_INTC: (0x10004000, MMIX_VIRT_INTC_SIZE),
-    MMIX_VIRT_IPI: (0x10006000, 0x1000),
+    MMIX_VIRT_UART0: (0x0001000010000000, 0x8),
+    MMIX_VIRT_FRAMEBUFFER_CONTROL: (0x0001000018000000, 0x1000),
+    MMIX_VIRT_TIMER: (0x0001000020000000, 0x04000000),
+    MMIX_VIRT_IPI: (0x0001000024000000, 0x04000000),
+    MMIX_VIRT_INTC: (0x0001000030000000, MMIX_VIRT_INTC_SIZE),
+    MMIX_VIRT_VIRTIO_MMIO: (0x0001000040000000, 0x10000000),
+    MMIX_VIRT_PCIE_ECAM: (0x0001000100000000, 0x10000000),
+    MMIX_VIRT_PCIE_MMIO32: (0x0001000200000000, 0x100000000),
+    MMIX_VIRT_PCIE_MMIO64: (0x0001010000000000, 0x100000000000),
 }
 MMIX_VIRT_SHARED_IRQ_FIRST = 1
 MMIX_VIRT_SHARED_IRQ_LAST = 15
@@ -107,9 +101,8 @@ MMIX_VIRT_UART0_THR = 0x00
 MMIX_VIRT_UART0_LSR = 0x05
 MMIX_VIRT_UART0_LSR_THRE = 0x20
 MMIX_VIRT_UART0_IRQ = 1
-MMIX_VIRT_VIRTIO_BLOCK0_IRQ = 2
-MMIX_VIRT_VIRTIO_MMIO_COUNT = 1
-MMIX_VIRT_FRAMEBUFFER_IRQ = 3
+MMIX_VIRT_VIRTIO_BLOCK0_IRQ = 2048
+MMIX_VIRT_VIRTIO_MMIO_COUNT = 32
 MMIX_VIRT_FRAMEBUFFER_WIDTH = 1024
 MMIX_VIRT_FRAMEBUFFER_HEIGHT = 768
 MMIX_VIRT_FRAMEBUFFER_BPP = 32
@@ -123,24 +116,22 @@ MMIX_VIRT_FRAMEBUFFER_REG_BASE = 0x20
 MMIX_VIRT_FRAMEBUFFER_REG_SIZE = 0x28
 MMIX_VIRT_FRAMEBUFFER_REG_FLUSH = 0x30
 MMIX_VIRT_TIMER_IRQ_BASE = 16
-MMIX_VIRT_INTC_IRQ_COUNT = (
-    MMIX_VIRT_TIMER_IRQ_BASE + MMIX_VIRT_INTC_CONTEXT_COUNT
-)
-MMIX_VIRT_INTC_PENDING = 0x0000
-MMIX_VIRT_INTC_CONTEXT_ENABLE = 0x00
-MMIX_VIRT_INTC_CONTEXT_CLAIM = 0x04
-MMIX_VIRT_INTC_CONTEXT_COMPLETE = 0x08
+MMIX_VIRT_INTC_IRQ_COUNT = 8192
+MMIX_VIRT_INTC_PENDING = 0x1000
+MMIX_VIRT_INTC_CONTEXT_ENABLE = 0x000
+MMIX_VIRT_INTC_CONTEXT_CLAIM = 0x800
+MMIX_VIRT_INTC_CONTEXT_COMPLETE = 0x808
 MMIX_VIRT_IPI_ACTIVE_TARGETS = 0x0000
 MMIX_VIRT_IPI_SEND = 0x0008
-MMIX_VIRT_IPI_CONTEXT_BASE = 0x0100
-MMIX_VIRT_IPI_CONTEXT_STRIDE = 0x20
+MMIX_VIRT_IPI_CONTEXT_BASE = 0x10000
+MMIX_VIRT_IPI_CONTEXT_STRIDE = 0x10000
 MMIX_VIRT_IPI_CONTEXT_STATUS = 0x00
 MMIX_VIRT_IPI_CONTEXT_CLEAR = 0x08
 MMIX_VIRT_IPI_STATUS_PENDING = 0x01
 MMIX_VIRT_TIMER_TIME = 0x0000
 MMIX_VIRT_TIMER_CONTEXT_COUNT = MMIX_VIRT_INTC_CONTEXT_COUNT
-MMIX_VIRT_TIMER_CONTEXT_BASE = 0x0100
-MMIX_VIRT_TIMER_CONTEXT_STRIDE = 0x40
+MMIX_VIRT_TIMER_CONTEXT_BASE = 0x10000
+MMIX_VIRT_TIMER_CONTEXT_STRIDE = 0x10000
 MMIX_VIRT_TIMER_CONTEXT_COMPARE = 0x00
 MMIX_VIRT_TIMER_CONTEXT_CONTROL = 0x08
 MMIX_VIRT_TIMER_CONTEXT_STATUS = 0x10
@@ -152,22 +143,21 @@ MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER] = (
     MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0],
     MMIX_VIRT_TIMER_SIZE,
 )
-MMIX_BOOTINFO_MAGIC = 0x4D4D4958424F4F54
-MMIX_BOOTINFO_VERSION = 1
-MMIX_BOOTINFO_FLAG_KERNEL_CMDLINE = 1 << 0
-MMIX_BOOTINFO_KERNEL_CMDLINE_MAX = 4095
+
+
+def privileged_mmio(device):
+    return (1 << 63) | MMIX_VIRT_MEMMAP[device][0]
+
+
 MMIX_POOL_SEGMENT_BASE = 0x4000000000000000
-MMIX_POOL_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_POOL][0]
+MMIX_LOGICAL_SEGMENT_SIZE = 0x2000000000000000
 MMIX_POOL_SEGMENT_SIZE = 0x0000000000800000
 MMIX_DATA_SEGMENT_BASE = 0x2000000000000000
-MMIX_DATA_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_DATA][0]
 MMIX_DATA_SEGMENT_SIZE = 0x0000000004000000
 MMIX_STACK_SEGMENT_BASE = 0x6000000000000000
-MMIX_STACK_SEGMENT_PHYS_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_STACK][0]
+MMIX_HOSTED_LIMIT = 0x8000000000000000
 MMIX_STACK_SEGMENT_SIZE = 0x0000000004000000
-MMIX_LOW_RAM_BASE = MMIX_VIRT_MEMMAP[MMIX_VIRT_LOW_RAM][0]
-MMIX_LOW_RAM_SIZE = MMIX_VIRT_MEMMAP[MMIX_VIRT_LOW_RAM][1]
-MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS = 0x7000000000000000
+MMIX_UNSUPPORTED_HIGH_SEGMENT_ADDRESS = MMIX_HOSTED_LIMIT
 MMIX_SEMIHOSTING_HALT = 0
 MMIX_SEMIHOSTING_FOPEN = 1
 MMIX_SEMIHOSTING_FCLOSE = 2
@@ -189,6 +179,7 @@ MMIX_SEMIHOSTING_BINARY_READ = 2
 MMIX_SEMIHOSTING_BINARY_WRITE = 3
 MMIX_SEMIHOSTING_BINARY_READ_WRITE = 4
 MMIX_SEMIHOSTING_STRING_MAX = 256
+MMIX_RAW_ENTRY = 0x100
 ELFCLASS32 = 1
 ELFCLASS64 = 2
 ELFDATA2LSB = 1
@@ -198,6 +189,7 @@ ET_EXEC = 2
 EM_X86_64 = 62
 EM_MMIX = 80
 PT_LOAD = 1
+PT_INTERP = 3
 SHT_NULL = 0
 SHT_PROGBITS = 1
 SHT_STRTAB = 3
@@ -206,124 +198,13 @@ MMIX_REGS = 256
 MMIX_GLOBAL_REG_MIN = 32
 MMIX_OCTA_SIZE = 8
 
-MMIX_BOOTINFO_FIELDS = (
-    "magic",
-    "version",
-    "size",
-    "flags",
-    "cpu_count",
-    "boot_cpu_id",
-    "ram_base",
-    "ram_size",
-    "low_ram_base",
-    "low_ram_size",
-    "pool_logical_base",
-    "pool_phys_base",
-    "pool_size",
-    "data_logical_base",
-    "data_phys_base",
-    "data_size",
-    "stack_logical_base",
-    "stack_phys_base",
-    "stack_size",
-    "mmio_base",
-    "uart_base",
-    "uart_irq",
-    "timer_base",
-    "timer_irq_base",
-    "timer_irq_count",
-    "intc_base",
-    "intc_irq_count",
-    "virtio_mmio_base",
-    "virtio_mmio_irq",
-    "virtio_mmio_count",
-    "framebuffer_control_base",
-    "framebuffer_base",
-    "framebuffer_size",
-    "framebuffer_irq",
-    "framebuffer_width",
-    "framebuffer_height",
-    "framebuffer_stride",
-    "framebuffer_format",
-    "kernel_cmdline_addr",
-    "kernel_cmdline_size",
-    "ipi_base",
-    "ipi_target_count",
-    "ipi_request_mask",
-    "high_ram_base",
-    "high_ram_size",
-)
-MMIX_BOOTINFO_FORMAT = ">" + ("Q" * len(MMIX_BOOTINFO_FIELDS))
-MMIX_BOOTINFO_SIZE = struct.calcsize(MMIX_BOOTINFO_FORMAT)
-MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO] = (
-    MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
-    MMIX_BOOTINFO_SIZE,
-)
-MMIX_VIRT_MEMMAP[MMIX_VIRT_KERNEL_CMDLINE] = (
-    MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0] + MMIX_BOOTINFO_SIZE,
-    MMIX_BOOTINFO_KERNEL_CMDLINE_MAX + 1,
-)
+
+def raw_direct_image(program):
+    return bytes(MMIX_RAW_ENTRY) + program
 
 
-def parse_bootinfo(data):
-    values = struct.unpack(MMIX_BOOTINFO_FORMAT, data[:MMIX_BOOTINFO_SIZE])
-    return dict(zip(MMIX_BOOTINFO_FIELDS, values))
-
-
-def expected_bootinfo(ram_size=256 * 1024 * 1024):
-    return {
-        "magic": MMIX_BOOTINFO_MAGIC,
-        "version": MMIX_BOOTINFO_VERSION,
-        "size": MMIX_BOOTINFO_SIZE,
-        "flags": 0,
-        "cpu_count": 1,
-        "boot_cpu_id": 0,
-        "ram_base": 0,
-        "ram_size": ram_size,
-        "low_ram_base": MMIX_LOW_RAM_BASE,
-        "low_ram_size": MMIX_LOW_RAM_SIZE,
-        "pool_logical_base": MMIX_POOL_SEGMENT_BASE,
-        "pool_phys_base": MMIX_POOL_SEGMENT_PHYS_BASE,
-        "pool_size": MMIX_POOL_SEGMENT_SIZE,
-        "data_logical_base": MMIX_DATA_SEGMENT_BASE,
-        "data_phys_base": MMIX_DATA_SEGMENT_PHYS_BASE,
-        "data_size": MMIX_DATA_SEGMENT_SIZE,
-        "stack_logical_base": MMIX_STACK_SEGMENT_BASE,
-        "stack_phys_base": MMIX_STACK_SEGMENT_PHYS_BASE,
-        "stack_size": MMIX_STACK_SEGMENT_SIZE,
-        "mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_MMIO][0],
-        "uart_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_UART0][0],
-        "uart_irq": MMIX_VIRT_UART0_IRQ,
-        "timer_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_TIMER][0],
-        "timer_irq_base": MMIX_VIRT_TIMER_IRQ_BASE,
-        "timer_irq_count": 1,
-        "intc_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0],
-        "intc_irq_count": MMIX_VIRT_INTC_IRQ_COUNT,
-        "virtio_mmio_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_VIRTIO_MMIO][0],
-        "virtio_mmio_irq": MMIX_VIRT_VIRTIO_BLOCK0_IRQ,
-        "virtio_mmio_count": MMIX_VIRT_VIRTIO_MMIO_COUNT,
-        "framebuffer_control_base": MMIX_VIRT_MEMMAP[
-            MMIX_VIRT_FRAMEBUFFER_CONTROL
-        ][0],
-        "framebuffer_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_FRAMEBUFFER][0],
-        "framebuffer_size": MMIX_VIRT_MEMMAP[MMIX_VIRT_FRAMEBUFFER][1],
-        "framebuffer_irq": MMIX_VIRT_FRAMEBUFFER_IRQ,
-        "framebuffer_width": MMIX_VIRT_FRAMEBUFFER_WIDTH,
-        "framebuffer_height": MMIX_VIRT_FRAMEBUFFER_HEIGHT,
-        "framebuffer_stride": MMIX_VIRT_FRAMEBUFFER_STRIDE,
-        "framebuffer_format": MMIX_VIRT_FRAMEBUFFER_FORMAT_XRGB8888,
-        "kernel_cmdline_addr": 0,
-        "kernel_cmdline_size": 0,
-        "ipi_base": MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0],
-        "ipi_target_count": 1,
-        "ipi_request_mask": RQ_IPI,
-        "high_ram_base": 0,
-        "high_ram_size": 0,
-    }
-
-
-def serial_tx_program(message=b"MMIX\n"):
-    program = [*set_octa(R1, MMIX_VIRT_UART0_BASE)]
+def serial_tx_program(message=b"MMIX\n", uart_base=MMIX_VIRT_UART0_BASE):
+    program = [*set_octa(R1, uart_base)]
 
     for ch in message:
         program.extend([
@@ -637,7 +518,7 @@ def elf64_header(elf_class=ELFCLASS64, elf_data=ELFDATA2MSB,
 
 
 def elf64_phdr(load_address, data, mem_size=None, offset=0x100,
-               ph_type=PT_LOAD, flags=5, virtual_address=None):
+               ph_type=PT_LOAD, flags=5, virtual_address=None, alignment=1):
     if mem_size is None:
         mem_size = len(data)
     if virtual_address is None:
@@ -651,7 +532,7 @@ def elf64_phdr(load_address, data, mem_size=None, offset=0x100,
         load_address,
         len(data),
         mem_size,
-        0x1000,
+        alignment,
     )
 
 
@@ -681,10 +562,26 @@ def elf64_shdr(name=0, section_type=SHT_NULL, flags=0, address=0, offset=0,
 
 
 _ELF64_EHDR_FIELDS = {
+    "entry": (24, "Q"),
+    "program_offset": (32, "Q"),
     "section_offset": (40, "Q"),
+    "header_size": (52, "H"),
+    "program_entry_size": (54, "H"),
+    "program_count": (56, "H"),
     "section_entry_size": (58, "H"),
     "section_count": (60, "H"),
     "section_names_index": (62, "H"),
+}
+
+_ELF64_PHDR_FIELDS = {
+    "type": (0, "I"),
+    "flags": (4, "I"),
+    "offset": (8, "Q"),
+    "virtual_address": (16, "Q"),
+    "physical_address": (24, "Q"),
+    "file_size": (32, "Q"),
+    "memory_size": (40, "Q"),
+    "alignment": (48, "Q"),
 }
 
 _ELF64_SHDR_FIELDS = {
@@ -719,6 +616,19 @@ def elf64_read_ehdr_field(image, field):
 
 def elf64_patch_ehdr_field(image, field, value):
     return _elf64_patch_field(image, 0, _ELF64_EHDR_FIELDS, field, value)
+
+
+def elf64_patch_phdr_field(image, index, field, value):
+    table_offset = _elf64_read_field(
+        image, 0, _ELF64_EHDR_FIELDS, "program_offset"
+    )
+    entry_size = _elf64_read_field(
+        image, 0, _ELF64_EHDR_FIELDS, "program_entry_size"
+    )
+    return _elf64_patch_field(
+        image, table_offset + index * entry_size,
+        _ELF64_PHDR_FIELDS, field, value
+    )
 
 
 def elf64_read_shdr_field(image, index, field):

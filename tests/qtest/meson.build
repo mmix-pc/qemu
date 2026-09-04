@@ -302,12 +302,20 @@ qtests_riscv64 = ['riscv-csr-test'] + \
 qtests_hexagon = ['boot-serial-test']
 
 qtests_mmix = [
+  'mmix-fdt-test',
   'mmix-framebuffer-test',
+  'mmix-fw-cfg-test',
+  'mmix-flash-test',
   'mmix-intc-test',
   'mmix-ipi-test',
+  'mmix-pcie-test',
   'mmix-platform-test',
+  'mmix-physical-layout-test',
+  'mmix-power-test',
+  'mmix-rtc-test',
   'mmix-timer-test',
   'mmix-virtio-mmio-test',
+  'mmix-watchdog-test',
 ]
 
 qos_test_ss = ss.source_set()
@@ -410,6 +418,7 @@ qtests = {
   'erst-test': files('erst-test.c'),
   'ivshmem-test': [rt, '../../contrib/ivshmem-server/ivshmem-server.c'],
   'migration-test': test_migration_files + migration_tls_files + migration_colo_files,
+  'mmix-fdt-test': [fdt],
   'pxe-test': files('boot-sector.c'),
   'pnv-xive2-test': files('pnv-xive2-common.c', 'pnv-xive2-flush-sync.c',
                           'pnv-xive2-nvpg_bar.c'),

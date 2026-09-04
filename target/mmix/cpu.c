@@ -7,7 +7,9 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/qemu-print.h"
+#include "addressing.h"
 #include "cpu.h"
+#include "machine.h"
 #include "semihosting.h"
 #include "accel/tcg/cpu-loop.h"
 #include "exec/cputlb.h"
@@ -510,28 +512,15 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                                                  MMIX_RQ_PROGRAM_N,
                                                  allow_traps && !debug);
         }
-        translation->physical = address & ~(1ULL << 63);
+        if (!mmix_negative_alias_to_phys(address, &translation->physical)) {
+            return mmix_finish_translation_fault(env, translation, causes,
+                                                 allow_traps && !debug);
+        }
         translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
         return true;
     }
 
     if (env->flat_translation) {
-        if (mmix_bare_data_segment_to_phys(address, &translation->physical)) {
-            translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
-            return true;
-        }
-        if (mmix_bare_pool_segment_to_phys(address, &translation->physical)) {
-            translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
-            return true;
-        }
-        if (mmix_bare_stack_segment_to_phys(address, &translation->physical)) {
-            translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
-            return true;
-        }
-        if (mmix_bare_unsupported_high_segment(address)) {
-            return mmix_finish_translation_fault(env, translation, causes,
-                                                 allow_traps && !debug);
-        }
         translation->physical = address;
         translation->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
         return true;
@@ -846,6 +835,21 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
     hwaddr vpage = addr & TARGET_PAGE_MASK;
     hwaddr ppage;
 
+    if (mmix_cpu_hosted_memory_enabled(env) &&
+        access_type == MMU_INST_FETCH) {
+        /*
+         * TCG probes its code TLB before the target translator fetches an
+         * instruction.  Point that probe at an unassigned physical page so
+         * TCG creates a one-shot TB without introducing physical backing for
+         * hosted logical memory.  The target fetch below remains authoritative.
+         */
+        mmix_cpu_hosted_fetch(env, addr);
+        ppage = MMIX_PHYS_MASK & TARGET_PAGE_MASK;
+        tlb_set_page(cs, vpage, ppage, PAGE_EXEC, mmu_idx,
+                     TARGET_PAGE_SIZE);
+        return true;
+    }
+
     if (!mmix_translate_address(env, addr, access_type, false, false,
                                 &translation)) {
         if (probe) {
@@ -925,6 +929,7 @@ static void mmix_cpu_class_init(ObjectClass *oc, const void *data)
 
     device_class_set_parent_realize(dc, mmix_cpu_realize, &mcc->parent_realize);
     device_class_set_props(dc, mmix_cpu_properties);
+    dc->vmsd = &vmstate_mmix_cpu;
     resettable_class_set_parent_phases(rc, NULL, mmix_cpu_reset_hold, NULL,
                                        &mcc->parent_phases);
 

@@ -179,8 +179,6 @@ def cpu_local_state_program():
             R32: 0,
             R100: 0x100,
             R111: 32,
-            R112: INITIAL_STACK,
-            R113: INITIAL_STACK,
             R114: 0x200,
             R120: 0,
             R73: 0,
@@ -188,8 +186,6 @@ def cpu_local_state_program():
             R151: 0x101,
             R152: 0x201,
             R153: RA_EVENT_V,
-            R154: INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
-            R155: INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE,
             R156: 1,
             R157: 32,
             R90: 1,
@@ -224,23 +220,15 @@ def concurrent_reset_program():
     program.mark("reset_idle")
     smp_emit_unconditional_branch(program, "reset_idle")
 
-    stack0 = INITIAL_STACK
-    stack1 = INITIAL_STACK + MMIX_VIRT_INITIAL_STACK_SLOT_SIZE
     reset_regs = (
         {
             "pc=0x": program.address("reset_idle"),
-            "rO=0x": stack0,
-            "rS=0x": stack0,
             "r0  =0x": 0,
-            "r1  =0x": MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
             "r100=0x": 0,
         },
         {
             "pc=0x": program.address("reset_idle"),
-            "rO=0x": stack1,
-            "rS=0x": stack1,
             "r0  =0x": 1,
-            "r1  =0x": MMIX_VIRT_MEMMAP[MMIX_VIRT_BOOTINFO][0],
             "r100=0x": 0,
         },
     )
