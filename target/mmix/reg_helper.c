@@ -491,12 +491,15 @@ static void mmix_cpu_put_rq(CPUMMIXState *env, uint64_t val)
     mmix_cpu_update_interrupt(env);
 }
 
-static void mmix_cpu_put_rg(CPUMMIXState *env, uint64_t val)
+static void mmix_cpu_put_rg(CPUMMIXState *env, unsigned new_rg)
 {
-    env->sregs[MMIX_SREG_RG] = val;
-    if (env->sregs[MMIX_SREG_RL] > val) {
-        env->sregs[MMIX_SREG_RL] = val;
+    unsigned old_rg = mmix_cpu_get_rg(env);
+    unsigned i;
+
+    for (i = new_rg; i < old_rg; i++) {
+        env->regs[i] = 0;
     }
+    env->sregs[MMIX_SREG_RG] = new_rg;
 }
 
 static bool mmix_cpu_debug_write_idle(CPUMMIXState *env)
@@ -599,7 +602,7 @@ bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg, uint64_t val)
         mmix_cpu_note_register_stack_rebase(env);
         break;
     case MMIX_SREG_RG:
-        env->sregs[reg] = val;
+        mmix_cpu_put_rg(env, val);
         break;
     case MMIX_SREG_RL:
         mmix_cpu_grow_rl(env, val, 0);
@@ -782,7 +785,7 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
         env->sregs[reg] = val;
         break;
     case MMIX_SREG_RG:
-        if (val < 32 || val > 255) {
+        if (val < 32 || val > 255 || val < mmix_cpu_get_rl(env)) {
             helper_mmix_break_rules(env, insn, 0, val);
             return;
         }

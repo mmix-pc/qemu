@@ -371,11 +371,14 @@ def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
         _write_register(client, ra, 1 << 20)
         assert _read_register(client, ra) == 0x12345
 
+        _write_register(client, 35, 0x3535353535353535)
         _write_register(client, rg, 40)
         assert _read_register(client, rg) == 40
+        assert _read_register(client, 35) == 0
         _write_register(client, rg, 31)
         assert _read_register(client, rg) == 40
         _write_register(client, rg, 32)
+        assert _read_register(client, 35) == 0
 
         old_r1 = _read_register(client, 1)
         _write_register(client, rl, 1)

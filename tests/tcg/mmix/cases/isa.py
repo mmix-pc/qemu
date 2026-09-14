@@ -3490,6 +3490,21 @@ ISA_TESTS = [
         regs={R230: 0},
     ),
     rule_break_enabled_test(
+        "break-rules-rg-below-rl",
+        insn(PUTI, SR_G, 0, 40),
+        setup=(
+            insn(PUTI, SR_G, 0, 64),
+            wyde(SETL, R40, 0x00aa),
+        ),
+        z=40,
+        handler_checks=(
+            insn(GET, R230, 0, SR_G),
+            insn(GET, R231, 0, SR_L),
+            insn(ADDU, R232, R40, R0),
+        ),
+        regs={R230: 64, R231: 41, R232: 0xaa},
+    ),
+    rule_break_enabled_test(
         "break-rules-rl-high-bits",
         insn(PUT, SR_L, 0, R4),
         setup=(*set_octa(R4, 0x100),),
@@ -4397,7 +4412,7 @@ ISA_TESTS = [
         regs={R33: 0x55, R34: RQ_PROGRAM_B},
     ),
     MMIXTest(
-        "special-register-rg-rl-policy",
+        "special-register-rg-below-rl-masked",
         b"".join(
             [
                 wyde(SETL, R1, 64),
@@ -4408,14 +4423,40 @@ ISA_TESTS = [
                 insn(PUT, SR_G, 0, R2),
                 insn(GET, R65, 0, SR_G),
                 insn(GET, R66, 0, SR_L),
+                insn(GET, R67, 0, SR_Q),
                 halt(),
             ]
         ),
-        pc=0x20,
+        pc=0x24,
         regs={
-            R65: 40,
-            R66: 40,
+            R40: 0xaa,
+            R65: 64,
+            R66: 41,
+            R67: RQ_PROGRAM_B,
             R70: 41,
+        },
+    ),
+    MMIXTest(
+        "put-rg-lowering-clears-new-globals",
+        b"".join(
+            [
+                wyde(SETL, R40, 0x00aa),
+                wyde(SETL, R63, 0x00bb),
+                wyde(SETL, R64, 0x00cc),
+                insn(PUTI, SR_G, 0, 64),
+                insn(PUTI, SR_G, 0, 40),
+                insn(GET, R65, 0, SR_G),
+                insn(GET, R66, 0, SR_L),
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={
+            R40: 0,
+            R63: 0,
+            R64: 0xcc,
+            R65: 40,
+            R66: 0,
         },
     ),
     MMIXTest(
