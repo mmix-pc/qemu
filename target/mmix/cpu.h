@@ -93,12 +93,15 @@ enum {
 #define MMIX_RQ_PROGRAM_MASK  (0xffULL << MMIX_RQ_PROGRAM_SHIFT)
 
 /* mmix-doc section 37 leaves high-priority I/O bits implementation-defined. */
+#define MMIX_RQ_STACK_OVERFLOW       (1ULL << 7)
 #define MMIX_RQ_INTERRUPT_CONTROLLER (1ULL << 8)
 #define MMIX_RK_INTERRUPT_CONTROLLER MMIX_RQ_INTERRUPT_CONTROLLER
 #define MMIX_RQ_IPI                  (1ULL << 9)
 #define MMIX_RK_IPI                  MMIX_RQ_IPI
 #define MMIX_RQ_HARDWARE_MASK \
     (MMIX_RQ_INTERRUPT_CONTROLLER | MMIX_RQ_IPI)
+#define MMIX_RQ_ASYNC_MASK \
+    (MMIX_RQ_HARDWARE_MASK | MMIX_RQ_STACK_OVERFLOW)
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_TRAP_OPCODE 0x00U
@@ -218,6 +221,7 @@ typedef struct CPUArchState {
     MMIXSaveRestartState save_restart;
     uint64_t unsave_restart_address;
     bool unsave_restart_active;
+    bool stack_overflow_pending;
     uint32_t arithmetic_trip_event;
     uint64_t program_exception_causes;
     uint32_t program_exception_insn;
@@ -342,6 +346,8 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                             MMUAccessType access_type, bool debug,
                             bool allow_traps,
                             MMIXAddressTranslation *translation);
+bool mmix_cpu_store_stack_continuation(CPUMMIXState *env, vaddr address,
+                                       uint64_t value);
 uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key);
 void mmix_cpu_flush_translation_caches(CPUMMIXState *env);
 bool mmix_cpu_install_translation(CPUMMIXState *env, vaddr address,

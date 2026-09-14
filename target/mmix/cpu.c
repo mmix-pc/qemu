@@ -147,7 +147,7 @@ bool mmix_cpu_interrupt_enabled(CPUMMIXState *env)
 {
     return env->sregs[MMIX_SREG_RQ] &
            env->sregs[MMIX_SREG_RK] &
-           MMIX_RQ_HARDWARE_MASK;
+           MMIX_RQ_ASYNC_MASK;
 }
 
 void mmix_cpu_update_interrupt(CPUMMIXState *env)
@@ -630,6 +630,33 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
         mmix_translation_cache_insert(env, access_type, address, s,
                                       address_space_number, pte);
     }
+    return true;
+}
+
+bool mmix_cpu_store_stack_continuation(CPUMMIXState *env, vaddr address,
+                                       uint64_t value)
+{
+    MMIXAddressTranslation translation;
+    uint64_t rv = env->sregs[MMIX_SREG_RV];
+    uint64_t rc = env->sregs[MMIX_SREG_RC];
+    uint8_t page_shift = extract64(rv, 40, 8);
+    uint64_t page_mask;
+    hwaddr physical;
+
+    if (mmix_translate_address(env, address, MMU_DATA_STORE, true, false,
+                               &translation) ||
+        translation.forced_translation ||
+        (translation.causes & MMIX_RQ_PROGRAM_W) == 0 ||
+        page_shift < 13 || page_shift > 48 ||
+        (rc & MMIX_PTE_PW) == 0) {
+        return false;
+    }
+
+    /* mmix-doc section 45 defines rC as a PTE whose n field is ignored. */
+    page_mask = (1ULL << page_shift) - 1;
+    physical = (rc & MMIX_PHYS_MASK & ~page_mask) | (address & page_mask);
+    address_space_stq_be(env_cpu(env)->as, physical, value,
+                         MEMTXATTRS_UNSPECIFIED, NULL);
     return true;
 }
 

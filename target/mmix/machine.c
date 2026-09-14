@@ -89,6 +89,7 @@ const VMStateDescription vmstate_mmix_cpu = {
         VMSTATE_UINT64(env.save_restart.packed, MMIXCPU),
         VMSTATE_UINT64(env.unsave_restart_address, MMIXCPU),
         VMSTATE_BOOL(env.unsave_restart_active, MMIXCPU),
+        VMSTATE_BOOL(env.stack_overflow_pending, MMIXCPU),
         VMSTATE_UINT32(env.arithmetic_trip_event, MMIXCPU),
         VMSTATE_UINT64(env.program_exception_causes, MMIXCPU),
         VMSTATE_UINT32(env.program_exception_insn, MMIXCPU),

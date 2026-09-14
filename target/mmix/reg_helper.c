@@ -179,6 +179,8 @@ static void mmix_cpu_stack_store(CPUMMIXState *env, uintptr_t ra)
                                 value);
     if (mmix_cpu_hosted_memory_enabled(env)) {
         mmix_cpu_hosted_store_octa(env, addr, value);
+    } else if (mmix_cpu_store_stack_continuation(env, addr, value)) {
+        env->stack_overflow_pending = true;
     } else {
         cpu_stq_be_data_ra(env, addr, value, ra);
     }
@@ -368,8 +370,20 @@ void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
 
 void helper_mmix_check_instruction_security(CPUMMIXState *env, uint32_t insn)
 {
+    CPUState *cs = env_cpu(env);
     uint8_t opcode = insn >> 24;
     uint64_t cause = 0;
+
+    if (env->stack_overflow_pending) {
+        /* The spilling instruction has reached a safe interruption point. */
+        env->stack_overflow_pending = false;
+        mmix_cpu_set_rq_bits(env, MMIX_RQ_STACK_OVERFLOW);
+        mmix_cpu_update_interrupt(env);
+        if (mmix_cpu_interrupt_enabled(env)) {
+            cs->exception_index = EXCP_MMIX_INTERRUPT;
+            cpu_loop_exit(cs);
+        }
+    }
 
     /* Enforce the program-bit security rule from mmix-doc section 37. */
     if (!env_archcpu(env)->security_checks) {

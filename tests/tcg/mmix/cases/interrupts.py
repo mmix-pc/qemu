@@ -643,6 +643,77 @@ RETAINED_ASN_SPILL_FAULT = spill_fault_resume_program(
     protect_before_push=True, nested_handler_stack=True, retained_asn=True)
 
 
+def continuation_page_spill_program(depth=10):
+    sub_base = 0x200
+    handler = 0x1000
+    continuation_page = 0x12000
+    physical_stack_pte = (1 << 63) | VM_STACK_PTE
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("continuation-page sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        *set_octa(R240, VM_PAGE_TABLE),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R238, VM_STACK_PTP_ADDRESS),
+        *set_octa(R239, VM_STACK_PTP),
+        insn(STOU, R239, R238, R250),
+        *set_octa(R242, VM_STACK_PTE),
+        *set_octa(R243, INITIAL_STACK | 4),
+        insn(STOU, R243, R242, R250),
+        *set_octa(R244, physical_stack_pte),
+        *set_octa(R245, continuation_page | 2),
+        insn(PUT, SR_C, R0, R245),
+        wyde(SETL, R247, handler),
+        insn(PUT, SR_TT, R0, R247),
+        *set_octa(R248, RQ_STACK_OVERFLOW),
+        insn(PUT, SR_K, R0, R248),
+        *set_octa(R246, VM_RV_STACK),
+        insn(PUT, SR_V, R0, R246),
+        wyde(SETL, R0, 0x55),
+    ]
+    main.append(branch(PUSHJ, R31,
+                       (sub_base - len(b"".join(main))) // 4))
+    main.append(halt())
+    place(0, main)
+
+    nested = []
+    for level in range(depth):
+        nested.extend((
+            insn(GET, R100 + level, R0, SR_J),
+            wyde(SETL, R31, level + 1),
+            branch(PUSHJ, R31, 4),
+            insn(ADDI, R0, R31, 1),
+            insn(PUT, SR_J, R0, R100 + level),
+            insn(POP, 1, 0, 0),
+        ))
+    nested.extend((wyde(SETL, R0, 1), insn(POP, 1, 0, 0)))
+    place(sub_base, nested)
+
+    place(handler, [
+        insn(GET, R220, R0, SR_Q),
+        insn(GET, R221, R0, SR_WW),
+        insn(GET, R222, R0, SR_S),
+        insn(GET, R223, R0, SR_C),
+        *set_octa(R224, (1 << 63) | continuation_page),
+        insn(LDOU, R225, R224, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+
+    return bytes(image), handler + 10 * 4, continuation_page | 2
+
+
+CONTINUATION_PAGE_SPILL = continuation_page_spill_program()
+
+
 def fill_fault_resume_program(depth=10):
     sub_base = 0x200
     handler = 0x1000
@@ -1637,6 +1708,18 @@ INTERRUPT_TESTS = [
             R228: 32,
             R229: RQ_PROGRAM_W,
             R230: RQ_PROGRAM_W,
+        },
+    ),
+    MMIXTest(
+        "register-stack-continuation-page-overflow",
+        CONTINUATION_PAGE_SPILL[0],
+        pc=CONTINUATION_PAGE_SPILL[1],
+        regs={
+            R220: RQ_STACK_OVERFLOW,
+            R221: 0x298,
+            R222: INITIAL_STACK + 8,
+            R223: CONTINUATION_PAGE_SPILL[2],
+            R225: 0x55,
         },
     ),
     MMIXTest(
