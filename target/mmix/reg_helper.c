@@ -331,10 +331,14 @@ void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val)
     env->sregs[MMIX_SREG_RL] = new_rl;
 }
 
-bool mmix_cpu_is_privileged(CPUMMIXState *env)
+bool mmix_cpu_kernel_operations_enabled(CPUMMIXState *env)
 {
-    return (int64_t)env->pc < 0 ||
-           (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_K) == 0;
+    return (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_K) == 0;
+}
+
+bool mmix_cpu_in_privileged_location(CPUMMIXState *env)
+{
+    return (int64_t)env->pc < 0;
 }
 
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits)
@@ -371,7 +375,7 @@ void helper_mmix_check_instruction_security(CPUMMIXState *env, uint32_t insn)
     if (!env_archcpu(env)->security_checks) {
         return;
     }
-    if ((int64_t)env->pc < 0) {
+    if (mmix_cpu_in_privileged_location(env)) {
         if (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_P) {
             cause = MMIX_RQ_PROGRAM_P;
         }
@@ -750,7 +754,8 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
         helper_mmix_break_rules(env, insn, 0, val);
         return;
     }
-    if (mmix_sreg_privileged(reg) && !mmix_cpu_is_privileged(env)) {
+    if (mmix_sreg_privileged(reg) &&
+        !mmix_cpu_kernel_operations_enabled(env)) {
         mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
     if (reg == MMIX_SREG_RG && (val < 32 || val > 255)) {
@@ -789,7 +794,8 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
 
 void helper_mmix_sync(CPUMMIXState *env, uint32_t insn, uint32_t mode)
 {
-    if (mode >= 4 && mode <= 7 && !mmix_cpu_is_privileged(env)) {
+    if (mode >= 4 && mode <= 7 &&
+        !mmix_cpu_kernel_operations_enabled(env)) {
         mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
     if (mode == 6) {
@@ -799,7 +805,7 @@ void helper_mmix_sync(CPUMMIXState *env, uint32_t insn, uint32_t mode)
 
 uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint32_t insn, uint64_t key)
 {
-    if (!mmix_cpu_is_privileged(env)) {
+    if (!mmix_cpu_kernel_operations_enabled(env)) {
         mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
 

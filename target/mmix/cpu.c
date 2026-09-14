@@ -507,7 +507,7 @@ bool mmix_translate_address(CPUMMIXState *env, vaddr address,
     };
 
     if ((int64_t)address < 0) {
-        if (!mmix_cpu_is_privileged(env)) {
+        if (!mmix_cpu_kernel_operations_enabled(env)) {
             return mmix_finish_translation_fault(env, translation,
                                                  MMIX_RQ_PROGRAM_N,
                                                  allow_traps && !debug);

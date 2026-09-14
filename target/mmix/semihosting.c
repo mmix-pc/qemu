@@ -1297,7 +1297,7 @@ void helper_mmix_semihosting_trap(CPUMMIXState *env, uint32_t insn,
 {
     MMIXSemihostingCall call = mmix_semihosting_decode_call(service, handle);
 
-    if (!semihosting_enabled(!mmix_cpu_is_privileged(env))) {
+    if (!semihosting_enabled(!mmix_cpu_in_privileged_location(env))) {
         helper_mmix_trap(env, insn, y, z);
     }
 

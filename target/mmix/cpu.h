@@ -303,7 +303,8 @@ bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
                                     const uint64_t *regs,
                                     const uint64_t *sregs, uint64_t pc);
 void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
-bool mmix_cpu_is_privileged(CPUMMIXState *env);
+bool mmix_cpu_kernel_operations_enabled(CPUMMIXState *env);
+bool mmix_cpu_in_privileged_location(CPUMMIXState *env);
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);
 void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);

@@ -76,6 +76,112 @@ LINUX_NEGATIVE_ENTRY_IMAGE = elf64_patch_ehdr_field(
 )
 
 
+def linux_positive_privileged_put_image():
+    kernel_address = 0x3000
+    kernel_virtual_address = LINUX_NEGATIVE_ALIAS_BIT | kernel_address
+    handler_virtual_address = kernel_virtual_address + 0x100
+    user_address = 0x4000
+    saved_rc = 0x1234
+    kernel = b"".join((
+        *set_octa(R32, saved_rc),
+        insn(PUT, SR_C, R0, R32),
+        *set_octa(R33, handler_virtual_address),
+        insn(PUT, SR_TT, R0, R33),
+        *set_octa(R35, user_address),
+        insn(PUT, SR_W, R0, R35),
+        *set_octa(R36, LINUX_NEGATIVE_ALIAS_BIT),
+        insn(PUT, SR_X, R0, R36),
+        *set_octa(
+            R34, RQ_PROGRAM_MASK & ~(RQ_PROGRAM_K | RQ_PROGRAM_P)
+        ),
+        insn(PUT, SR_K, R0, R34),
+        insn(RESUME, R0, R0, 0),
+    ))
+    handler = b"".join((
+        insn(GET, R40, R0, SR_C),
+        insn(GET, R41, R0, SR_Q),
+        insn(GET, R42, R0, SR_K),
+        halt(),
+    ))
+    kernel += bytes(0x100 - len(kernel)) + handler
+    user = b"".join((
+        insn(PUTI, SR_C, R0, 0xaa),
+        insn(SWYM, R0, R0, R0),
+        halt(),
+    ))
+    kernel_offset = 0x200
+    user_offset = 0x400
+    headers = b"".join((
+        elf64_phdr(kernel_address, kernel, offset=kernel_offset,
+                   virtual_address=kernel_virtual_address),
+        elf64_phdr(user_address, user, offset=user_offset),
+    ))
+    image = bytearray(elf64_header(entry=kernel_virtual_address, phnum=2) +
+                      headers)
+
+    image.extend(bytes(kernel_offset - len(image)))
+    image.extend(kernel)
+    image.extend(bytes(user_offset - len(image)))
+    image.extend(user)
+    return bytes(image), handler_virtual_address + 12
+
+
+def linux_negative_fetch_without_kernel_access_image():
+    kernel_address = 0x5000
+    kernel_virtual_address = LINUX_NEGATIVE_ALIAS_BIT | kernel_address
+    handler_virtual_address = kernel_virtual_address + 0x100
+    saved_rc = 0x1234
+    kernel = b"".join((
+        *set_octa(R32, saved_rc),
+        insn(PUT, SR_C, R0, R32),
+        *set_octa(R33, handler_virtual_address),
+        insn(PUT, SR_TT, R0, R33),
+        *set_octa(R34, RQ_PROGRAM_MASK & ~RQ_PROGRAM_P),
+        insn(PUT, SR_K, R0, R34),
+        insn(PUTI, SR_C, R0, 0xaa),
+        halt(),
+    ))
+    handler = b"".join((
+        insn(GET, R40, R0, SR_C),
+        insn(GET, R41, R0, SR_Q),
+        insn(GET, R42, R0, SR_K),
+        halt(),
+    ))
+    kernel += bytes(0x100 - len(kernel)) + handler
+
+    return (
+        elf64_image(
+            kernel_address, kernel, entry=kernel_virtual_address,
+            offset=0x200, virtual_address=kernel_virtual_address
+        ),
+        handler_virtual_address + 12,
+        saved_rc,
+    )
+
+
+LINUX_POSITIVE_PRIVILEGED_PUT = linux_positive_privileged_put_image()
+LINUX_NEGATIVE_FETCH_WITHOUT_KERNEL_ACCESS = (
+    linux_negative_fetch_without_kernel_access_image()
+)
+
+
+def linux_privilege_qualification_test(name, fixture, rc, rq):
+    image, pc = fixture[:2]
+
+    return MMIXELFTest(
+        name,
+        image,
+        pc=pc,
+        regs={
+            R40: rc,
+            R41: rq,
+            R42: 0,
+        },
+        qemu_args=LINUX_MACHINE,
+        security_checks=True,
+    )
+
+
 LINUX_DIRECT_ALIAS_TESTS = [
     MMIXELFTest(
         "elf-linux-negative-direct-alias",
@@ -91,6 +197,18 @@ LINUX_DIRECT_ALIAS_TESTS = [
         regs={R34: 0x55},
         qemu_args=LINUX_MACHINE,
         security_checks=True,
+    ),
+    linux_privilege_qualification_test(
+        "elf-linux-positive-put-k-disabled",
+        LINUX_POSITIVE_PRIVILEGED_PUT,
+        0xaa,
+        RQ_PROGRAM_S,
+    ),
+    linux_privilege_qualification_test(
+        "elf-linux-negative-fetch-k-enabled",
+        LINUX_NEGATIVE_FETCH_WITHOUT_KERNEL_ACCESS,
+        LINUX_NEGATIVE_FETCH_WITHOUT_KERNEL_ACCESS[2],
+        RQ_PROGRAM_N,
     ),
 ]
 
