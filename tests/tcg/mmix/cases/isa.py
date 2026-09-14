@@ -2552,6 +2552,16 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
+        "register-stack-relocated-unsave-spill-fill",
+        REGISTER_STACK_RELOCATED_UNSAVE[0],
+        pc=REGISTER_STACK_RELOCATED_UNSAVE[1],
+        regs={
+            R50: REGISTER_STACK_RELOCATED_UNSAVE[2],
+            R51: REGISTER_STACK_RELOCATED_UNSAVE[2],
+            R60: REGISTER_STACK_RELOCATED_UNSAVE[3],
+        },
+    ),
+    MMIXTest(
         "load-store",
         b"".join(
             [

@@ -11,7 +11,6 @@
 #include "accel/tcg/cpu-ldst.h"
 #include "exec/cputlb.h"
 #include "exec/helper-proto.h"
-#include "exec/log.h"
 
 #define MMIX_STACK_NO_RING_INDEX UINT32_MAX
 
@@ -256,20 +255,6 @@ static void mmix_cpu_note_register_stack_rebase(CPUMMIXState *env)
     mmix_trap_restart_unlock();
 }
 
-static void mmix_cpu_fill_stack(CPUMMIXState *env, uintptr_t ra)
-{
-    if (env->sregs[MMIX_SREG_RS] <= env_archcpu(env)->initial_stack) {
-        qemu_log_mask(LOG_UNIMP,
-                      "MMIX register stack underflow during POP "
-                      "rO=0x%" PRIx64 " rS=0x%" PRIx64 " depth=%u\n",
-                      env->sregs[MMIX_SREG_RO],
-                      env->sregs[MMIX_SREG_RS],
-                      mmix_cpu_stack_depth(env));
-        mmix_cpu_raise_emulator_failure(env);
-    }
-    mmix_cpu_stack_load(env, ra);
-}
-
 static void mmix_cpu_ensure_local_room(CPUMMIXState *env, unsigned new_rl,
                                        uintptr_t ra)
 {
@@ -479,8 +464,7 @@ static bool mmix_cpu_debug_stack_valid(CPUMMIXState *env, uint64_t ro,
 {
     uint64_t depth;
 
-    if ((ro | rs) & (MMIX_OCTA_SIZE - 1) ||
-        rs < env_archcpu(env)->initial_stack || ro < rs ||
+    if ((ro | rs) & (MMIX_OCTA_SIZE - 1) || ro < rs ||
         rg < MMIX_GLOBAL_REG_MIN || rg >= MMIX_REGS || rl > rg) {
         return false;
     }
@@ -832,7 +816,7 @@ uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
     uint64_t dest;
 
     if (mmix_cpu_stack_depth(env) == 0) {
-        mmix_cpu_fill_stack(env, ra);
+        mmix_cpu_stack_load(env, ra);
     }
 
     if (x != 0 && x <= old_rl) {
@@ -841,7 +825,7 @@ uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
 
     saved = env->local_regs[(base - 1) & env->lring_mask] & 0xff;
     while (mmix_cpu_stack_depth(env) <= saved) {
-        mmix_cpu_fill_stack(env, ra);
+        mmix_cpu_stack_load(env, ra);
     }
 
     if (x != 0) {

@@ -257,7 +257,7 @@ struct ArchCPU {
     CPUState parent_obj;
 
     CPUMMIXState env;
-    /* Reset value and lower bound for the initial register-stack backing. */
+    /* Reset value for rO and rS before the guest establishes its stack. */
     uint64_t initial_stack;
     /* Architectural I/D translation caches, separate from QEMU's TLB. */
     GArray *instruction_translation_cache;

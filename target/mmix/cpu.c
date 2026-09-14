@@ -763,7 +763,7 @@ void mmix_cpu_dump_state(CPUState *cs, FILE *f, int flags)
                  "pc=0x%016" PRIx64 " npc=0x%016" PRIx64
                  " rG=%" PRIu64 " rL=%" PRIu64
                  " rO=0x%016" PRIx64 " rS=0x%016" PRIx64
-                 " stack-bottom=0x%016" PRIx64
+                 " initial-stack=0x%016" PRIx64
                  " lring_size=%u lring_mask=0x%08x\n",
                  env->pc, env->npc, env->sregs[MMIX_SREG_RG],
                  env->sregs[MMIX_SREG_RL], env->sregs[MMIX_SREG_RO],

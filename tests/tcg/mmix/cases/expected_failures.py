@@ -5,15 +5,7 @@
 from .common import *
 
 
-EXPECTED_FAILURE_TESTS = [
-    MMIXExpectedFailure(
-        "register-stack-underflow",
-        raw_direct_image(insn(POP, 0, 0, 0)),
-        ("MMIX register stack underflow during POP",
-         "depth=0",
-         "MMIX emulator failure at 0x0000000000000100"),
-    ),
-]
+EXPECTED_FAILURE_TESTS = []
 
 
 def semihosting_disabled_trap_test(name, program):

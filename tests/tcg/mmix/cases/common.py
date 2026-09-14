@@ -363,6 +363,60 @@ def register_stack_save_unsave_program(depth):
     return image, 4 * 4, 0x55 + depth
 
 
+def register_stack_relocated_unsave_program(depth):
+    stack_base = 0x600000
+    saved_rg = 32
+    saved_globals = MMIX_REGS - saved_rg
+    saved_specials = 12
+    # rG/rA is at the top, above specials, globals, and the stack hole.
+    context_top = stack_base + (saved_specials + saved_globals + 1) * 8
+    sub_base = 0x40
+    body_size = 6 * 4
+    program = [
+        *set_octa(R32, context_top),
+        *set_octa(R33, saved_rg << 56),
+        insn(STOU, R33, R32, R0),
+        insn(UNSAVE, 0, 0, R32),
+    ]
+    call_pc = len(program) * 4
+    program.extend([
+        branch(PUSHJ, R31, (sub_base - call_pc) // 4),
+        insn(ADDI, R60, R31, 0),
+        insn(GET, R50, 0, SR_O),
+        insn(GET, R51, 0, SR_S),
+        halt(),
+    ])
+    exit_pc = (len(program) - 1) * 4
+
+    program.extend([insn(SWYM, 0, 0, 0)] *
+                   ((sub_base - len(program) * 4) // 4))
+
+    for level in range(depth):
+        program.extend(
+            [
+                insn(GET, 40 + level, 0, SR_J),
+                wyde(SETL, R31, level + 1),
+                branch(PUSHJ, R31, 4),
+                insn(ADDI, R0, R31, 1),
+                insn(PUT, SR_J, 0, 40 + level),
+                insn(POP, 1, 0, 0),
+            ]
+        )
+
+    program.extend(
+        [
+            wyde(SETL, R0, 1),
+            insn(POP, 1, 0, 0),
+        ]
+    )
+
+    image = b"".join(program)
+    expected_image_len = sub_base + depth * body_size + 2 * 4
+    if len(image) != expected_image_len:
+        raise AssertionError("relocated register-stack image layout changed")
+    return image, exit_pc, stack_base, depth + 1
+
+
 def save_state_after_save_program():
     program = [
         wyde(SETL, R0, 0x11),
@@ -810,5 +864,6 @@ def case_id(test):
 
 REGISTER_STACK_SPILL_FILL = register_stack_spill_fill_program(10)
 REGISTER_STACK_SAVE_UNSAVE = register_stack_save_unsave_program(10)
+REGISTER_STACK_RELOCATED_UNSAVE = register_stack_relocated_unsave_program(64)
 SAVE_STATE_AFTER_SAVE = save_state_after_save_program()
 SAVE_UNSAVE_ROUNDTRIP = save_unsave_roundtrip_program()
