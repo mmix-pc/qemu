@@ -331,6 +331,8 @@ void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
                                  uint32_t insn);
+void mmix_cpu_check_control_transfer(CPUMMIXState *env, uint32_t insn,
+                                     uint64_t destination);
 bool mmix_translate_address(CPUMMIXState *env, vaddr address,
                             MMUAccessType access_type, bool debug,
                             bool allow_traps,

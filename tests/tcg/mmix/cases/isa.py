@@ -697,7 +697,7 @@ def invalid_forced_data_translation_test(name, main, pte, expected_where,
             R40: expected_where,
             R41: expected_exec,
             R42: FORCED_TRANSLATION_VIRTUAL,
-            R46: RQ_PROGRAM_B,
+            R46: RQ_PROGRAM_P | RQ_PROGRAM_B,
             R47: initial_value,
         },
     )
@@ -743,7 +743,7 @@ def forced_data_translation_protection_test(name, main, pte,
             R40: expected_where,
             R41: expected_exec,
             R42: FORCED_TRANSLATION_VIRTUAL,
-            R46: cause,
+            R46: RQ_PROGRAM_P | cause,
             R47: cause | (expected_exec & 0xffffffff),
             R48: expected_where,
             R49: initial_value,
@@ -2914,23 +2914,76 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
-        "negative-address-fetch-direct",
-        program_with_handler(
-            [
-                *set_octa(R2, RQ_PROGRAM_K),
+        "negative-address-fetch-user-trap",
+        program_with_regions(
+            (0, [
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_MASK),
                 insn(PUT, SR_K, 0, R2),
                 *set_octa(R3, 0x8000000000000300),
                 insn(GO, R4, R3, R0),
                 wyde(SETL, R5, 0x00ff),    # skipped
-            ],
-            0x300,
-            [
+            ]),
+            (0x80, [
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
+                halt(),
+            ]),
+            (0x300, [
                 wyde(SETL, R5, 0x0055),
                 halt(),
-            ],
+            ]),
         ),
-        pc=0x8000000000000304,
-        regs={R4: 0x28, R5: 0x55},
+        pc=0x8000000000000090,
+        regs={
+            R4: 0x3c,
+            R5: 0,
+            R40: RQ_PROGRAM_P,
+            R41: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_P |
+                 int.from_bytes(insn(GO, R4, R3, R0), "big"),
+            R42: 0x8000000000000300,
+            R43: 0,
+        },
+    ),
+    MMIXTest(
+        "negative-address-resume-user-trap",
+        program_with_regions(
+            (0, [
+                *set_octa(R1, NEGATIVE_HANDLER),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, 0x8000000000000300),
+                insn(PUT, SR_W, 0, R2),
+                *set_octa(R3, 0x8000000000000000),
+                insn(PUT, SR_X, 0, R3),
+                *set_octa(R4, RQ_PROGRAM_MASK),
+                insn(PUT, SR_K, 0, R4),
+                insn(RESUME, 0, 0, 0),
+                wyde(SETL, R5, 0x00ff),
+            ]),
+            (0x80, [
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_WW),
+                insn(GET, R43, 0, SR_K),
+                halt(),
+            ]),
+            (0x300, [
+                wyde(SETL, R5, 0x0055),
+                halt(),
+            ]),
+        ),
+        pc=0x8000000000000090,
+        regs={
+            R5: 0,
+            R40: RQ_PROGRAM_P,
+            R41: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_P |
+                 int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
+            R42: 0x8000000000000300,
+            R43: 0,
+        },
     ),
     MMIXTest(
         "memory-octa-variants",
@@ -3994,7 +4047,7 @@ ISA_TESTS = [
             R11: 0x1122334455667788,
             R13: 0,
             R60: 1,
-            R70: RQ_PROGRAM_W,
+            R70: RQ_PROGRAM_P | RQ_PROGRAM_W,
             R71: RQ_PROGRAM_W |
                  int.from_bytes(insn(STOU, R12, R10, R0), "big"),
             R72: 0x800000000000014c,
@@ -4063,7 +4116,7 @@ ISA_TESTS = [
             R40: FORCED_TRANSLATION_VIRTUAL,
             R41: 0x03000000fd000000,
             R42: FORCED_TRANSLATION_VIRTUAL,
-            R46: RQ_PROGRAM_X,
+            R46: RQ_PROGRAM_P | RQ_PROGRAM_X,
             R47: RQ_PROGRAM_X | int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
             R48: FORCED_TRANSLATION_VIRTUAL + 4,
         },
@@ -4182,7 +4235,7 @@ ISA_TESTS = [
         pc=0x8000000000000230,
         regs={
             R11: 0,
-            R52: RQ_PROGRAM_B,
+            R52: RQ_PROGRAM_P | RQ_PROGRAM_B,
         },
     ),
     MMIXTest(

@@ -648,6 +648,10 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         }
     }
 
+    if (!trap_state) {
+        mmix_cpu_check_control_transfer(env, resume_insn, where);
+    }
+
     if (trap_state) {
         mmix_cpu_put_rk(env, mmix_cpu_read_reg(env, 255));
         mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RBB]);
@@ -922,6 +926,9 @@ void mmix_cpu_do_interrupt(CPUState *cs)
             env->rule_break_z = 0;
         } else {
             exec = causes | env->program_exception_insn;
+            if (causes & MMIX_RQ_PROGRAM_P) {
+                exec |= MMIX_DYNAMIC_TRAP_RESUME_NEXT;
+            }
             y = 0;
             z = 0;
             if (env->program_exception_data_access) {

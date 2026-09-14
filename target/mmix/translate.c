@@ -107,6 +107,10 @@ static void gen_consume_insn_replay(DisasContext *ctx)
 static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
 {
     gen_consume_insn_replay(ctx);
+    if ((int64_t)ctx->insn_pc >= 0 && (int64_t)dest < 0) {
+        gen_helper_mmix_check_control_transfer(
+            tcg_env, tcg_constant_i32(ctx->insn), tcg_constant_i64(dest));
+    }
     if (!ctx->replay && translator_use_goto_tb(&ctx->base, dest)) {
         tcg_gen_goto_tb(tb_slot_idx);
         tcg_gen_movi_i64(cpu_pc, dest);
@@ -902,6 +906,8 @@ static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
     tcg_gen_andi_i64(dest, dest, ~3ULL);
     gen_store_reg(a->x, tcg_constant_i64(ctx->base.pc_next));
     gen_consume_insn_replay(ctx);
+    gen_helper_mmix_check_control_transfer(tcg_env,
+                                           tcg_constant_i32(ctx->insn), dest);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -927,6 +933,8 @@ static bool gen_pushgo(DisasContext *ctx, arg_xyz *a, bool immediate)
     gen_helper_mmix_push(tcg_env, tcg_constant_i32(a->x),
                          tcg_constant_i64(ctx->base.pc_next));
     gen_consume_insn_replay(ctx);
+    gen_helper_mmix_check_control_transfer(tcg_env,
+                                           tcg_constant_i32(ctx->insn), dest);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -941,6 +949,8 @@ static bool trans_POP(DisasContext *ctx, arg_xyz *a)
     gen_helper_mmix_pop(dest, tcg_env, tcg_constant_i32(a->x),
                         tcg_constant_i32(a->yz));
     gen_consume_insn_replay(ctx);
+    gen_helper_mmix_check_control_transfer(tcg_env,
+                                           tcg_constant_i32(ctx->insn), dest);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();

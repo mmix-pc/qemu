@@ -377,6 +377,25 @@ void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
     cpu_loop_exit(cs);
 }
 
+void mmix_cpu_check_control_transfer(CPUMMIXState *env, uint32_t insn,
+                                     uint64_t destination)
+{
+    /* MMIXware mmix-doc section 37 and mmix-pipe sections 81 and 331. */
+    if ((int64_t)env->pc >= 0 && (int64_t)destination < 0) {
+        if (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_P) {
+            env->npc = destination;
+            mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_P, insn);
+        }
+        mmix_cpu_set_rq_bits(env, MMIX_RQ_PROGRAM_P);
+    }
+}
+
+void helper_mmix_check_control_transfer(CPUMMIXState *env, uint32_t insn,
+                                        uint64_t destination)
+{
+    mmix_cpu_check_control_transfer(env, insn, destination);
+}
+
 static void mmix_cpu_update_translation_state(CPUMMIXState *env)
 {
     tlb_flush(env_cpu(env));
