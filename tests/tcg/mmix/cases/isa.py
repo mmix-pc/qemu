@@ -614,6 +614,8 @@ def forced_translation_nested_handler_program(depth=40, handler_depth=10):
         insn(RESUME, R0, R0, 1),
     ]
     handler = [
+        insn(GET, R186, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         insn(GET, R180, 0, SR_WW),
         insn(GET, R181, 0, SR_XX),
         insn(GET, R182, 0, SR_YY),
@@ -935,6 +937,8 @@ def resume1_ropcode0_replay_program():
         prefix,
         NEGATIVE_HANDLER & ~(1 << 63),
         [
+            insn(GET, R6, 0, SR_Q),
+            insn(PUTI, SR_Q, 0, 0),
             *set_octa(R3, saved_insn),
             insn(PUT, SR_XX, 0, R3),
             wyde(SETL, R4, 0xaa),
@@ -972,6 +976,8 @@ def resume1_privileged_substitution_program():
         prefix,
         NEGATIVE_HANDLER & ~(1 << 63),
         [
+            insn(GET, R6, 0, SR_Q),
+            insn(PUTI, SR_Q, 0, 0),
             *set_octa(R3, (1 << 56) | saved_insn),
             insn(PUT, SR_XX, 0, R3),
             wyde(SETL, R4, 0xaa),
@@ -1015,6 +1021,8 @@ def resume1_privileged_substitution_trip_program():
         halt(),
     ]
     trap_handler = [
+        insn(GET, R7, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         *set_octa(R3, RA_EVENT_V << RA_ENABLE_SHIFT),
         insn(PUT, SR_A, 0, R3),
         *set_octa(R4, (1 << 56) | saved_insn),
@@ -1064,6 +1072,8 @@ def resume1_privileged_substitution_trap_program():
         halt(),
     ])
     handler_code = [
+        insn(GET, R56, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         insn(ADDUI, R50, R50, 1),
         insn(CMPI, R51, R50, 1),
         None,
@@ -1074,7 +1084,7 @@ def resume1_privileged_substitution_trap_program():
         insn(RESUME, 0, 0, 1),
     ]
     nested_index = len(handler_code)
-    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code[4] = branch(BNZ, R51, nested_index - 4)
     handler_code.extend([
         insn(GET, R52, 0, SR_WW),
         insn(GET, R53, 0, SR_XX),
@@ -1118,6 +1128,8 @@ def resume1_nested_replay_trap_program():
     ])
 
     handler_code = [
+        insn(GET, R54, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         insn(ADDUI, R50, R50, 1),
         insn(CMPI, R51, R50, 1),
         None,
@@ -1126,7 +1138,7 @@ def resume1_nested_replay_trap_program():
         insn(RESUME, 0, 0, 1),
     ]
     nested_index = len(handler_code)
-    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code[4] = branch(BNZ, R51, nested_index - 4)
     handler_code.extend([
         insn(GET, R52, 0, SR_WW),
         insn(GET, R53, 0, SR_XX),
@@ -1613,6 +1625,7 @@ def repeated_ropcode1_rule_break_program():
     program.append(halt())
     handler_code = [
         insn(ADDUI, R50, R50, 1),
+        insn(GET, R51, 0, SR_Q),
         insn(PUTI, SR_Q, 0, 0),
         insn(ADDU, R255, R2, R0),
         insn(RESUME, 0, 0, 1),
@@ -1650,6 +1663,8 @@ def nested_ropcode1_rule_break_program():
     ])
 
     handler_code = [
+        insn(GET, R65, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         insn(ADDUI, R50, R50, 1),
         insn(CMPI, R51, R50, 1),
         None,
@@ -1671,7 +1686,7 @@ def nested_ropcode1_rule_break_program():
         insn(RESUME, 0, 0, 1),
     ]
     nested_index = len(handler_code)
-    handler_code[2] = branch(BNZ, R51, nested_index - 2)
+    handler_code[4] = branch(BNZ, R51, nested_index - 4)
     handler_code.extend([
         insn(GET, R70, 0, SR_WW),
         insn(GET, R71, 0, SR_XX),
@@ -1683,7 +1698,7 @@ def nested_ropcode1_rule_break_program():
         program_with_handler(prefix, handler_phys, handler_code),
         continuation + 3 * 4,
         continuation,
-        handler + 12 * 4,
+        handler + 14 * 4,
     )
 
 
@@ -1830,6 +1845,8 @@ REPLAY_DATA_VALUE = 0x80ff12343fc00000
 
 def recoverable_data_access_handler(*, repeated=False):
     handler = [
+        insn(GET, R208, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         insn(GET, R200, 0, SR_WW),
         insn(GET, R201, 0, SR_XX),
         insn(GET, R202, 0, SR_YY),

@@ -111,6 +111,49 @@ def masked_interrupt_request_program():
 MASKED_INTERRUPT_REQUEST = masked_interrupt_request_program()
 
 
+def deferred_program_request_program():
+    handler = 0x100
+    prefix = [
+        wyde(SETL, R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        wyde(SETL, R255, 0x55),
+        insn(PUTI, SR_G, 0, 31),
+        insn(GET, R30, 0, SR_Q),
+        *set_octa(R32, RQ_PROGRAM_B),
+        insn(PUT, SR_K, 0, R32),
+    ]
+    resume_pc = len(b"".join(prefix))
+    prefix.extend([
+        insn(ADDUI, R33, R33, 1),
+        insn(ADDU, R34, R255, R0),
+        insn(GET, R35, 0, SR_K),
+        insn(GET, R36, 0, SR_Q),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+    program = program_with_handler(
+        prefix,
+        handler,
+        [
+            insn(GET, R40, 0, SR_Q),
+            insn(GET, R41, 0, SR_WW),
+            insn(GET, R42, 0, SR_XX),
+            insn(GET, R43, 0, SR_YY),
+            insn(GET, R44, 0, SR_ZZ),
+            insn(GET, R45, 0, SR_BB),
+            insn(GET, R46, 0, SR_K),
+            insn(ADDU, R47, R255, R0),
+            insn(PUTI, SR_Q, 0, 0),
+            insn(ADDU, R255, R32, R0),
+            insn(RESUME, 0, 0, 1),
+        ],
+    )
+    return program, len(b"".join(prefix)) - 4, resume_pc
+
+
+DEFERRED_PROGRAM_REQUEST = deferred_program_request_program()
+
+
 def external_dynamic_trap_program():
     handler = 0x100
     timer_compare = (
@@ -442,6 +485,8 @@ def dynamic_trap_register_stack_program(depth=10):
         insn(GET, R231, 0, SR_S),
         insn(GET, R232, 0, SR_L),
         insn(PUT, SR_J, 0, R200),
+        insn(GET, R209, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
         insn(ADDU, R255, R80, R83),
         insn(RESUME, 0, 0, 1),
     ])
@@ -598,6 +643,7 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
             insn(PUT, SR_J, 0, R185),
             insn(STOUI, R245, R244, 0),
             insn(LDVTS, R234, R235, R250),
+            insn(GET, R186, 0, SR_Q),
             insn(PUTI, SR_Q, 0, 0),
             insn(ADDU, R255, R248, R250),
             insn(RESUME, 0, 0, 1),
@@ -610,6 +656,7 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
             ] if retained_asn else []),
             insn(STOUI, R245, R244, 0),
             insn(LDVTS, R234, R235, R250),
+            insn(GET, R163, 0, SR_Q),
             insn(PUTI, SR_Q, 0, 0),
             insn(ADDU, R255, R248, R250),
             insn(RESUME, 0, 0, 1),
@@ -1541,6 +1588,26 @@ INTERRUPT_TESTS = [
         },
     ),
     MMIXTest(
+        "deferred-program-request",
+        DEFERRED_PROGRAM_REQUEST[0],
+        pc=DEFERRED_PROGRAM_REQUEST[1],
+        regs={
+            R30: RQ_PROGRAM_B,
+            R33: 1,
+            R34: 0x55,
+            R35: RQ_PROGRAM_B,
+            R36: 0,
+            R40: RQ_PROGRAM_B,
+            R41: DEFERRED_PROGRAM_REQUEST[2],
+            R42: DYNAMIC_TRAP_RESUME_NEXT,
+            R43: 0,
+            R44: 0,
+            R45: 0x55,
+            R46: 0,
+            R47: 0,
+        },
+    ),
+    MMIXTest(
         "external-dynamic-trap",
         EXTERNAL_DYNAMIC_TRAP[0],
         pc=EXTERNAL_DYNAMIC_TRAP[1],
@@ -1687,7 +1754,7 @@ INTERRUPT_TESTS = [
             R226: INITIAL_STACK,
             R227: INITIAL_STACK,
             R228: 32,
-            R229: RQ_PROGRAM_W,
+            R229: 0,
             R230: RQ_PROGRAM_W,
         },
     ),
@@ -1706,7 +1773,7 @@ INTERRUPT_TESTS = [
             R226: INITIAL_STACK,
             R227: INITIAL_STACK,
             R228: 32,
-            R229: RQ_PROGRAM_W,
+            R229: 0,
             R230: RQ_PROGRAM_W,
         },
     ),

@@ -146,8 +146,7 @@ static bool mmix_cpu_has_work(CPUState *cs)
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env)
 {
     return env->sregs[MMIX_SREG_RQ] &
-           env->sregs[MMIX_SREG_RK] &
-           MMIX_RQ_ASYNC_MASK;
+           env->sregs[MMIX_SREG_RK];
 }
 
 void mmix_cpu_update_interrupt(CPUMMIXState *env)
