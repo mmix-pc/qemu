@@ -789,7 +789,7 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
         mmix_cpu_put_rg(env, val);
         break;
     case MMIX_SREG_RL:
-        if (val > mmix_cpu_get_rl(env)) {
+        if (val > 255) {
             helper_mmix_break_rules(env, insn, 0, val);
             return;
         }

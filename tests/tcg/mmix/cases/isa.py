@@ -3490,9 +3490,10 @@ ISA_TESTS = [
         regs={R230: 0},
     ),
     rule_break_enabled_test(
-        "break-rules-rl-value",
-        insn(PUTI, SR_L, 0, 0xff),
-        z=0xff,
+        "break-rules-rl-high-bits",
+        insn(PUT, SR_L, 0, R4),
+        setup=(*set_octa(R4, 0x100),),
+        z=0x100,
         handler_checks=(insn(GET, R230, 0, SR_L),),
         regs={R230: 11},
     ),
@@ -4441,6 +4442,20 @@ ISA_TESTS = [
             R34: 11,
             R35: 11,
         },
+    ),
+    MMIXTest(
+        "put-rl-higher-value-no-op",
+        b"".join(
+            [
+                wyde(SETL, R10, 0x00aa),
+                insn(PUTI, SR_L, 0, 0xff),
+                insn(GET, R33, 0, SR_L),
+                insn(GET, R34, 0, SR_Q),
+                halt(),
+            ]
+        ),
+        pc=0x10,
+        regs={R33: 11, R34: 0},
     ),
     MMIXTest(
         "put-rl-narrowing",
