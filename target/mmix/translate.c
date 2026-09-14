@@ -1372,6 +1372,8 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
 
     tcg_gen_movi_i64(cpu_pc, pc);
     tcg_gen_movi_i64(cpu_npc, ctx->base.pc_next);
+    gen_helper_mmix_check_instruction_security(tcg_env,
+                                               tcg_constant_i32(insn));
     if (!decode(ctx, insn)) {
         arg_xyz a = {
             .y = extract32(insn, 8, 8),

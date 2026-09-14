@@ -27,6 +27,7 @@ from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE, mmo_hosted_text_image
 from lib.qemu import (
     QEMU_SEMIHOSTING_ARGS,
     QEMU_SEMIHOSTING_STDIN_ARGS,
+    QEMU_TEST_CPU_ARGS,
     build_kernel_command,
     build_smp_elf_loader_command,
     read_log,
@@ -94,11 +95,20 @@ def _run_one(qemu, workdir, test, runner, *, qemu_args=(), stdin_data=None,
     if trusted_semihosting:
         qemu_args = _trusted_semihosting_args(qemu_args)
 
-    completed = runner(qemu, image, trace="int", log=log,
-                       qemu_args=qemu_args, check=False, timeout=10,
-                       stdin_data=_test_stdin_data(test, stdin_data))
+    completed = runner(
+        qemu, image, trace="int", log=log, qemu_args=qemu_args,
+        check=False, timeout=10,
+        stdin_data=_test_stdin_data(test, stdin_data),
+        security_checks=getattr(test, "security_checks", False),
+    )
 
     result = read_log(log)
+    if getattr(test, "log_patterns", ()):
+        assert_log_patterns(
+            test.name,
+            log.read_text(encoding="utf-8"),
+            test.log_patterns,
+        )
     assert_exit_pc(test.name, result, test.pc)
     assert_exit_status(test.name, completed, test.exit_status)
     assert_regs(test.name, result, test.regs)
@@ -939,6 +949,7 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         "-display", "none",
         "-monitor", "none",
         "-serial", f"file:{serial}",
+        *QEMU_TEST_CPU_ARGS,
         "-S",
         "-qmp", "stdio",
         "-qtest", f"unix:{qtest_path}",

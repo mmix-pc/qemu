@@ -690,6 +690,7 @@ static void mmix_cpu_initfn(Object *obj)
 static const Property mmix_cpu_properties[] = {
     DEFINE_PROP_UINT64("initial-stack", MMIXCPU, initial_stack,
                        MMIX_INITIAL_STACK),
+    DEFINE_PROP_BOOL("x-security-checks", MMIXCPU, security_checks, true),
 };
 
 static void mmix_cpu_finalize(Object *obj)

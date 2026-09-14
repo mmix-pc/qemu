@@ -362,6 +362,37 @@ void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
     cpu_loop_exit(cs);
 }
 
+void helper_mmix_check_instruction_security(CPUMMIXState *env, uint32_t insn)
+{
+    uint8_t opcode = insn >> 24;
+    uint64_t cause = 0;
+
+    /* Enforce the program-bit security rule from mmix-doc section 37. */
+    if (!env_archcpu(env)->security_checks) {
+        return;
+    }
+    if ((int64_t)env->pc < 0) {
+        if (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_P) {
+            cause = MMIX_RQ_PROGRAM_P;
+        }
+    } else if ((env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_MASK) !=
+               MMIX_RQ_PROGRAM_MASK) {
+        cause = MMIX_RQ_PROGRAM_S;
+        env->sregs[MMIX_SREG_RK] |= MMIX_RQ_PROGRAM_S;
+    }
+    if (cause == 0) {
+        return;
+    }
+
+    /* MMIXware permits these instructions to establish or leave a context. */
+    if (opcode == MMIX_TRAP_OPCODE || opcode == MMIX_PUT_OPCODE ||
+        opcode == MMIX_PUTI_OPCODE || opcode == MMIX_RESUME_OPCODE) {
+        mmix_cpu_set_rq_bits(env, cause);
+        return;
+    }
+    mmix_cpu_raise_dynamic_trap(env, cause, insn);
+}
+
 void mmix_cpu_check_control_transfer(CPUMMIXState *env, uint32_t insn,
                                      uint64_t destination)
 {

@@ -52,6 +52,7 @@ RQ_PROGRAM_R = 1 << 39
 RQ_PROGRAM_W = 1 << 38
 RQ_PROGRAM_X = 1 << 37
 RQ_PROGRAM_N = 1 << 36
+RQ_PROGRAM_S = 1 << 33
 RQ_PROGRAM_P = 1 << 32
 RQ_INTERRUPT_CONTROLLER = 1 << 8
 RK_INTERRUPT_CONTROLLER = RQ_INTERRUPT_CONTROLLER
@@ -798,6 +799,8 @@ class MMIXTest:
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
     stdin_data: Optional[bytes] = None
+    security_checks: bool = False
+    log_patterns: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

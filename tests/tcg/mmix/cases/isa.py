@@ -2996,6 +2996,24 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
+        "positive-address-incomplete-rk-security-trap",
+        b"".join([
+            wyde(SETL, R5, 0x0055),
+            halt(),
+        ]),
+        pc=0x8000000600000000,
+        regs={R5: 0},
+        security_checks=True,
+        log_patterns=(
+            "MMIX dynamic trap causes=0x0000000200000000 from "
+            "0x0000000000000000",
+            "rK =0x0000000000000000",
+            "rQ =0x0000000200000000",
+            "rWW=0x0000000000000004",
+            "rXX=0x00000002e3050055",
+        ),
+    ),
+    MMIXTest(
         "memory-octa-variants",
         b"".join(
             [

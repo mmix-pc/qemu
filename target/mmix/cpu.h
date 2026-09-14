@@ -101,6 +101,9 @@ enum {
     (MMIX_RQ_INTERRUPT_CONTROLLER | MMIX_RQ_IPI)
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
+#define MMIX_TRAP_OPCODE 0x00U
+#define MMIX_PUT_OPCODE 0xf6U
+#define MMIX_PUTI_OPCODE 0xf7U
 #define MMIX_SWYM_INSN 0xfd000000U
 #define MMIX_RESUME_OPCODE 0xf9U
 #define MMIX_TB_REPLAY_FLAG (1ULL << 63)
@@ -259,6 +262,7 @@ struct ArchCPU {
     CPUMMIXState env;
     /* Reset value for rO and rS before the guest establishes its stack. */
     uint64_t initial_stack;
+    bool security_checks;
     /* Architectural I/D translation caches, separate from QEMU's TLB. */
     GArray *instruction_translation_cache;
     GArray *data_translation_cache;
