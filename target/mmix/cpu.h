@@ -122,7 +122,7 @@ enum {
 #define MMIX_RA_EVENT_MASK 0xffu
 #define MMIX_RA_ENABLE_SHIFT 8
 #define MMIX_RA_ROUND_SHIFT 16
-#define MMIX_RA_VALID_MASK 0x3ffffu
+#define MMIX_RA_VALID_MASK UINT64_C(0x3ffff)
 
 typedef enum MMIXStackAccessKind {
     MMIX_STACK_ACCESS_NONE,

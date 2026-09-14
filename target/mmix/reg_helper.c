@@ -772,23 +772,27 @@ void helper_mmix_put_sreg(CPUMMIXState *env, uint32_t insn, uint32_t reg,
         !mmix_cpu_kernel_operations_enabled(env)) {
         mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_K, insn);
     }
-    if (reg == MMIX_SREG_RG && (val < 32 || val > 255)) {
-        helper_mmix_break_rules(env, insn, 0, val);
-        return;
-    }
-    if (reg == MMIX_SREG_RL && val > mmix_cpu_get_rl(env)) {
-        helper_mmix_break_rules(env, insn, 0, val);
-        return;
-    }
 
     switch (reg) {
     case MMIX_SREG_RA:
-        env->sregs[MMIX_SREG_RA] = val & MMIX_RA_VALID_MASK;
+        if (val & ~MMIX_RA_VALID_MASK) {
+            helper_mmix_break_rules(env, insn, 0, val);
+            return;
+        }
+        env->sregs[reg] = val;
         break;
     case MMIX_SREG_RG:
+        if (val < 32 || val > 255) {
+            helper_mmix_break_rules(env, insn, 0, val);
+            return;
+        }
         mmix_cpu_put_rg(env, val);
         break;
     case MMIX_SREG_RL:
+        if (val > mmix_cpu_get_rl(env)) {
+            helper_mmix_break_rules(env, insn, 0, val);
+            return;
+        }
         mmix_cpu_put_rl(env, val);
         break;
     case MMIX_SREG_RQ:

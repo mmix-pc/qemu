@@ -3497,6 +3497,17 @@ ISA_TESTS = [
         regs={R230: 11},
     ),
     rule_break_enabled_test(
+        "break-rules-ra-value",
+        insn(PUT, SR_A, 0, R4),
+        setup=(
+            insn(PUTI, SR_A, 0, 0x55),
+            *set_octa(R4, 0xffffffff0003ffff),
+        ),
+        z=0xffffffff0003ffff,
+        handler_checks=(insn(GET, R230, 0, SR_A),),
+        regs={R230: 0x55},
+    ),
+    rule_break_enabled_test(
         "break-rules-save-destination",
         insn(SAVE, R0, 0, 0),
         setup=(
@@ -4370,17 +4381,19 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
-        "special-register-ra-mask",
+        "special-register-ra-invalid-masked",
         b"".join(
             [
+                insn(PUTI, SR_A, 0, 0x55),
                 *set_octa(R1, 0xffffffff0003ffff),
                 insn(PUT, SR_A, 0, R1),
                 insn(GET, R33, 0, SR_A),
+                insn(GET, R34, 0, SR_Q),
                 halt(),
             ]
         ),
-        pc=0x18,
-        regs={R33: 0x3ffff},
+        pc=0x20,
+        regs={R33: 0x55, R34: RQ_PROGRAM_B},
     ),
     MMIXTest(
         "special-register-rg-rl-policy",
@@ -5812,7 +5825,7 @@ ISA_TESTS = [
         "floating-point-rounding",
         b"".join(
             [
-                *set_octa(R1, 0xffffffff00030000),
+                *set_octa(R1, 0x30000),
                 insn(PUT, SR_A, 0, R1),
                 insn(GET, R2, 0, SR_A),
                 *set_octa(R5, f64(1.5)),
