@@ -991,10 +991,11 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
         addr = env->unsave_restart_address;
     } else {
         addr = mmix_cpu_read_reg(env, z) & ~7ULL;
-        mmix_trap_restart_restore_context(env, addr);
         env->unsave_restart_address = addr;
         env->unsave_restart_active = true;
     }
+    /* The first lookup can miss before RESUME installs the translation. */
+    mmix_trap_restart_restore_context(env, addr);
     env->sregs[MMIX_SREG_RS] = addr + 8;
 
     packed = mmix_cpu_stack_read_octa(env, ra);
