@@ -194,14 +194,15 @@ typedef struct MMIXTrapRestartState {
     /* This identity follows a suspended helper through SAVE and UNSAVE. */
     uint64_t sequence;
     uint64_t interrupted_context_sequence;
-    uint64_t saved_context_address;
-    uint64_t saved_context_rv;
+    uint64_t saved_context_physical;
     uint64_t trap_where;
     uint64_t trap_exec;
     uint64_t trap_y;
     uint64_t trap_rv;
     uint8_t forced_translation_access;
     bool register_stack_rebased;
+    /* A selected binding remains recognizable across UNSAVE retries. */
+    bool saved_context_bound;
     bool saved_context_valid;
     bool forced_translation;
 } MMIXTrapRestartState;

@@ -64,7 +64,13 @@ SMP_SAVE_ORDER_RWW = 0x10
 SMP_SAVE_ORDER_RXX = 0x18
 SMP_SAVE_ORDER_RYY = 0x20
 SMP_SAVE_ORDER_RBB = 0x28
+SMP_SAVE_ORDER_CONTEXT_B = 0x30
+SMP_SAVE_ORDER_RWW_B = 0x38
+SMP_SAVE_ORDER_RXX_B = 0x40
+SMP_SAVE_ORDER_RYY_B = 0x48
+SMP_SAVE_ORDER_RBB_B = 0x50
 SMP_SAVE_ORDER_STACK = 0x14000
+SMP_SAVE_ORDER_STACK_B = 0x18000
 SMP_SAVE_ORDER_CONTEXT_TOP = SMP_SAVE_ORDER_STACK + (12 + 224 + 1) * 8
 SMP_SAVE_ORDER_IDLE_TOP = 0x16000 + (12 + 224 + 1) * 8
 SMP_SAVE_ORDER_HANDLER = 0x7000
@@ -640,9 +646,15 @@ def save_context_out_of_order_program():
         smp_store(R41, R40, SMP_SAVE_ORDER_STAGE),
         *set_octa(R60, SMP_SAVE_ORDER_CONTEXT_TOP),
         insn(UNSAVE, 0, 0, R60),
-        wyde(SETL, R100, 0x1111),
+        *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        wyde(SETL, R0, 0x1111),
+        wyde(SETL, R231, 0x1111),
         wyde(SETL, R170, 0),
     )
+    program.mark("wait_for_secondary_context")
+    program.emit(smp_sync(2), smp_load(R42, R40, SMP_SAVE_ORDER_STAGE))
+    program.emit(insn(CMPUI, R43, R42, 2))
+    program.emit_branch(BNZ, R43, "wait_for_secondary_context")
     smp_emit_unconditional_branch(program, "prepare_fault")
 
     program.mark("secondary_setup")
@@ -654,14 +666,22 @@ def save_context_out_of_order_program():
         *set_octa(R60, SMP_SAVE_ORDER_CONTEXT_TOP),
         insn(UNSAVE, 0, 0, R60),
         *set_octa(R40, SMP_SAVE_ORDER_STATE),
-        wyde(SETL, R100, 0x2222),
+        wyde(SETL, R0, 0x2222),
+        wyde(SETL, R231, 0x2222),
         wyde(SETL, R170, 1),
+        wyde(SETL, R41, 2),
+        smp_sync(1),
+        smp_store(R41, R40, SMP_SAVE_ORDER_STAGE),
     )
     program.mark("wait_for_older_context")
     program.emit(smp_sync(2), smp_load(R42, R40, SMP_SAVE_ORDER_STAGE))
     program.emit_branch(BZ, R42, "wait_for_older_context")
-    program.emit(insn(CMPUI, R43, R42, 2))
+    program.emit(insn(CMPUI, R43, R42, 3))
     program.emit_branch(BNZ, R43, "wait_for_older_context")
+    program.emit(
+        *set_octa(R184, SMP_SAVE_ORDER_STACK),
+        insn(LDVTS, R185, R184, R254),
+    )
 
     program.mark("prepare_fault")
     program.emit(
@@ -674,11 +694,60 @@ def save_context_out_of_order_program():
     )
     program.mark("save_site")
     program.emit(insn(SAVE, R200, 0, 0))
-    program.emit_branch(BNZ, R170, "failure")
+    program.emit_branch(BNZ, R170, "verify_newer_context")
     program.emit(
-        *set_octa(R201, SMP_SAVE_ORDER_STACK + 8 + (R100 - 32) * 8),
+        *set_octa(R201, (1 << 63) | SMP_SAVE_ORDER_STACK),
         insn(LDOU, R210, R201, R254),
         wyde(SETL, R212, 0x1111),
+        insn(CMPU, R211, R210, R212),
+    )
+    program.emit_branch(BNZ, R211, "failure")
+    program.emit(
+        *set_octa(
+            R201,
+            (1 << 63) | (SMP_SAVE_ORDER_STACK + 16 + (R231 - 32) * 8),
+        ),
+        insn(LDOU, R210, R201, R254),
+        insn(CMPU, R211, R210, R212),
+    )
+    program.emit_branch(BNZ, R211, "failure")
+    program.emit(
+        *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        *set_octa(R52, pte),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK_B | 7),
+        insn(STOU, R53, R52, R254),
+        *set_octa(R184, SMP_SAVE_ORDER_STACK),
+        insn(LDVTS, R185, R184, R254),
+        smp_load(R200, R40, SMP_SAVE_ORDER_CONTEXT_B),
+        insn(UNSAVE, 0, 0, R200),
+        smp_load(R180, R40, SMP_SAVE_ORDER_RWW_B),
+        smp_load(R181, R40, SMP_SAVE_ORDER_RXX_B),
+        smp_load(R182, R40, SMP_SAVE_ORDER_RYY_B),
+        smp_load(R183, R40, SMP_SAVE_ORDER_RBB_B),
+        insn(PUT, SR_WW, 0, R180),
+        insn(PUT, SR_XX, 0, R181),
+        insn(PUT, SR_YY, 0, R182),
+        insn(PUT, SR_BB, 0, R183),
+        insn(PUT, SR_ZZ, 0, R53),
+        insn(PUTI, SR_Q, 0, 0),
+        *set_octa(R255, RQ_PROGRAM_W),
+        insn(RESUME, 0, 0, 1),
+    )
+
+    program.mark("verify_newer_context")
+    program.emit(
+        *set_octa(R201, (1 << 63) | SMP_SAVE_ORDER_STACK_B),
+        insn(LDOU, R210, R201, R254),
+        wyde(SETL, R212, 0x2222),
+        insn(CMPU, R211, R210, R212),
+    )
+    program.emit_branch(BNZ, R211, "failure")
+    program.emit(
+        *set_octa(
+            R201,
+            (1 << 63) | (SMP_SAVE_ORDER_STACK_B + 16 + (R231 - 32) * 8),
+        ),
+        insn(LDOU, R210, R201, R254),
         insn(CMPU, R211, R210, R212),
     )
     program.emit_branch(BNZ, R211, "failure")
@@ -708,10 +777,10 @@ def save_context_out_of_order_program():
         insn(LDVTS, R185, R184, R254),
         insn(SAVE, R200, 0, 0),
         smp_store(R200, R40, SMP_SAVE_ORDER_CONTEXT),
-        *set_octa(R53, SMP_SAVE_ORDER_STACK | 4),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK_B | 4),
         insn(STOU, R53, R52, R254),
         insn(LDVTS, R185, R184, R254),
-        wyde(SETL, R41, 2),
+        wyde(SETL, R41, 3),
         smp_sync(1),
         smp_store(R41, R40, SMP_SAVE_ORDER_STAGE),
         *set_octa(R60, (1 << 63) | SMP_SAVE_ORDER_IDLE_TOP),
@@ -723,6 +792,24 @@ def save_context_out_of_order_program():
     handler.mark("restore_older_context")
     handler.emit(
         *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        insn(GET, R180, 0, SR_WW),
+        insn(GET, R181, 0, SR_XX),
+        insn(GET, R182, 0, SR_YY),
+        insn(GET, R183, 0, SR_BB),
+        smp_store(R180, R40, SMP_SAVE_ORDER_RWW_B),
+        smp_store(R181, R40, SMP_SAVE_ORDER_RXX_B),
+        smp_store(R182, R40, SMP_SAVE_ORDER_RYY_B),
+        smp_store(R183, R40, SMP_SAVE_ORDER_RBB_B),
+        *set_octa(R52, pte),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK_B | 7),
+        insn(STOU, R53, R52, R254),
+        *set_octa(R184, SMP_SAVE_ORDER_STACK),
+        insn(LDVTS, R185, R184, R254),
+        insn(SAVE, R200, 0, 0),
+        smp_store(R200, R40, SMP_SAVE_ORDER_CONTEXT_B),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK | 7),
+        insn(STOU, R53, R52, R254),
+        insn(LDVTS, R185, R184, R254),
         smp_load(R200, R40, SMP_SAVE_ORDER_CONTEXT),
         insn(UNSAVE, 0, 0, R200),
         smp_load(R180, R40, SMP_SAVE_ORDER_RWW),
@@ -733,11 +820,6 @@ def save_context_out_of_order_program():
         insn(PUT, SR_XX, 0, R181),
         insn(PUT, SR_YY, 0, R182),
         insn(PUT, SR_BB, 0, R183),
-        *set_octa(R52, pte),
-        *set_octa(R53, SMP_SAVE_ORDER_STACK | 7),
-        insn(STOU, R53, R52, R254),
-        *set_octa(R184, SMP_SAVE_ORDER_STACK),
-        insn(LDVTS, R185, R184, R254),
         insn(PUT, SR_ZZ, 0, R53),
         insn(GET, R190, 0, SR_Q),
         insn(PUTI, SR_Q, 0, 0),
@@ -752,7 +834,7 @@ def save_context_out_of_order_program():
         ),
         success_pc=(1 << 63) | program.address("success"),
         timeout_pc=(1 << 63) | program.address("failure_halt"),
-        success_regs={R90: 0, R210: 0x1111},
+        success_regs={R90: 0, R210: 0x2222},
     )
 
 

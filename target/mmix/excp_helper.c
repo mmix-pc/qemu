@@ -214,10 +214,15 @@ static void mmix_trap_restart_remove(CPUMMIXState *env, uint64_t sequence)
 
 void mmix_trap_restart_save_context(CPUMMIXState *env, uint64_t address)
 {
+    MMIXAddressTranslation translation;
     CPUState *cs;
     uint64_t sequence = env->trap_context_sequence;
 
     if (sequence == 0) {
+        return;
+    }
+    if (!mmix_translate_address(env, address, MMU_DATA_STORE, true, false,
+                                &translation)) {
         return;
     }
 
@@ -239,8 +244,8 @@ void mmix_trap_restart_save_context(CPUMMIXState *env, uint64_t address)
             if (restart->sequence != sequence) {
                 continue;
             }
-            restart->saved_context_address = address;
-            restart->saved_context_rv = env->sregs[MMIX_SREG_RV];
+            restart->saved_context_physical = translation.physical;
+            restart->saved_context_bound = true;
             restart->saved_context_valid = true;
             goto out;
         }
@@ -251,11 +256,18 @@ out:
 
 void mmix_trap_restart_restore_context(CPUMMIXState *env, uint64_t address)
 {
+    MMIXAddressTranslation translation;
     CPUState *cs;
-    uint64_t rv = env->sregs[MMIX_SREG_RV];
+    uint64_t current_sequence = env->trap_context_sequence;
     uint64_t selected_sequence = 0;
     MMIXTrapRestartState *selected = NULL;
 
+    if (!mmix_translate_address(env, address, MMU_DATA_LOAD, true, false,
+                                &translation)) {
+        return;
+    }
+
+    /* Virtual SAVE addresses and rV values are not process identities. */
     mmix_trap_restart_lock();
     CPU_FOREACH(cs) {
         MMIXCPU *cpu;
@@ -271,9 +283,16 @@ void mmix_trap_restart_restore_context(CPUMMIXState *env, uint64_t address)
             MMIXTrapRestartState *restart = &g_array_index(
                 stack, MMIXTrapRestartState, i);
 
+            if (!restart->saved_context_bound ||
+                restart->saved_context_physical != translation.physical) {
+                continue;
+            }
+            if (restart->sequence == current_sequence) {
+                selected_sequence = restart->sequence;
+                selected = restart;
+                goto selected;
+            }
             if (!restart->saved_context_valid ||
-                restart->saved_context_address != address ||
-                restart->saved_context_rv != rv ||
                 restart->sequence <= selected_sequence) {
                 continue;
             }
@@ -281,6 +300,7 @@ void mmix_trap_restart_restore_context(CPUMMIXState *env, uint64_t address)
             selected = restart;
         }
     }
+selected:
     if (selected != NULL) {
         selected->saved_context_valid = false;
     }
