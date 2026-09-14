@@ -238,25 +238,6 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env, uintptr_t ra)
     return value;
 }
 
-static void mmix_cpu_note_register_stack_rebase(CPUMMIXState *env)
-{
-    GArray *stack = env_archcpu(env)->trap_restart_stack;
-    unsigned int i;
-
-    mmix_trap_restart_lock();
-    for (i = 0; i < stack->len; i++) {
-        MMIXTrapRestartState *restart =
-            &g_array_index(stack, MMIXTrapRestartState, i);
-
-        /* A pending SAVE/UNSAVE has its own exact pre-handler snapshot. */
-        if (restart->save_unsave == NULL &&
-            restart->stack_access.kind != MMIX_STACK_ACCESS_NONE) {
-            restart->register_stack_rebased = true;
-        }
-    }
-    mmix_trap_restart_unlock();
-}
-
 static void mmix_cpu_ensure_local_room(CPUMMIXState *env, unsigned new_rl,
                                        uintptr_t ra)
 {
@@ -540,7 +521,7 @@ static void mmix_cpu_debug_put_ro(CPUMMIXState *env, uint64_t val)
     for (i = 0; i < rl; i++) {
         env->local_regs[mmix_cpu_local_index(env, i)] = locals[i];
     }
-    mmix_cpu_note_register_stack_rebase(env);
+    mmix_trap_restart_note_register_stack_rebase(env);
 }
 
 static uint64_t mmix_cpu_debug_hardware_requests(CPUMMIXState *env)
@@ -599,7 +580,7 @@ bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg, uint64_t val)
         break;
     case MMIX_SREG_RS:
         env->sregs[reg] = val;
-        mmix_cpu_note_register_stack_rebase(env);
+        mmix_trap_restart_note_register_stack_rebase(env);
         break;
     case MMIX_SREG_RG:
         mmix_cpu_put_rg(env, val);
@@ -724,7 +705,7 @@ bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
         env->flat_translation = false;
     }
     if (stack_rebased) {
-        mmix_cpu_note_register_stack_rebase(env);
+        mmix_trap_restart_note_register_stack_rebase(env);
     }
     if (translation_changed) {
         mmix_cpu_update_translation_state(env);
@@ -978,6 +959,7 @@ void helper_mmix_save(CPUMMIXState *env, uint32_t insn, uint32_t x)
 
     env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
     env->regs[x] = env->sregs[MMIX_SREG_RO] - 8;
+    mmix_trap_restart_save_context(env, env->regs[x]);
     memset(restart, 0, sizeof(*restart));
 }
 
@@ -994,6 +976,7 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
         addr = env->unsave_restart_address;
     } else {
         addr = mmix_cpu_read_reg(env, z) & ~7ULL;
+        mmix_trap_restart_restore_context(env, addr);
         env->unsave_restart_address = addr;
         env->unsave_restart_active = true;
     }
@@ -1025,5 +1008,5 @@ void helper_mmix_unsave(CPUMMIXState *env, uint32_t z)
     env->sregs[MMIX_SREG_RO] = env->sregs[MMIX_SREG_RS];
     env->sregs[MMIX_SREG_RL] = MIN(saved_rl, rg);
     env->unsave_restart_active = false;
-    mmix_cpu_note_register_stack_rebase(env);
+    mmix_trap_restart_note_register_stack_rebase(env);
 }

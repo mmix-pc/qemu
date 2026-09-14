@@ -57,6 +57,18 @@ SMP_UNSAVE_LOWER_PAGE = SMP_UNSAVE_UPPER_PAGE - 0x2000
 SMP_UNSAVE_HANDLER = 0x5000
 SMP_UNSAVE_INTERRUPT_HANDLER = 0x6000
 
+SMP_SAVE_ORDER_STATE = (1 << 63) | 0x00200500
+SMP_SAVE_ORDER_STAGE = 0x00
+SMP_SAVE_ORDER_CONTEXT = 0x08
+SMP_SAVE_ORDER_RWW = 0x10
+SMP_SAVE_ORDER_RXX = 0x18
+SMP_SAVE_ORDER_RYY = 0x20
+SMP_SAVE_ORDER_RBB = 0x28
+SMP_SAVE_ORDER_STACK = 0x14000
+SMP_SAVE_ORDER_CONTEXT_TOP = SMP_SAVE_ORDER_STACK + (12 + 224 + 1) * 8
+SMP_SAVE_ORDER_IDLE_TOP = 0x16000 + (12 + 224 + 1) * 8
+SMP_SAVE_ORDER_HANDLER = 0x7000
+
 
 def emit_translation_setup(program, virtual_index):
     program.emit(
@@ -593,6 +605,157 @@ def unsave_context_migration_program(full_context_roundtrip=False,
     )
 
 
+def save_context_out_of_order_program():
+    program = SMPProgram()
+    handler = SMPProgram()
+    pte = ((1 << 63) | VM_PAGE_TABLE |
+           ((SMP_SAVE_ORDER_STACK >> 13) * 8))
+
+    program.emit_branch(GETA, R20, "kernel_entry")
+    program.emit(
+        *set_octa(R21, 1 << 63),
+        insn(OR, R20, R20, R21),
+        insn(GO, R21, R20, R254),
+    )
+    program.mark("kernel_entry")
+    program.emit(
+        insn(ADDI, R32, R0, 0),
+        *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        wyde(SETL, R41, 1),
+    )
+    program.emit_branch(BNZ, R32, "secondary_setup")
+    program.emit(
+        *set_octa(R50, (1 << 63) | VM_PAGE_TABLE),
+        wyde(SETL, R51, 7),
+        insn(STOU, R51, R50, R254),
+        *set_octa(R52, pte),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK | 4),
+        insn(STOU, R53, R52, R254),
+        *set_octa(R54, (1 << 63) | SMP_SAVE_ORDER_CONTEXT_TOP),
+        *set_octa(R55, 32 << 56),
+        insn(STOU, R55, R54, R254),
+        *set_octa(R54, (1 << 63) | SMP_SAVE_ORDER_IDLE_TOP),
+        insn(STOU, R55, R54, R254),
+        smp_sync(1),
+        smp_store(R41, R40, SMP_SAVE_ORDER_STAGE),
+        *set_octa(R60, SMP_SAVE_ORDER_CONTEXT_TOP),
+        insn(UNSAVE, 0, 0, R60),
+        wyde(SETL, R100, 0x1111),
+        wyde(SETL, R170, 0),
+    )
+    smp_emit_unconditional_branch(program, "prepare_fault")
+
+    program.mark("secondary_setup")
+    program.emit(smp_sync(2))
+    program.mark("save_order_setup")
+    program.emit(smp_load(R42, R40, SMP_SAVE_ORDER_STAGE))
+    program.emit_branch(BZ, R42, "save_order_setup")
+    program.emit(
+        *set_octa(R60, SMP_SAVE_ORDER_CONTEXT_TOP),
+        insn(UNSAVE, 0, 0, R60),
+        *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        wyde(SETL, R100, 0x2222),
+        wyde(SETL, R170, 1),
+    )
+    program.mark("wait_for_older_context")
+    program.emit(smp_sync(2), smp_load(R42, R40, SMP_SAVE_ORDER_STAGE))
+    program.emit_branch(BZ, R42, "wait_for_older_context")
+    program.emit(insn(CMPUI, R43, R42, 2))
+    program.emit_branch(BNZ, R43, "wait_for_older_context")
+
+    program.mark("prepare_fault")
+    program.emit(
+        *set_octa(R61, (1 << 63) | SMP_SAVE_ORDER_HANDLER),
+        insn(PUT, SR_TT, 0, R61),
+        *set_octa(R62, VM_RV_PAGE0),
+        insn(PUT, SR_V, 0, R62),
+        *set_octa(R63, RQ_PROGRAM_W),
+        insn(PUT, SR_K, 0, R63),
+    )
+    program.mark("save_site")
+    program.emit(insn(SAVE, R200, 0, 0))
+    program.emit_branch(BNZ, R170, "failure")
+    program.emit(
+        *set_octa(R201, SMP_SAVE_ORDER_STACK + 8 + (R100 - 32) * 8),
+        insn(LDOU, R210, R201, R254),
+        wyde(SETL, R212, 0x1111),
+        insn(CMPU, R211, R210, R212),
+    )
+    program.emit_branch(BNZ, R211, "failure")
+    program.mark("success")
+    program.emit(halt())
+
+    program.mark("failure")
+    program.emit(wyde(SETL, R90, 0xdead))
+    program.mark("failure_halt")
+    program.emit(halt())
+
+    handler.emit_branch(BNZ, R170, "restore_older_context")
+    handler.emit(
+        *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        insn(GET, R180, 0, SR_WW),
+        insn(GET, R181, 0, SR_XX),
+        insn(GET, R182, 0, SR_YY),
+        insn(GET, R183, 0, SR_BB),
+        smp_store(R180, R40, SMP_SAVE_ORDER_RWW),
+        smp_store(R181, R40, SMP_SAVE_ORDER_RXX),
+        smp_store(R182, R40, SMP_SAVE_ORDER_RYY),
+        smp_store(R183, R40, SMP_SAVE_ORDER_RBB),
+        *set_octa(R52, pte),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK | 7),
+        insn(STOU, R53, R52, R254),
+        *set_octa(R184, SMP_SAVE_ORDER_STACK),
+        insn(LDVTS, R185, R184, R254),
+        insn(SAVE, R200, 0, 0),
+        smp_store(R200, R40, SMP_SAVE_ORDER_CONTEXT),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK | 4),
+        insn(STOU, R53, R52, R254),
+        insn(LDVTS, R185, R184, R254),
+        wyde(SETL, R41, 2),
+        smp_sync(1),
+        smp_store(R41, R40, SMP_SAVE_ORDER_STAGE),
+        *set_octa(R60, (1 << 63) | SMP_SAVE_ORDER_IDLE_TOP),
+        insn(UNSAVE, 0, 0, R60),
+    )
+    handler.mark("older_context_idle")
+    smp_emit_unconditional_branch(handler, "older_context_idle")
+
+    handler.mark("restore_older_context")
+    handler.emit(
+        *set_octa(R40, SMP_SAVE_ORDER_STATE),
+        smp_load(R200, R40, SMP_SAVE_ORDER_CONTEXT),
+        insn(UNSAVE, 0, 0, R200),
+        smp_load(R180, R40, SMP_SAVE_ORDER_RWW),
+        smp_load(R181, R40, SMP_SAVE_ORDER_RXX),
+        smp_load(R182, R40, SMP_SAVE_ORDER_RYY),
+        smp_load(R183, R40, SMP_SAVE_ORDER_RBB),
+        insn(PUT, SR_WW, 0, R180),
+        insn(PUT, SR_XX, 0, R181),
+        insn(PUT, SR_YY, 0, R182),
+        insn(PUT, SR_BB, 0, R183),
+        *set_octa(R52, pte),
+        *set_octa(R53, SMP_SAVE_ORDER_STACK | 7),
+        insn(STOU, R53, R52, R254),
+        *set_octa(R184, SMP_SAVE_ORDER_STACK),
+        insn(LDVTS, R185, R184, R254),
+        insn(PUT, SR_ZZ, 0, R53),
+        insn(GET, R190, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
+        *set_octa(R255, RQ_PROGRAM_W),
+        insn(RESUME, 0, 0, 1),
+    )
+
+    return SMPProgramImage(
+        code=smp_elf_image(
+            program.build(),
+            (SMP_SAVE_ORDER_HANDLER, handler.build()),
+        ),
+        success_pc=(1 << 63) | program.address("success"),
+        timeout_pc=(1 << 63) | program.address("failure_halt"),
+        success_regs={R90: 0, R210: 0x1111},
+    )
+
+
 def instruction_translation_coherency_program():
     program = SMPProgram()
 
@@ -765,6 +928,7 @@ SMP_UNSAVE_FULL_CONTEXT_MIGRATION = unsave_context_migration_program(True)
 SMP_UNSAVE_INTERRUPT_CONTEXT_MIGRATION = unsave_context_migration_program(
     True, True
 )
+SMP_SAVE_CONTEXT_OUT_OF_ORDER = save_context_out_of_order_program()
 
 SMP_TRANSLATION_TESTS = [
     MMIXSMPTest(
@@ -800,6 +964,13 @@ SMP_TRANSLATION_TESTS = [
         SMP_UNSAVE_INTERRUPT_CONTEXT_MIGRATION.code,
         pc=SMP_UNSAVE_INTERRUPT_CONTEXT_MIGRATION.success_pc,
         regs=SMP_UNSAVE_INTERRUPT_CONTEXT_MIGRATION.success_regs,
+        thread_mode=TCG_THREAD_MULTI,
+    ),
+    MMIXSMPTest(
+        "smp-multi-thread-save-context-out-of-order",
+        SMP_SAVE_CONTEXT_OUT_OF_ORDER.code,
+        pc=SMP_SAVE_CONTEXT_OUT_OF_ORDER.success_pc,
+        regs=SMP_SAVE_CONTEXT_OUT_OF_ORDER.success_regs,
         thread_mode=TCG_THREAD_MULTI,
     ),
 ]

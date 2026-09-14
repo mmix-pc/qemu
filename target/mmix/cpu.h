@@ -189,13 +189,18 @@ typedef struct MMIXTrapRestartState {
     MMIXStackAccessState stack_access;
     MMIXInsnReplayState interrupted_replay;
     MMIXSaveUnsaveTrapState *save_unsave;
+    /* This identity follows a suspended helper through SAVE and UNSAVE. */
     uint64_t sequence;
+    uint64_t interrupted_context_sequence;
+    uint64_t saved_context_address;
+    uint64_t saved_context_rv;
     uint64_t trap_where;
     uint64_t trap_exec;
     uint64_t trap_y;
     uint64_t trap_rv;
     uint8_t forced_translation_access;
     bool register_stack_rebased;
+    bool saved_context_valid;
     bool forced_translation;
 } MMIXTrapRestartState;
 
@@ -218,6 +223,11 @@ typedef struct CPUArchState {
     MMIXStackAccessState stack_access;
     MMIXSaveRestartState save_restart;
     uint64_t unsave_restart_address;
+    /*
+     * Private restart identity of the currently loaded guest context.
+     * Zero denotes an untagged architectural context.
+     */
+    uint64_t trap_context_sequence;
     bool unsave_restart_active;
     bool stack_overflow_pending;
     uint32_t arithmetic_trip_event;

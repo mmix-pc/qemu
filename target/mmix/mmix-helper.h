@@ -21,5 +21,8 @@ void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
                            uint32_t insn, uint64_t y, uint64_t z);
 void mmix_trap_restart_lock(void);
 void mmix_trap_restart_unlock(void);
+void mmix_trap_restart_save_context(CPUMMIXState *env, uint64_t address);
+void mmix_trap_restart_restore_context(CPUMMIXState *env, uint64_t address);
+void mmix_trap_restart_note_register_stack_rebase(CPUMMIXState *env);
 
 #endif /* MMIX_MMIX_HELPER_H */

@@ -16,7 +16,8 @@ static bool mmix_cpu_pre_save(void *opaque, Error **errp)
     CPUMMIXState *env = &cpu->env;
     unsigned int handle;
 
-    if (cpu->trap_restart_stack->len != 0) {
+    if (cpu->trap_restart_stack->len != 0 ||
+        env->trap_context_sequence != 0) {
         error_setg(errp,
                    "MMIX nested trap restart state cannot be migrated");
         return false;
