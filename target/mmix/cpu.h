@@ -109,6 +109,7 @@ enum {
 #define MMIX_RESUME_OPCODE 0xf9U
 #define MMIX_TB_REPLAY_FLAG (1ULL << 63)
 #define MMIX_TB_REPLAY_SUBSTITUTE_FLAG (1ULL << 62)
+#define MMIX_TB_REPLAY_MASKED_MEMORY_FLAG (1ULL << 61)
 #define MMIX_RA_EVENT_D    (1u << 7)
 #define MMIX_RA_EVENT_V    (1u << 6)
 #define MMIX_RA_EVENT_W    (1u << 5)
@@ -146,6 +147,7 @@ typedef struct MMIXInsnReplayState {
     uint64_t trap_restart_sequence;
     uint32_t insn;
     bool substitute_operands;
+    bool masked_memory_access;
     bool active;
 } MMIXInsnReplayState;
 

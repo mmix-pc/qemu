@@ -326,6 +326,7 @@ void helper_mmix_consume_insn_replay(CPUMMIXState *env)
 
     g_assert(env->insn_replay.active);
     env->insn_replay.active = false;
+    env->insn_replay.masked_memory_access = false;
     if (sequence != 0) {
         /* Restore any replay suspended by a nested trap at consumption. */
         mmix_trap_restart_remove(env, sequence);

@@ -22,6 +22,12 @@ static bool mmix_cpu_pre_save(void *opaque, Error **errp)
                    "MMIX nested trap restart state cannot be migrated");
         return false;
     }
+    if (env->insn_replay.masked_memory_access) {
+        error_setg(errp,
+                   "MMIX masked memory completion is active during "
+                   "migration");
+        return false;
+    }
     if (env->semihosting_bounce_active ||
         env->semihosting_pending_open_handle ||
         env->semihosting_pending_io_length) {

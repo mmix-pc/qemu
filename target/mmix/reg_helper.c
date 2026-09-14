@@ -14,26 +14,36 @@
 
 #define MMIX_STACK_NO_RING_INDEX UINT32_MAX
 
-static void mmix_cpu_stack_access_begin(CPUMMIXState *env,
+static bool mmix_cpu_stack_access_matches(const MMIXStackAccessState *a,
+                                          const MMIXStackAccessState *b)
+{
+    return a->kind == b->kind && a->address == b->address &&
+           a->ring_index == b->ring_index && a->value == b->value;
+}
+
+static bool mmix_cpu_stack_access_begin(CPUMMIXState *env,
                                         MMIXStackAccessKind kind,
                                         uint64_t address,
                                         uint32_t ring_index,
                                         uint64_t value)
 {
     MMIXStackAccessState *access = &env->stack_access;
+    MMIXStackAccessState requested = {
+        .kind = kind,
+        .ring_index = ring_index,
+        .address = address,
+        .value = value,
+    };
 
-    g_assert(access->kind == MMIX_STACK_ACCESS_NONE);
-    access->kind = kind;
-    access->address = address;
-    access->ring_index = ring_index;
-    access->value = value;
-}
+    if (access->kind != MMIX_STACK_ACCESS_NONE) {
+        g_assert(env->insn_replay.masked_memory_access);
+        g_assert(access->completed);
+        g_assert(mmix_cpu_stack_access_matches(access, &requested));
+        return true;
+    }
 
-static bool mmix_cpu_stack_access_matches(const MMIXStackAccessState *a,
-                                          const MMIXStackAccessState *b)
-{
-    return a->kind == b->kind && a->address == b->address &&
-           a->ring_index == b->ring_index && a->value == b->value;
+    *access = requested;
+    return false;
 }
 
 static void mmix_cpu_stack_access_commit(CPUMMIXState *env,
@@ -175,14 +185,15 @@ static void mmix_cpu_stack_store(CPUMMIXState *env, uintptr_t ra)
     unsigned idx = (addr >> 3) & env->lring_mask;
     uint64_t value = env->local_regs[idx];
 
-    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SPILL, addr, idx,
-                                value);
-    if (mmix_cpu_hosted_memory_enabled(env)) {
-        mmix_cpu_hosted_store_octa(env, addr, value);
-    } else if (mmix_cpu_store_stack_continuation(env, addr, value)) {
-        env->stack_overflow_pending = true;
-    } else {
-        cpu_stq_be_data_ra(env, addr, value, ra);
+    if (!mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SPILL, addr, idx,
+                                     value)) {
+        if (mmix_cpu_hosted_memory_enabled(env)) {
+            mmix_cpu_hosted_store_octa(env, addr, value);
+        } else if (mmix_cpu_store_stack_continuation(env, addr, value)) {
+            env->stack_overflow_pending = true;
+        } else {
+            cpu_stq_be_data_ra(env, addr, value, ra);
+        }
     }
     env->sregs[MMIX_SREG_RS] = addr + 8;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
@@ -194,8 +205,10 @@ static void mmix_cpu_stack_load(CPUMMIXState *env, uintptr_t ra)
     unsigned idx = (addr >> 3) & env->lring_mask;
     uint64_t value;
 
-    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_FILL, addr, idx, 0);
-    if (mmix_cpu_hosted_memory_enabled(env)) {
+    if (mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_FILL, addr, idx,
+                                    0)) {
+        value = env->stack_access.value;
+    } else if (mmix_cpu_hosted_memory_enabled(env)) {
         value = mmix_cpu_hosted_load_octa(env, addr);
     } else {
         value = cpu_ldq_be_data_ra(env, addr, ra);
@@ -210,12 +223,13 @@ static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val,
 {
     uint64_t addr = env->sregs[MMIX_SREG_RS];
 
-    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SAVE, addr,
-                                MMIX_STACK_NO_RING_INDEX, val);
-    if (mmix_cpu_hosted_memory_enabled(env)) {
-        mmix_cpu_hosted_store_octa(env, addr, val);
-    } else {
-        cpu_stq_be_data_ra(env, addr, val, ra);
+    if (!mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_SAVE, addr,
+                                     MMIX_STACK_NO_RING_INDEX, val)) {
+        if (mmix_cpu_hosted_memory_enabled(env)) {
+            mmix_cpu_hosted_store_octa(env, addr, val);
+        } else {
+            cpu_stq_be_data_ra(env, addr, val, ra);
+        }
     }
     env->sregs[MMIX_SREG_RS] = addr + 8;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
@@ -226,9 +240,10 @@ static uint64_t mmix_cpu_stack_read_octa(CPUMMIXState *env, uintptr_t ra)
     uint64_t addr = env->sregs[MMIX_SREG_RS] - 8;
     uint64_t value;
 
-    mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_UNSAVE, addr,
-                                MMIX_STACK_NO_RING_INDEX, 0);
-    if (mmix_cpu_hosted_memory_enabled(env)) {
+    if (mmix_cpu_stack_access_begin(env, MMIX_STACK_ACCESS_UNSAVE, addr,
+                                    MMIX_STACK_NO_RING_INDEX, 0)) {
+        value = env->stack_access.value;
+    } else if (mmix_cpu_hosted_memory_enabled(env)) {
         value = mmix_cpu_hosted_load_octa(env, addr);
     } else {
         value = cpu_ldq_be_data_ra(env, addr, ra);

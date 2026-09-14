@@ -117,6 +117,7 @@ SMP_SHOOTDOWN_HANDLER1_PHYS = 0xa400
 SMP_SHOOTDOWN_HANDLER0 = (1 << 63) | SMP_SHOOTDOWN_HANDLER0_PHYS
 SMP_SHOOTDOWN_HANDLER1 = (1 << 63) | SMP_SHOOTDOWN_HANDLER1_PHYS
 SMP_SHOOTDOWN_SENTINEL = 0x491
+RK_SHOOTDOWN = RK_IPI | RQ_PROGRAM_R | RQ_PROGRAM_W | RQ_PROGRAM_X
 
 SMP_SHOOTDOWN_GENERATION_REMOTE = 1
 SMP_SHOOTDOWN_GENERATION_LOCAL = 2
@@ -387,7 +388,7 @@ def _cpu1_shootdown_handler():
         *set_octa(R210, DYNAMIC_TRAP_RESUME_NEXT),
         insn(OR, R210, R204, R210),
         insn(PUT, SR_XX, 0, R210),
-        *set_octa(R255, RK_IPI),
+        *set_octa(R255, RK_SHOOTDOWN),
         insn(RESUME, 0, 0, 1),
     )
 
@@ -483,7 +484,7 @@ def _cpu1_shootdown_handler():
         insn(PUTI, SR_Q, 0, 0),
         smp_sync(1),
         smp_store(R200, R180, SMP_SHOOTDOWN_HANDLER_DONE),
-        *set_octa(R255, RK_IPI),
+        *set_octa(R255, RK_SHOOTDOWN),
         insn(RESUME, 0, 0, 1),
     )
 
@@ -782,7 +783,7 @@ def smp_remote_data_shootdown_program():
 
     program.mark("cpu1_generations")
     program.emit(
-        *set_octa(R78, RK_IPI),
+        *set_octa(R78, RK_SHOOTDOWN),
         insn(PUT, SR_K, 0, R78),
         smp_load(R79, R43, 0),
         *set_octa(R80, SMP_SHOOTDOWN_VALUE_A),
@@ -1022,7 +1023,7 @@ def smp_data_permission_shootdown_program():
 
     program.mark("permission_cpu1")
     program.emit(
-        *set_octa(R78, RK_IPI),
+        *set_octa(R78, RK_SHOOTDOWN),
         insn(PUT, SR_K, 0, R78),
         smp_load(R79, R43, 0),
         smp_store(R79, R43, 0),
@@ -1345,7 +1346,7 @@ def smp_instruction_shootdown_program():
 
     program.mark("instruction_cpu1")
     program.emit(
-        *set_octa(R78, RK_IPI),
+        *set_octa(R78, RK_SHOOTDOWN),
         insn(PUT, SR_K, 0, R78),
         insn(GO, R100, R43, R254),
         insn(ADDU, R79, R110, R254),

@@ -105,6 +105,9 @@ static TCGTBCPUState mmix_get_tb_cpu_state(CPUState *cs)
         if (env->insn_replay.substitute_operands) {
             cs_base |= MMIX_TB_REPLAY_SUBSTITUTE_FLAG;
         }
+        if (env->insn_replay.masked_memory_access) {
+            cs_base |= MMIX_TB_REPLAY_MASKED_MEMORY_FLAG;
+        }
     }
 
     return (TCGTBCPUState){
@@ -853,6 +856,40 @@ static uint64_t mmix_data_access_value(CPUMMIXState *env, uint32_t insn)
     return op & 1 ? z : mmix_cpu_read_reg(env, z);
 }
 
+static G_NORETURN void mmix_cpu_complete_masked_translation_fault(
+    CPUState *cs, vaddr addr, MMUAccessType access_type, uint64_t causes)
+{
+    CPUMMIXState *env = cpu_env(cs);
+
+    /* mmix-doc section 37 records masked requests without taking a trap. */
+    mmix_cpu_set_rq_bits(env, causes);
+    mmix_cpu_update_interrupt(env);
+
+    if (access_type == MMU_INST_FETCH) {
+        env->pc = addr + 4;
+        env->npc = addr + 8;
+        cpu_loop_exit_noexc(cs);
+    }
+
+    if (!env->insn_replay.active) {
+        env->insn_replay = (MMIXInsnReplayState) {
+            .insn_pc = env->pc,
+            .continuation = env->npc,
+            .insn = env->data_access_insn,
+            .active = true,
+        };
+    } else {
+        g_assert(env->insn_replay.insn_pc == env->pc);
+        g_assert(env->insn_replay.insn == env->data_access_insn);
+    }
+
+    env->insn_replay.masked_memory_access = true;
+    if (env->stack_access.kind != MMIX_STACK_ACCESS_NONE) {
+        env->stack_access.completed = true;
+    }
+    cpu_loop_exit_noexc(cs);
+}
+
 static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
                               MMUAccessType access_type, int mmu_idx,
                               bool probe, uintptr_t retaddr)
@@ -893,6 +930,10 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
             env->forced_translation_access = access_type;
             cs->exception_index = EXCP_MMIX_FORCED_TRANSLATION;
             cpu_loop_exit(cs);
+        }
+        if ((translation.causes & env->sregs[MMIX_SREG_RK]) == 0) {
+            mmix_cpu_complete_masked_translation_fault(
+                cs, addr, access_type, translation.causes);
         }
         env->program_exception_data_access =
             access_type != MMU_INST_FETCH &&

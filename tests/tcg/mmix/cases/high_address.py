@@ -101,7 +101,7 @@ def unprivileged_device_alias_program(name, operation, address):
     prefix = [
         wyde(SETL, R1, 0x80),
         insn(PUT, SR_TT, 0, R1),
-        *set_octa(R2, RQ_PROGRAM_K),
+        *set_octa(R2, RQ_PROGRAM_K | RQ_PROGRAM_N),
         insn(PUT, SR_K, 0, R2),
         *set_octa(R3, (1 << 63) | address),
     ]

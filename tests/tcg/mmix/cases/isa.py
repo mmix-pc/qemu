@@ -713,6 +713,8 @@ def forced_data_translation_protection_test(name, main, pte,
     dynamic_setup = [
         *set_octa(R22, dynamic_handler_address),
         insn(PUT, SR_TT, R0, R22),
+        *set_octa(R23, cause),
+        insn(PUT, SR_K, R0, R23),
     ]
     expected_where += len(b"".join(dynamic_setup))
     return MMIXTest(
@@ -728,6 +730,7 @@ def forced_data_translation_protection_test(name, main, pte,
                 insn(GET, R42, R0, SR_YY),
                 *set_octa(R50, pte),
                 insn(PUT, SR_ZZ, R0, R50),
+                *set_octa(R255, cause),
                 insn(RESUME, R0, R0, 1),
             ],
             initial_value,
@@ -2095,11 +2098,189 @@ RECOVERABLE_STORE_REPLAY_TESTS = [
 ]
 
 
+def masked_translation_load_test():
+    program = [
+        *set_octa(R1, VM_PAGE_TABLE),
+        wyde(SETL, R2, 7),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R2, 0x6003),
+        insn(STOUI, R2, R1, 8),
+        *set_octa(R3, 0x6000),
+        *set_octa(R4, 0x1122334455667788),
+        insn(STOU, R4, R3, R0),
+        insn(PUTI, SR_K, R0, 0),
+        *set_octa(R5, VM_RV_PAGE0),
+        insn(PUT, SR_V, R0, R5),
+        wyde(SETL, R6, 0xdead),
+        wyde(SETL, R7, 0x2000),
+        insn(LDOU, R6, R7, R0),
+        insn(GET, R40, R0, SR_Q),
+        wyde(SETL, R8, 0x55),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "virtual-translation-read-protection-masked",
+        image,
+        pc=len(image) - 4,
+        regs={R6: 0, R8: 0x55, R40: RQ_PROGRAM_R},
+    )
+
+
+def masked_translation_store_test():
+    program = [
+        *set_octa(R1, VM_PAGE_TABLE),
+        wyde(SETL, R2, 7),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R2, 0x6005),
+        insn(STOUI, R2, R1, 8),
+        *set_octa(R3, 0x6000),
+        *set_octa(R4, 0x1122334455667788),
+        insn(STOU, R4, R3, R0),
+        insn(PUTI, SR_K, R0, 0),
+        *set_octa(R5, VM_RV_PAGE0),
+        insn(PUT, SR_V, R0, R5),
+        wyde(SETL, R6, 0x2000),
+        wyde(SETL, R7, 0xbeef),
+        insn(STOU, R7, R6, R0),
+        insn(LDOU, R8, R6, R0),
+        insn(GET, R40, R0, SR_Q),
+        wyde(SETL, R9, 0x55),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "virtual-translation-write-protection-masked",
+        image,
+        pc=len(image) - 4,
+        regs={
+            R8: 0x1122334455667788,
+            R9: 0x55,
+            R40: RQ_PROGRAM_W,
+        },
+    )
+
+
+def masked_translation_fetch_test():
+    setup = [
+        *set_octa(R1, VM_PAGE_TABLE),
+        wyde(SETL, R2, 7),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R2, 0x2006),
+        insn(STOUI, R2, R1, 8),
+        *set_octa(R2, 0x4007),
+        insn(STOUI, R2, R1, 16),
+        insn(PUTI, SR_K, R0, 0),
+        *set_octa(R3, VM_RV_PAGE0),
+        insn(PUT, SR_V, R0, R3),
+        wyde(SETL, R4, 0x3ffc),
+        insn(GO, R5, R4, R0),
+    ]
+
+    return MMIXTest(
+        "virtual-translation-execute-protection-masked",
+        program_with_regions(
+            (0, setup),
+            (0x3ffc, [wyde(SETL, R30, 0xdead)]),
+            (0x4000, [
+                insn(GET, R40, R0, SR_Q),
+                halt(),
+            ]),
+        ),
+        pc=0x4004,
+        regs={R30: 0, R40: RQ_PROGRAM_X},
+    )
+
+
+def masked_negative_address_test():
+    program = [
+        *set_octa(R1, VM_PAGE_TABLE),
+        wyde(SETL, R2, 7),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R2, 0x6007),
+        insn(STOUI, R2, R1, 8),
+        *set_octa(R3, 0x6000),
+        *set_octa(R4, 0x1122334455667788),
+        insn(STOU, R4, R3, R0),
+        *set_octa(R5, VM_RV_PAGE0),
+        insn(PUT, SR_V, R0, R5),
+        *set_octa(R6, RQ_PROGRAM_K),
+        insn(PUT, SR_K, R0, R6),
+        *set_octa(R7, 0x8000000000006000),
+        insn(LDOU, R8, R7, R0),
+        wyde(SETL, R9, 0xbeef),
+        insn(STOU, R9, R7, R0),
+        wyde(SETL, R10, 0x2000),
+        insn(LDOU, R11, R10, R0),
+        insn(GET, R40, R0, SR_Q),
+        wyde(SETL, R12, 0x55),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "negative-address-data-access-masked",
+        image,
+        pc=len(image) - 4,
+        regs={
+            R8: 0,
+            R11: 0x1122334455667788,
+            R12: 0x55,
+            R40: RQ_PROGRAM_N,
+        },
+    )
+
+
+def masked_missing_page_test():
+    program = [
+        *set_octa(R1, VM_PAGE_TABLE),
+        wyde(SETL, R2, 7),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R3, 0x6000),
+        *set_octa(R4, 0x1122334455667788),
+        insn(STOU, R4, R3, R0),
+        insn(PUTI, SR_K, R0, 0),
+        *set_octa(R5, VM_RV_PAGE0),
+        insn(PUT, SR_V, R0, R5),
+        wyde(SETL, R6, 0x2000),
+        insn(LDOU, R7, R6, R0),
+        wyde(SETL, R8, 0xbeef),
+        insn(STOU, R8, R6, R0),
+        *set_octa(R9, 0x8000000000002008),
+        *set_octa(R10, 0x6007),
+        insn(STOU, R10, R9, R0),
+        insn(LDOU, R11, R6, R0),
+        insn(GET, R40, R0, SR_Q),
+        wyde(SETL, R12, 0x55),
+        halt(),
+    ]
+    image = b"".join(program)
+
+    return MMIXTest(
+        "virtual-translation-missing-page-masked",
+        image,
+        pc=len(image) - 4,
+        regs={
+            R7: 0,
+            R11: 0x1122334455667788,
+            R12: 0x55,
+            R40: RQ_PROGRAM_R | RQ_PROGRAM_W,
+        },
+    )
+
+
 ISA_TESTS = [
     retained_asn_switch_test(),
     retained_page_size_test(),
     retained_asn_ldvts_test(),
     sync6_translation_cache_flush_test(),
+    masked_translation_load_test(),
+    masked_translation_store_test(),
+    masked_translation_fetch_test(),
+    masked_negative_address_test(),
+    masked_missing_page_test(),
     MMIXTest(
         "raw-image-startup-registers",
         b"".join(
@@ -2674,6 +2855,8 @@ ISA_TESTS = [
             [
                 wyde(SETL, R1, 0x80),  # handler address
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R9, RQ_PROGRAM_W),
+                insn(PUT, SR_K, 0, R9),
                 *set_octa(R10, VM_PAGE_TABLE),
                 wyde(SETL, R11, 5),
                 insn(STOU, R11, R10, R0),
@@ -2698,7 +2881,7 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_W,
             R41: RQ_PROGRAM_W | int.from_bytes(insn(STOU, R13, R14, R0),
                                                 "big"),
-            R42: 0x40,
+            R42: 0x54,
             R43: 0,
         },
     ),
@@ -2730,6 +2913,8 @@ ISA_TESTS = [
             [
                 *set_octa(R1, NEGATIVE_HANDLER),
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R9, RQ_PROGRAM_R),
+                insn(PUT, SR_K, 0, R9),
                 *set_octa(R2, VM_PAGE_TABLE),
                 wyde(SETL, R3, 3),
                 insn(STOU, R3, R2, R0),
@@ -2754,7 +2939,7 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_R,
             R41: RQ_PROGRAM_R | int.from_bytes(insn(LDOU, R6, R5, R0),
                                                 "big"),
-            R42: 0x48,
+            R42: 0x5c,
         },
     ),
     MMIXTest(
@@ -2763,6 +2948,8 @@ ISA_TESTS = [
             [
                 *set_octa(R1, NEGATIVE_HANDLER),
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R9, RQ_PROGRAM_X),
+                insn(PUT, SR_K, 0, R9),
                 *set_octa(R2, VM_PAGE_TABLE),
                 wyde(SETL, R3, 6),
                 insn(STOU, R3, R2, R0),
@@ -2784,7 +2971,7 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_X,
             R41: RQ_PROGRAM_X |
                  int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
-            R42: 0x44,
+            R42: 0x58,
         },
     ),
     MMIXTest(
@@ -2793,6 +2980,8 @@ ISA_TESTS = [
             [
                 *set_octa(R1, NEGATIVE_HANDLER),
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R9, RQ_PROGRAM_R),
+                insn(PUT, SR_K, 0, R9),
                 *set_octa(R2, VM_PAGE_TABLE_ROOT2),
                 wyde(SETL, R3, 7),
                 insn(STOU, R3, R2, R0),
@@ -2819,7 +3008,7 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_R,
             R41: RQ_PROGRAM_R | int.from_bytes(insn(LDOU, R7, R6, R0),
                                                 "big"),
-            R42: 0x68,
+            R42: 0x7c,
         },
     ),
     MMIXTest(
@@ -2828,6 +3017,8 @@ ISA_TESTS = [
             [
                 *set_octa(R1, NEGATIVE_HANDLER),
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R9, RQ_PROGRAM_X),
+                insn(PUT, SR_K, 0, R9),
                 *set_octa(R2, 0x11110c0000002000),
                 insn(PUT, SR_V, 0, R2),
                 wyde(SETL, R3, 0x00ff),    # skipped
@@ -2846,7 +3037,7 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_X,
             R41: RQ_PROGRAM_X |
                  int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
-            R42: 0x2c,
+            R42: 0x40,
         },
     ),
     MMIXTest(
@@ -2855,6 +3046,8 @@ ISA_TESTS = [
             [
                 *set_octa(R1, NEGATIVE_HANDLER),
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R9, RQ_PROGRAM_X),
+                insn(PUT, SR_K, 0, R9),
                 *set_octa(R2, VM_RV_PAGE0 | 2),
                 insn(PUT, SR_V, 0, R2),
                 wyde(SETL, R3, 0x00ff),
@@ -2873,7 +3066,7 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_X,
             R41: RQ_PROGRAM_X |
                  int.from_bytes(insn(SWYM, 0, 0, 0), "big"),
-            R42: 0x2c,
+            R42: 0x40,
         },
     ),
     MMIXTest(
@@ -2882,7 +3075,7 @@ ISA_TESTS = [
             [
                 wyde(SETL, R1, 0x80),  # handler address
                 insn(PUT, SR_TT, 0, R1),
-                *set_octa(R2, RQ_PROGRAM_K),
+                *set_octa(R2, RQ_PROGRAM_K | RQ_PROGRAM_N),
                 insn(PUT, SR_K, 0, R2),
                 *set_octa(R3, 0x8000000000000300),
                 insn(LDOU, R4, R3, R0),
@@ -2914,7 +3107,7 @@ ISA_TESTS = [
             [
                 wyde(SETL, R1, 0x80),  # handler address
                 insn(PUT, SR_TT, 0, R1),
-                *set_octa(R2, RQ_PROGRAM_K),
+                *set_octa(R2, RQ_PROGRAM_K | RQ_PROGRAM_N),
                 insn(PUT, SR_K, 0, R2),
                 *set_octa(R3, 0x8000000000000300),
                 wyde(SETL, R4, 0x00aa),
@@ -3848,8 +4041,10 @@ ISA_TESTS = [
         "ldvts-permission-update-flushes-tlb",
         program_with_handler(
             [
-                *set_octa(R1, NEGATIVE_HANDLER),
+                *set_octa(R1, 0x80000000000000a0),
                 insn(PUT, SR_TT, 0, R1),
+                *set_octa(R12, RQ_PROGRAM_W),
+                insn(PUT, SR_K, 0, R12),
                 *set_octa(R2, VM_PAGE_TABLE),
                 wyde(SETL, R3, 7),
                 insn(STOU, R3, R2, R0),
@@ -3865,7 +4060,7 @@ ISA_TESTS = [
                 insn(STOU, R10, R6, R0),
                 wyde(SETL, R11, 0x00ff),
             ],
-            0x80,
+            0xa0,
             [
                 insn(GET, R40, 0, SR_Q),
                 insn(GET, R41, 0, SR_XX),
@@ -3873,14 +4068,14 @@ ISA_TESTS = [
                 halt(),
             ],
         ),
-        pc=0x800000000000008c,
+        pc=0x80000000000000ac,
         regs={
             R9: 2,
             R11: 0,
             R40: RQ_PROGRAM_W,
             R41: RQ_PROGRAM_W |
                  int.from_bytes(insn(STOU, R10, R6, R0), "big"),
-            R42: 0x6c,
+            R42: 0x80,
         },
     ),
     MMIXTest(
@@ -4091,6 +4286,8 @@ ISA_TESTS = [
             [
                 *set_octa(R22, 0x8000000000000300),
                 insn(PUT, SR_TT, R0, R22),
+                *set_octa(R23, RQ_PROGRAM_W),
+                insn(PUT, SR_K, R0, R23),
                 wyde(SETL, R10, FORCED_TRANSLATION_VIRTUAL),
                 insn(LDOU, R11, R10, R0),
                 wyde(SETL, R12, 0x55),
@@ -4101,6 +4298,7 @@ ISA_TESTS = [
                 insn(ADDI, R60, R60, 1),
                 *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 4),
                 insn(PUT, SR_ZZ, R0, R50),
+                *set_octa(R255, RQ_PROGRAM_W),
                 insn(RESUME, R0, R0, 1),
             ],
             0x1122334455667788,
@@ -4122,7 +4320,7 @@ ISA_TESTS = [
             R70: RQ_PROGRAM_P | RQ_PROGRAM_W,
             R71: RQ_PROGRAM_W |
                  int.from_bytes(insn(STOU, R12, R10, R0), "big"),
-            R72: 0x800000000000014c,
+            R72: 0x8000000000000160,
         },
     ),
     MMIXTest(
@@ -4179,6 +4377,7 @@ ISA_TESTS = [
                 insn(PUT, SR_TT, R0, R45),
                 *set_octa(R50, FORCED_TRANSLATION_PHYSICAL | 6),
                 insn(PUT, SR_ZZ, R0, R50),
+                *set_octa(R255, RQ_PROGRAM_X),
                 insn(RESUME, R0, R0, 1),
             ],
         ),

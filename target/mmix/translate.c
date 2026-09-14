@@ -28,6 +28,7 @@ typedef struct DisasContext {
     TCGv_i64 replay_z;
     bool replay;
     bool substitute_operands;
+    bool masked_memory_access;
     bool hosted_memory;
 } DisasContext;
 
@@ -1067,7 +1068,9 @@ static bool gen_load_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, align_mask);
-    if (ctx->hosted_memory) {
+    if (ctx->masked_memory_access) {
+        tcg_gen_movi_i64(val, 0);
+    } else if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_load(val, tcg_env, addr,
                                     tcg_constant_i32(memop));
     } else {
@@ -1083,7 +1086,9 @@ static bool gen_ldht(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
-    if (ctx->hosted_memory) {
+    if (ctx->masked_memory_access) {
+        tcg_gen_movi_i64(val, 0);
+    } else if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_load(val, tcg_env, addr,
                                     tcg_constant_i32(MO_BEUL));
     } else {
@@ -1135,7 +1140,9 @@ static bool gen_ldsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
-    if (ctx->hosted_memory) {
+    if (ctx->masked_memory_access) {
+        tcg_gen_movi_i64(val, 0);
+    } else if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_load(val, tcg_env, addr,
                                     tcg_constant_i32(MO_BEUL));
     } else {
@@ -1157,6 +1164,10 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 new = gen_load_reg(a->x);
     TCGv_i64 next_rp = tcg_temp_new_i64();
     TCGv_i64 success = tcg_temp_new_i64();
+
+    if (ctx->masked_memory_access) {
+        return true;
+    }
 
     gen_effective_address(addr, a, immediate, 7);
     gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
@@ -1188,6 +1199,10 @@ static bool gen_store_value(DisasContext *ctx, arg_xyz *a, bool immediate,
                             MemOp memop, uint64_t align_mask, TCGv_i64 val)
 {
     TCGv_i64 addr = tcg_temp_new_i64();
+
+    if (ctx->masked_memory_access) {
+        return true;
+    }
 
     gen_effective_address(addr, a, immediate, align_mask);
     if (ctx->hosted_memory) {
@@ -1221,7 +1236,9 @@ static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_effective_address(addr, a, immediate, 3);
     tcg_gen_shri_i64(val, gen_load_reg(a->x), 32);
-    if (ctx->hosted_memory) {
+    if (ctx->masked_memory_access) {
+        return true;
+    } else if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_store(tcg_env, addr, val,
                                      tcg_constant_i32(MO_BEUL));
         ctx->base.is_jmp = DISAS_TOO_MANY;
@@ -1263,7 +1280,9 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
                          gen_load_reg(a->x));
     gen_data_access_value(val);
-    if (ctx->hosted_memory) {
+    if (ctx->masked_memory_access) {
+        return true;
+    } else if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_store(tcg_env, addr, val,
                                      tcg_constant_i32(MO_BEUL));
         ctx->base.is_jmp = DISAS_TOO_MANY;
@@ -1322,7 +1341,10 @@ static void mmix_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     ctx->replay = dcbase->tb->cs_base & MMIX_TB_REPLAY_FLAG;
     ctx->substitute_operands =
         dcbase->tb->cs_base & MMIX_TB_REPLAY_SUBSTITUTE_FLAG;
+    ctx->masked_memory_access =
+        dcbase->tb->cs_base & MMIX_TB_REPLAY_MASKED_MEMORY_FLAG;
     g_assert(!ctx->substitute_operands || ctx->replay);
+    g_assert(!ctx->masked_memory_access || ctx->replay);
     if (ctx->replay) {
         dcbase->max_insns = 1;
     }

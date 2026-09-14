@@ -630,6 +630,7 @@ def spill_fault_resume_program(depth=10, protect_before_push=False,
             insn(GET, R183, 0, SR_ZZ),
             insn(GET, R184, 0, SR_BB),
             insn(ADDU, R185, R255, R250),
+            insn(PUT, SR_K, 0, R248),
         ]
         handler_call_pc = handler + len(b"".join(outer))
         outer.extend([
@@ -1218,6 +1219,7 @@ def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
         insn(PUT, SR_TT, 0, R247),
         *set_octa(R248, RQ_PROGRAM_B),
         insn(PUT, SR_K, 0, R248),
+        *set_octa(R249, RQ_PROGRAM_R),
         *(retained_asn_setup() if retained_asn else []),
         insn(PUT, SR_V, 0, R246),
     ]
@@ -1266,6 +1268,7 @@ def handler_pop_fill_fault_resume_program(depth=10, retained_asn=False):
         insn(GET, R183, 0, SR_ZZ),
         insn(GET, R184, 0, SR_BB),
         insn(ADDU, R185, R255, R250),
+        insn(PUT, SR_K, 0, R249),
     ]
     handler_call_pc = handler_entry + len(b"".join(outer_handler))
     outer_handler.extend([
