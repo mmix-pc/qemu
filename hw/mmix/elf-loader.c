@@ -266,8 +266,8 @@ static bool mmix_preflight_elf_segments(
         }
         g_array_append_val(ranges, range);
 
-        if ((flags & PF_X) && identity_mapping && memory_size >= 4 &&
-            entry % 4 == 0 && entry >= virtual_address &&
+        if ((flags & PF_X) && memory_size >= 4 && entry % 4 == 0 &&
+            entry >= virtual_address &&
             entry - virtual_address <= memory_size - 4) {
             entry_valid = true;
         }
@@ -281,9 +281,9 @@ static bool mmix_preflight_elf_segments(
     if (!entry_valid) {
         if (linux_addressing) {
             error_setg(errp, "MMIX Linux ELF entry 0x%" PRIx64 " in '%s' is "
-                       "not a complete aligned instruction in a positive "
-                       "identity-mapped executable PT_LOAD segment", entry,
-                       filename);
+                       "not a complete aligned instruction in an identity or "
+                       "negative direct-alias executable PT_LOAD segment",
+                       entry, filename);
         } else {
             error_setg(errp, "MMIX ELF entry 0x%" PRIx64 " in '%s' is not a "
                        "complete aligned instruction in an executable "

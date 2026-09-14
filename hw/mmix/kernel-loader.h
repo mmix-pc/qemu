@@ -18,7 +18,7 @@ typedef enum MMIXKernelImageType {
 } MMIXKernelImageType;
 
 typedef struct MMIXKernelLoadInfo {
-    hwaddr entry;
+    uint64_t entry;
     MMIXKernelImageType image_type;
     uint64_t boot_cpu_id;
     bool has_global_registers;

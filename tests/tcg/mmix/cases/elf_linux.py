@@ -36,9 +36,11 @@ class MMIXLinuxStateTest:
     image: bytes
     initrd: bytes
     entry: int
+    load_address: int
     idle_pcs: tuple[int, ...]
     bss: int
     qemu_args: tuple[str, ...]
+    security_checks: bool = False
 
 
 def linux_direct_alias_image():
@@ -69,6 +71,9 @@ def linux_direct_alias_image():
 
 LINUX_DIRECT_ALIAS_IMAGE = linux_direct_alias_image()
 LINUX_DIRECT_ALIAS_ADDRESS = LINUX_NEGATIVE_ALIAS_BIT | 0x2000
+LINUX_NEGATIVE_ENTRY_IMAGE = elf64_patch_ehdr_field(
+    LINUX_DIRECT_ALIAS_IMAGE, "entry", LINUX_DIRECT_ALIAS_ADDRESS
+)
 
 
 LINUX_DIRECT_ALIAS_TESTS = [
@@ -78,6 +83,14 @@ LINUX_DIRECT_ALIAS_TESTS = [
         pc=LINUX_DIRECT_ALIAS_ADDRESS + 4,
         regs={R34: 0x55},
         qemu_args=LINUX_MACHINE,
+    ),
+    MMIXELFTest(
+        "elf-linux-negative-entry",
+        LINUX_NEGATIVE_ENTRY_IMAGE,
+        pc=LINUX_DIRECT_ALIAS_ADDRESS + 4,
+        regs={R34: 0x55},
+        qemu_args=LINUX_MACHINE,
+        security_checks=True,
     ),
 ]
 
@@ -104,6 +117,13 @@ LINUX_ENTRY_STATE_TESTS = [
         1,
         ("-m", "8G", *LINUX_MACHINE),
         minimum_fdt=0x100000000,
+    ),
+    MMIXLinuxEntryStateTest(
+        "elf-linux-negative-entry-smp",
+        LINUX_NEGATIVE_ENTRY_IMAGE,
+        LINUX_DIRECT_ALIAS_ADDRESS,
+        2,
+        ("-smp", "2", *LINUX_MACHINE),
     ),
     MMIXLinuxEntryStateTest(
         "elf-linux-command-line-limit",
@@ -240,7 +260,8 @@ LINUX_SMP_ENTRY_TESTS = [linux_smp_entry_program()]
 
 
 def linux_state_program():
-    entry = 0x1000
+    load_address = 0x1000
+    entry = LINUX_NEGATIVE_ALIAS_BIT | load_address
     bss = 0x4000
     program = SMPProgram()
 
@@ -256,10 +277,12 @@ def linux_state_program():
 
     return MMIXLinuxStateTest(
         name="elf-linux-reset-and-snapshot-state",
-        image=elf64_image(entry, program.build(), entry=entry,
-                          mem_size=bss - entry + 8),
+        image=elf64_image(load_address, program.build(), entry=entry,
+                          mem_size=bss - load_address + 8,
+                          virtual_address=entry),
         initrd=b"MMIX Linux reset and snapshot initrd\n",
         entry=entry,
+        load_address=load_address,
         idle_pcs=(
             program.address("boot_idle", base=entry),
             program.address("secondary_idle", base=entry),
@@ -271,6 +294,7 @@ def linux_state_program():
             *LINUX_MACHINE,
             "-initrd", "$INITRD",
         ),
+        security_checks=True,
     )
 
 
@@ -302,12 +326,21 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
         ("does not use an identity or negative direct-alias mapping",),
     ),
     MMIXProcessFailure(
-        "elf-linux-negative-entry",
+        "elf-linux-negative-entry-outside-segment",
         elf64_patch_ehdr_field(
-            LINUX_DIRECT_ALIAS_IMAGE, "entry", LINUX_DIRECT_ALIAS_ADDRESS
+            LINUX_DIRECT_ALIAS_IMAGE, "entry",
+            LINUX_NEGATIVE_ALIAS_BIT | 0x4000
         ),
         LINUX_MACHINE,
-        ("positive identity-mapped executable PT_LOAD segment",),
+        ("identity or negative direct-alias executable PT_LOAD segment",),
+    ),
+    MMIXProcessFailure(
+        "elf-linux-negative-entry-unaligned",
+        elf64_patch_ehdr_field(
+            LINUX_DIRECT_ALIAS_IMAGE, "entry", LINUX_DIRECT_ALIAS_ADDRESS + 2
+        ),
+        LINUX_MACHINE,
+        ("identity or negative direct-alias executable PT_LOAD segment",),
     ),
     MMIXProcessFailure(
         "elf-retired-bootinfo-startup-abi",

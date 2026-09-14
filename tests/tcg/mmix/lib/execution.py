@@ -378,7 +378,8 @@ def run_elf_test(qemu, workdir, test):
     qemu_args = _trusted_semihosting_args(test.qemu_args)
     completed = run_kernel(qemu, image, serial=serial_arg, trace="int",
                            log=log, qemu_args=qemu_args, check=False,
-                           timeout=10)
+                           timeout=10,
+                           security_checks=getattr(test, "security_checks", False))
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
@@ -1339,6 +1340,7 @@ def run_linux_state_test(qemu, workdir, test):
             "-qtest-log", "/dev/null",
             "-drive", f"file={snapshot},format=qcow2,if=none",
         ),
+        security_checks=test.security_checks,
     )
     process = subprocess.Popen(
         command,
@@ -1377,7 +1379,8 @@ def run_linux_state_test(qemu, workdir, test):
             ">Q", _fdt_property(original_fdt, "/chosen",
                                  "linux,initrd-start")
         )[0]
-        original_code = _qtest_read(qtest, test.entry, len(saved_code))
+        original_code = _qtest_read(qtest, test.load_address,
+                                    len(saved_code))
         original_initrd = _qtest_read(qtest, initrd_address,
                                       len(test.initrd))
         assert original_initrd == test.initrd
@@ -1391,7 +1394,7 @@ def run_linux_state_test(qemu, workdir, test):
             assert _hmp_register_value(dump, "r32 =0x") == cpu
             assert _hmp_register_value(dump, "r33 =0x") == 0x40 + cpu
 
-        _qtest_write(qtest, test.entry, saved_code)
+        _qtest_write(qtest, test.load_address, saved_code)
         _qtest_write(qtest, test.bss, saved_bss)
         _qtest_write(qtest, fdt_address + 16, saved_fdt)
         _qtest_write(qtest, initrd_address, saved_initrd)
@@ -1412,7 +1415,7 @@ def run_linux_state_test(qemu, workdir, test):
             assert _hmp_register_value(dump, "r1  =0x") == fdt_address
             assert _hmp_register_value(dump, "rO=0x") == stacks[cpu]
             assert _hmp_register_value(dump, "rS=0x") == stacks[cpu]
-        assert _qtest_read(qtest, test.entry, 8) == original_code
+        assert _qtest_read(qtest, test.load_address, 8) == original_code
         assert _qtest_read(qtest, test.bss, 8) == bytes(8)
         assert _qtest_read(qtest, fdt_address, fdt_size) == original_fdt
         assert _qtest_read(qtest, initrd_address,
@@ -1432,7 +1435,7 @@ def run_linux_state_test(qemu, workdir, test):
             assert _hmp_register_value(dump, "r32 =0x") == cpu
             assert _hmp_register_value(dump, "r33 =0x") == 0x40 + cpu
             assert _hmp_register_value(dump, "r1  =0x") == fdt_address
-        assert _qtest_read(qtest, test.entry, 8) == saved_code
+        assert _qtest_read(qtest, test.load_address, 8) == saved_code
         assert _qtest_read(qtest, test.bss, 8) == saved_bss
         assert _qtest_read(qtest, fdt_address + 16, 8) == saved_fdt
         assert _qtest_read(qtest, initrd_address, 8) == saved_initrd

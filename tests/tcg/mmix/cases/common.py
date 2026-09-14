@@ -593,8 +593,10 @@ def elf64_phdr(load_address, data, mem_size=None, offset=0x100,
     )
 
 
-def elf64_image(load_address, data, mem_size=None, entry=0, offset=0x100):
-    phdr = elf64_phdr(load_address, data, mem_size=mem_size, offset=offset)
+def elf64_image(load_address, data, mem_size=None, entry=0, offset=0x100,
+                virtual_address=None):
+    phdr = elf64_phdr(load_address, data, mem_size=mem_size, offset=offset,
+                      virtual_address=virtual_address)
     prefix = elf64_header(entry=entry, phnum=1) + phdr
     if offset < len(prefix):
         raise ValueError("ELF segment offset overlaps the program header table")
@@ -859,6 +861,7 @@ class MMIXELFTest:
     output: Optional[bytes] = None
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
+    security_checks: bool = False
 
 
 def case_id(test):
