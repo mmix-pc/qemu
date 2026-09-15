@@ -26,6 +26,7 @@ typedef struct DisasContext {
     uint32_t insn;
     TCGv_i64 replay_y;
     TCGv_i64 replay_z;
+    TCGv_i64 security_cause;
     bool replay;
     bool substitute_operands;
     bool masked_memory_access;
@@ -105,6 +106,14 @@ static void gen_consume_insn_replay(DisasContext *ctx)
     }
 }
 
+static void gen_complete_instruction_security(DisasContext *ctx,
+                                              TCGv_i64 continuation)
+{
+    gen_helper_mmix_complete_instruction_security(
+        tcg_env, ctx->security_cause, tcg_constant_i32(ctx->insn),
+        continuation);
+}
+
 static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
 {
     gen_consume_insn_replay(ctx);
@@ -112,6 +121,7 @@ static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
         gen_helper_mmix_check_control_transfer(
             tcg_env, tcg_constant_i32(ctx->insn), tcg_constant_i64(dest));
     }
+    gen_complete_instruction_security(ctx, tcg_constant_i64(dest));
     if (!ctx->replay && translator_use_goto_tb(&ctx->base, dest)) {
         tcg_gen_goto_tb(tb_slot_idx);
         tcg_gen_movi_i64(cpu_pc, dest);
@@ -909,6 +919,7 @@ static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
     gen_consume_insn_replay(ctx);
     gen_helper_mmix_check_control_transfer(tcg_env,
                                            tcg_constant_i32(ctx->insn), dest);
+    gen_complete_instruction_security(ctx, dest);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -936,6 +947,7 @@ static bool gen_pushgo(DisasContext *ctx, arg_xyz *a, bool immediate)
     gen_consume_insn_replay(ctx);
     gen_helper_mmix_check_control_transfer(tcg_env,
                                            tcg_constant_i32(ctx->insn), dest);
+    gen_complete_instruction_security(ctx, dest);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -952,6 +964,7 @@ static bool trans_POP(DisasContext *ctx, arg_xyz *a)
     gen_consume_insn_replay(ctx);
     gen_helper_mmix_check_control_transfer(tcg_env,
                                            tcg_constant_i32(ctx->insn), dest);
+    gen_complete_instruction_security(ctx, dest);
     tcg_gen_mov_i64(cpu_pc, dest);
     tcg_gen_addi_i64(cpu_npc, dest, 4);
     tcg_gen_lookup_and_goto_ptr();
@@ -1394,7 +1407,8 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
 
     tcg_gen_movi_i64(cpu_pc, pc);
     tcg_gen_movi_i64(cpu_npc, ctx->base.pc_next);
-    gen_helper_mmix_check_instruction_security(tcg_env,
+    ctx->security_cause = tcg_temp_new_i64();
+    gen_helper_mmix_check_instruction_security(ctx->security_cause, tcg_env,
                                                tcg_constant_i32(insn));
     if (!decode(ctx, insn)) {
         arg_xyz a = {
@@ -1407,6 +1421,8 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     /* Faultable helpers must complete before replay ownership is released. */
     if (ctx->base.is_jmp != DISAS_NORETURN) {
         gen_consume_insn_replay(ctx);
+        gen_complete_instruction_security(
+            ctx, tcg_constant_i64(ctx->base.pc_next));
     }
 }
 

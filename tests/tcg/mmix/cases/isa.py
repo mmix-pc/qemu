@@ -3212,7 +3212,7 @@ ISA_TESTS = [
             halt(),
         ]),
         pc=0x8000000600000000,
-        regs={R5: 0},
+        regs={R5: 0x55},
         security_checks=True,
         log_patterns=(
             "MMIX dynamic trap causes=0x0000000200000000 from "
@@ -3220,7 +3220,7 @@ ISA_TESTS = [
             "rK =0x0000000000000000",
             "rQ =0x0000000200000000",
             "rWW=0x0000000000000004",
-            "rXX=0x00000002e3050055",
+            "rXX=0x80000002e3050055",
         ),
     ),
     MMIXTest(

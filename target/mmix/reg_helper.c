@@ -364,7 +364,8 @@ void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
     cpu_loop_exit(cs);
 }
 
-void helper_mmix_check_instruction_security(CPUMMIXState *env, uint32_t insn)
+uint64_t helper_mmix_check_instruction_security(CPUMMIXState *env,
+                                                uint32_t insn)
 {
     CPUState *cs = env_cpu(env);
     uint8_t opcode = insn >> 24;
@@ -383,7 +384,7 @@ void helper_mmix_check_instruction_security(CPUMMIXState *env, uint32_t insn)
 
     /* Enforce the program-bit security rule from mmix-doc section 37. */
     if (!env_archcpu(env)->security_checks) {
-        return;
+        return 0;
     }
     if (mmix_cpu_in_privileged_location(env)) {
         if (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_P) {
@@ -395,15 +396,29 @@ void helper_mmix_check_instruction_security(CPUMMIXState *env, uint32_t insn)
         env->sregs[MMIX_SREG_RK] |= MMIX_RQ_PROGRAM_S;
     }
     if (cause == 0) {
-        return;
+        return 0;
     }
+
+    mmix_cpu_set_rq_bits(env, cause);
 
     /* MMIXware permits these instructions to establish or leave a context. */
     if (opcode == MMIX_TRAP_OPCODE || opcode == MMIX_PUT_OPCODE ||
         opcode == MMIX_PUTI_OPCODE || opcode == MMIX_RESUME_OPCODE) {
-        mmix_cpu_set_rq_bits(env, cause);
+        return 0;
+    }
+    return cause;
+}
+
+void helper_mmix_complete_instruction_security(CPUMMIXState *env,
+                                               uint64_t cause,
+                                               uint32_t insn,
+                                               uint64_t continuation)
+{
+    if (cause == 0) {
         return;
     }
+
+    env->npc = continuation;
     mmix_cpu_raise_dynamic_trap(env, cause, insn);
 }
 

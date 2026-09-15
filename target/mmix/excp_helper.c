@@ -1110,7 +1110,7 @@ void mmix_cpu_do_interrupt(CPUState *cs)
             env->rule_break_z = 0;
         } else {
             exec = causes | env->program_exception_insn;
-            if (causes & MMIX_RQ_PROGRAM_P) {
+            if (causes & (MMIX_RQ_PROGRAM_S | MMIX_RQ_PROGRAM_P)) {
                 exec |= MMIX_DYNAMIC_TRAP_RESUME_NEXT;
             }
             y = 0;
