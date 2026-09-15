@@ -54,6 +54,12 @@ static uint32_t mmix_select_arithmetic_event(uint32_t events)
     return 0;
 }
 
+static bool mmix_trip_handlers_available(CPUMMIXState *env)
+{
+    /* MMIXware mmix-doc section 35 reserves negative addresses for the OS. */
+    return (int64_t)env->pc >= 0;
+}
+
 static hwaddr mmix_arithmetic_trip_handler(uint32_t event)
 {
     switch (event) {
@@ -568,6 +574,11 @@ void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
         return;
     }
 
+    if (!mmix_trip_handlers_available(env)) {
+        env->sregs[MMIX_SREG_RA] |= events;
+        return;
+    }
+
     enables = (env->sregs[MMIX_SREG_RA] >> MMIX_RA_ENABLE_SHIFT) &
               MMIX_RA_EVENT_MASK;
     disabled_events = events & ~enables;
@@ -613,6 +624,12 @@ void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
     CPUState *cs = env_cpu(env);
 
     mmix_commit_replay_before_synchronous_trap(env);
+    if (!mmix_trip_handlers_available(env)) {
+        env->pc = env->npc;
+        env->npc += 4;
+        cpu_loop_exit_noexc(cs);
+    }
+
     env->sregs[MMIX_SREG_RW] = env->npc;
     env->sregs[MMIX_SREG_RX] = 0x8000000000000000ULL | insn;
     env->sregs[MMIX_SREG_RY] = y;

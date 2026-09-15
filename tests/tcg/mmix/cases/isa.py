@@ -8,6 +8,7 @@ FORCED_TRANSLATION_MAIN = 0x100
 FORCED_TRANSLATION_HANDLER = 0x200
 NEGATIVE_FORCED_TRANSLATION_MAIN = 0x8000000000000100
 NEGATIVE_FORCED_TRANSLATION_HANDLER = 0x8000000000000200
+NEGATIVE_TRIP_MAIN = 0x8000000000000300
 FORCED_TRANSLATION_VIRTUAL = 0x2000
 FORCED_TRANSLATION_PHYSICAL = 0x4000
 RETAINED_ASN_A = 1
@@ -19,6 +20,130 @@ RETAINED_RV_A_S14 = (
     (14 << 40) |
     (RETAINED_ASN_A << 3)
 )
+
+
+def negative_explicit_trip_test():
+    bootstrap = 0x200
+    main_phys = NEGATIVE_TRIP_MAIN & ~(1 << 63)
+    main = [
+        insn(TRIP, 7, R10, R11),
+        wyde(SETL, R20, 0x55),
+        insn(GET, R40, 0, SR_W),
+        insn(GET, R41, 0, SR_X),
+        insn(GET, R42, 0, SR_Y),
+        insn(GET, R43, 0, SR_Z),
+        insn(GET, R44, 0, SR_B),
+        insn(ADDU, R45, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ]
+    program = program_with_regions(
+        (0, [
+            branch(BZ, R250, bootstrap // 4),
+            wyde(SETL, R251, 0xdead),
+            wyde(SETL, R255, 0),
+            halt(),
+        ]),
+        (bootstrap, [
+            wyde(SETL, R250, 1),
+            wyde(SETL, R1, 0x11),
+            insn(PUT, SR_W, 0, R1),
+            wyde(SETL, R1, 0x22),
+            insn(PUT, SR_X, 0, R1),
+            wyde(SETL, R1, 0x33),
+            insn(PUT, SR_Y, 0, R1),
+            wyde(SETL, R1, 0x44),
+            insn(PUT, SR_Z, 0, R1),
+            wyde(SETL, R1, 0x55),
+            insn(PUT, SR_B, 0, R1),
+            wyde(SETL, R1, 0x66),
+            insn(PUT, SR_J, 0, R1),
+            wyde(SETL, R255, 0x77),
+            *set_octa(R2, NEGATIVE_TRIP_MAIN),
+            insn(GO, R3, R2, R0),
+        ]),
+        (main_phys, main),
+    )
+    return MMIXTest(
+        "negative-address-explicit-trip-suppressed",
+        program,
+        pc=NEGATIVE_TRIP_MAIN + (len(main) - 1) * 4,
+        regs={
+            R20: 0x55,
+            R40: 0x11,
+            R41: 0x22,
+            R42: 0x33,
+            R43: 0x44,
+            R44: 0x55,
+            R45: 0x77,
+            R251: 0,
+        },
+    )
+
+
+def negative_arithmetic_trip_test(name, event):
+    bootstrap = 0x200
+    handler = {
+        RA_EVENT_D: 16,
+        RA_EVENT_V: 32,
+        RA_EVENT_W: 48,
+        RA_EVENT_I: 64,
+        RA_EVENT_O: 80,
+        RA_EVENT_U: 96,
+        RA_EVENT_Z: 112,
+        RA_EVENT_X: 128,
+    }[event]
+    main_phys = NEGATIVE_TRIP_MAIN & ~(1 << 63)
+    saved_insn = int.from_bytes(insn(ORI, R200, R0, 0), "big")
+    main = [
+        insn(SWYM, 0, 0, 0),
+        insn(GET, R201, 0, SR_A),
+        wyde(SETL, R202, 0x55),
+        wyde(SETL, R255, 0),
+        halt(),
+    ]
+    program = program_with_regions(
+        (0, [jump(JMP, bootstrap // 4)]),
+        (handler, [wyde(SETL, R250, 0xdead), halt()]),
+        (bootstrap, [
+            *set_octa(R1, event << RA_ENABLE_SHIFT),
+            insn(PUT, SR_A, 0, R1),
+            *set_octa(R2, NEGATIVE_TRIP_MAIN + 4),
+            insn(PUT, SR_W, 0, R2),
+            *set_octa(R3, (2 << 56) | (event << 40) | saved_insn),
+            insn(PUT, SR_X, 0, R3),
+            wyde(SETL, R4, 0x77),
+            insn(PUT, SR_Z, 0, R4),
+            insn(RESUME, 0, 0, 0),
+        ]),
+        (main_phys, main),
+    )
+    return MMIXTest(
+        f"negative-address-enabled-arithmetic-{name}-suppressed",
+        program,
+        pc=NEGATIVE_TRIP_MAIN + (len(main) - 1) * 4,
+        regs={
+            R200: 0x77,
+            R201: (event << RA_ENABLE_SHIFT) | event,
+            R202: 0x55,
+            R250: 0,
+        },
+    )
+
+
+NEGATIVE_TRIP_TESTS = [
+    negative_explicit_trip_test(),
+    *(negative_arithmetic_trip_test(name, event) for name, event in (
+        ("divide", RA_EVENT_D),
+        ("overflow", RA_EVENT_V),
+        ("float-to-fix", RA_EVENT_W),
+        ("invalid", RA_EVENT_I),
+        ("floating-overflow", RA_EVENT_O),
+        ("floating-underflow", RA_EVENT_U),
+        ("floating-divide", RA_EVENT_Z),
+        ("floating-inexact", RA_EVENT_X),
+    )),
+]
 
 
 def retained_pte(physical, asn, permissions=7):
@@ -2272,6 +2397,7 @@ def masked_missing_page_test():
 
 
 ISA_TESTS = [
+    *NEGATIVE_TRIP_TESTS,
     retained_asn_switch_test(),
     retained_page_size_test(),
     retained_asn_ldvts_test(),
