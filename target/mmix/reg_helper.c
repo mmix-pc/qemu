@@ -629,6 +629,9 @@ bool mmix_cpu_debug_write_sreg(CPUMMIXState *env, unsigned reg, uint64_t val)
     if (!mmix_cpu_debug_write_idle(env)) {
         return false;
     }
+    if (reg == MMIX_SREG_RN) {
+        return false;
+    }
 
     switch (reg) {
     case MMIX_SREG_RO:
@@ -725,6 +728,7 @@ bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
 
     if (!mmix_cpu_debug_write_idle(env) || (pc & 3) ||
         !mmix_cpu_debug_stack_valid(env, ro, rs, rg, rl) ||
+        sregs[MMIX_SREG_RN] != env->sregs[MMIX_SREG_RN] ||
         (sregs[MMIX_SREG_RA] & ~MMIX_RA_VALID_MASK) ||
         (sregs[MMIX_SREG_RQ] & MMIX_RQ_HARDWARE_MASK) !=
         mmix_cpu_debug_hardware_requests(env)) {
@@ -765,6 +769,7 @@ bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
         case MMIX_SREG_RS:
         case MMIX_SREG_RG:
         case MMIX_SREG_RL:
+        case MMIX_SREG_RN:
             break;
         default:
             env->sregs[i] = sregs[i];

@@ -4040,6 +4040,24 @@ ISA_TESTS = [
         },
     ),
     MMIXTest(
+        "special-register-rn-version-and-time",
+        b"".join(
+            [
+                insn(GET, R40, 0, SR_N),
+                insn(SRUI, R41, R40, 40),
+                insn(SLUI, R42, R40, 24),
+                insn(SRUI, R42, R42, 24),
+                insn(CMPU, R43, R42, R0),
+                halt(),
+            ]
+        ),
+        pc=0x14,
+        regs={
+            R41: 0x010000,
+            R43: 1,
+        },
+    ),
+    MMIXTest(
         "privileged-register-user-trap",
         program_with_handler(
             [
@@ -4735,7 +4753,7 @@ ISA_TESTS = [
         ),
         pc=0x80,
         regs={
-            **{33 + reg: 0 for reg in range(32)},
+            **{33 + reg: 0 for reg in range(32) if reg != SR_N},
             33 + 10: INITIAL_STACK,
             33 + 11: INITIAL_STACK,
             33 + 12: MASK64 - 11,

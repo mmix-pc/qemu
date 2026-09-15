@@ -33,7 +33,7 @@ MMIX_GDB_SPECIAL_REGS = (
 )
 MMIX_GDB_DIRECT_SPECIAL_REGS = (
     "rB", "rD", "rE", "rH", "rJ", "rM", "rR", "rBB",
-    "rC", "rN", "rI", "rT", "rTT", "rU", "rF", "rP",
+    "rC", "rI", "rT", "rTT", "rU", "rF", "rP",
     "rW", "rX", "rY", "rZ", "rWW", "rXX", "rYY", "rZZ",
 )
 MMIX_GDB_GNU_DWARF_SPECIAL_REGS = {
@@ -224,6 +224,7 @@ def test_rsp_bulk_register_restore_is_atomic(qemu, workdir):
         ra = _special_register_number("rA")
         rg = _special_register_number("rG")
         rq = _special_register_number("rQ")
+        rn = _special_register_number("rN")
 
         invalid_packets = []
 
@@ -264,6 +265,12 @@ def test_rsp_bulk_register_restore_is_atomic(qemu, workdir):
         _set_packet_register(invalid_requests, 0, 0x6162636465666768)
         _set_packet_register(invalid_requests, rq, 1 << 8)
         invalid_packets.append(invalid_requests)
+
+        invalid_serial = original_data.copy()
+        _set_packet_register(
+            invalid_serial, rn, _read_register(client, rn) ^ 1
+        )
+        invalid_packets.append(invalid_serial)
 
         for registers in invalid_packets:
             assert _write_register_packet(client, registers) == b"E14"
@@ -356,8 +363,15 @@ def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
         ra = _special_register_number("rA")
         rk = _special_register_number("rK")
         rq = _special_register_number("rQ")
+        rn = _special_register_number("rN")
         initial_ro = _read_register(client, ro)
         initial_rs = _read_register(client, rs)
+        initial_rn = _read_register(client, rn)
+
+        assert initial_rn >> 40 == 0x010000
+        assert initial_rn & ((1 << 40) - 1)
+        _write_register(client, rn, initial_rn ^ 1)
+        assert _read_register(client, rn) == initial_rn
 
         for index, name in enumerate(MMIX_GDB_DIRECT_SPECIAL_REGS):
             number = _special_register_number(name)

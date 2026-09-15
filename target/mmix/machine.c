@@ -58,6 +58,8 @@ static int mmix_cpu_post_load(void *opaque, int version_id)
         return -EINVAL;
     }
 
+    /* Preserve the migrated machine identity across subsequent CPU resets. */
+    cpu->serial_number = env->sregs[MMIX_SREG_RN];
     mmix_cpu_flush_translation_caches(env);
     tlb_flush(CPU(cpu));
     mmix_cpu_update_interrupt(env);

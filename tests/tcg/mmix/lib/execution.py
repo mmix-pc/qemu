@@ -647,6 +647,7 @@ def run_firmware_entry_state_test(qemu, bios, cpu_count):
             "rTT": 0x8000000600000000,
             "rV": 0x369C200400000000,
         }
+        serial_numbers = []
         for cpu, stack in enumerate(stacks):
             dump = _hmp_register_dump(process, cpu)
             if _hmp_register_value(dump, "pc=0x") != 0x8001000000000000:
@@ -663,6 +664,14 @@ def run_firmware_entry_state_test(qemu, bios, cpu_count):
                 )
 
             sregs = _hmp_special_registers(dump)
+            serial_number = sregs["rN"]
+            if serial_number >> 40 != 0x010000 or not (
+                serial_number & ((1 << 40) - 1)
+            ):
+                raise AssertionError(
+                    f"CPU {cpu} invalid serial number {serial_number:#018x}"
+                )
+            serial_numbers.append(serial_number)
             expected_sregs = {
                 name: 0
                 for name in (
@@ -672,12 +681,17 @@ def run_firmware_entry_state_test(qemu, bios, cpu_count):
                 ).split()
             }
             expected_sregs.update(special_defaults)
+            expected_sregs["rN"] = serial_number
             expected_sregs["rO"] = stack
             expected_sregs["rS"] = stack
             if sregs != expected_sregs:
                 raise AssertionError(
                     f"CPU {cpu} firmware special-register mismatch"
                 )
+        if len(set(serial_numbers)) != 1:
+            raise AssertionError(
+                f"firmware CPUs have different serial numbers {serial_numbers}"
+            )
 
         _qmp_command(process, "quit")
         process.communicate(timeout=5)
@@ -812,6 +826,13 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
             for cpu in range(2)
         )
         assert len(set(stacks)) == 2
+        serial_numbers = tuple(
+            _hmp_register_value(_hmp_register_dump(process, cpu), "rN =0x")
+            for cpu in range(2)
+        )
+        assert len(set(serial_numbers)) == 1
+        assert serial_numbers[0] >> 40 == 0x010000
+        assert serial_numbers[0] & ((1 << 40) - 1)
         files = fw_cfg_files()
         fdt = read_fw_cfg_file(files, "etc/fdt")
         assert read_fw_cfg_file(files, "opt/mmix/kernel") == kernel_data
@@ -848,6 +869,7 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
             assert _hmp_register_value(dump, "r32 =0x") == 0
             assert _hmp_register_value(dump, "rO=0x") == stack
             assert _hmp_register_value(dump, "rS=0x") == stack
+            assert _hmp_register_value(dump, "rN =0x") == serial_numbers[cpu]
             assert _qtest_read(qtest, stack, 8) == bytes(8)
         assert _qtest_readq(qtest, ipi_context1) == 0
         assert _qtest_readq(qtest, timer_context) == 0
@@ -860,6 +882,7 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
         dumps = _wait_for_cpu_pcs(process, (reset_pc + 4, reset_pc + 4))
         for cpu, dump in enumerate(dumps):
             assert _hmp_register_value(dump, "r32 =0x") == 0x40 + cpu
+            assert _hmp_register_value(dump, "rN =0x") == serial_numbers[cpu]
         for stack, value in zip(stacks, stack_values):
             _qtest_write(qtest, stack, value)
         program_flash1(0xa0)
@@ -896,6 +919,7 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
             dump = _hmp_register_dump(process, cpu)
             assert _hmp_register_value(dump, "pc=0x") == reset_pc + 4
             assert _hmp_register_value(dump, "r32 =0x") == 0x40 + cpu
+            assert _hmp_register_value(dump, "rN =0x") == serial_numbers[cpu]
             assert _qtest_read(qtest, stack, 8) == stack_values[cpu]
         assert _qtest_read(qtest, flash0, len(firmware)) == original_bios
         assert readb(flash1) == 0xa0

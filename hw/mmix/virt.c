@@ -11,6 +11,7 @@
 #include "qemu/error-report.h"
 #include "qemu/host-utils.h"
 #include "qemu/option.h"
+#include "qemu/timer.h"
 #include "system/address-spaces.h"
 #include "hw/block/flash.h"
 #include "hw/char/serial-mm.h"
@@ -1084,7 +1085,8 @@ fail:
 }
 
 static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
-                                      unsigned int cpu_index)
+                                      unsigned int cpu_index,
+                                      uint64_t serial_number)
 {
     MachineState *machine = MACHINE(vms);
     g_autofree char *name = g_strdup_printf("cpu[%u]", cpu_index);
@@ -1095,6 +1097,8 @@ static CPUState *mmix_virt_create_cpu(MMIXVirtMachineState *vms,
     object_property_set_uint(cpuobj, "initial-stack",
                              vms->mmo_memory ? MMIX_HOSTED_STACK_BASE :
                              vms->initial_stacks[cpu_index], &error_fatal);
+    object_property_set_uint(cpuobj, "serial-number", serial_number,
+                             &error_fatal);
     object_property_add_child(OBJECT(machine), name, cpuobj);
     qdev_realize_and_unref(DEVICE(cpuobj), NULL, &error_fatal);
     vms->cpus[cpu_index] = cpu;
@@ -1574,6 +1578,7 @@ static void mmix_virt_init(MachineState *machine)
     g_autoptr(GBytes) elf_source = NULL;
     g_autoptr(GBytes) initrd_source = NULL;
     const MMIXLinuxBootInfo *linux_info_ptr = NULL;
+    uint64_t serial_number;
     unsigned int i;
 
     if (machine->dtb) {
@@ -1648,8 +1653,11 @@ static void mmix_virt_init(MachineState *machine)
 
     mmix_virt_create_fw_cfg(vms);
 
+    serial_number = MMIX_RN_VERSION_1_0_0 |
+        ((uint64_t)(qemu_clock_get_ms(QEMU_CLOCK_HOST) / 1000) &
+         MMIX_RN_TIME_MASK);
     for (i = 0; i < machine->smp.cpus; i++) {
-        mmix_virt_create_cpu(vms, i);
+        mmix_virt_create_cpu(vms, i, serial_number);
     }
 
     hosted_state = qdev_new(TYPE_MMIX_MMO_HOSTED_STATE);

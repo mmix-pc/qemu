@@ -683,6 +683,7 @@ static void mmix_cpu_reset_hold(Object *obj, ResetType type)
     cpu->env.sregs[MMIX_SREG_RT] = MMIX_INITIAL_RT;
     cpu->env.sregs[MMIX_SREG_RTT] = MMIX_INITIAL_RTT;
     cpu->env.sregs[MMIX_SREG_RV] = MMIX_INITIAL_RV;
+    cpu->env.sregs[MMIX_SREG_RN] = cpu->serial_number;
     cpu->env.sregs[MMIX_SREG_RG] = MMIX_INITIAL_RG;
     cpu->env.sregs[MMIX_SREG_RL] = MMIX_INITIAL_RL;
     cpu->env.sregs[MMIX_SREG_RO] = cpu->initial_stack;
@@ -719,6 +720,8 @@ static void mmix_cpu_initfn(Object *obj)
 static const Property mmix_cpu_properties[] = {
     DEFINE_PROP_UINT64("initial-stack", MMIXCPU, initial_stack,
                        MMIX_INITIAL_STACK),
+    DEFINE_PROP_UINT64("serial-number", MMIXCPU, serial_number,
+                       MMIX_RN_VERSION_1_0_0),
     DEFINE_PROP_BOOL("x-security-checks", MMIXCPU, security_checks, true),
 };
 

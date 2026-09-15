@@ -38,6 +38,10 @@
 #define MMIX_INITIAL_RL 0
 #define MMIX_INITIAL_STACK 0x0000000000010000ULL
 
+/* mmix-doc section 41 assigns three version bytes and five time bytes. */
+#define MMIX_RN_VERSION_1_0_0 UINT64_C(0x0100000000000000)
+#define MMIX_RN_TIME_MASK     UINT64_C(0x000000ffffffffff)
+
 typedef enum MMIXSpecialReg {
     MMIX_SREG_RB = 0,
     MMIX_SREG_RD = 1,
@@ -281,6 +285,8 @@ struct ArchCPU {
     CPUMMIXState env;
     /* Reset value for rO and rS before the guest establishes its stack. */
     uint64_t initial_stack;
+    /* Immutable rN value restored by reset and incoming migration. */
+    uint64_t serial_number;
     bool security_checks;
     /* Architectural I/D translation caches, separate from QEMU's TLB. */
     GArray *instruction_translation_cache;
