@@ -142,8 +142,9 @@ static bool mmix_cpu_has_work(CPUState *cs)
 {
     CPUMMIXState *env = cpu_env(cs);
 
-    return cpu_test_interrupt(cs, CPU_INTERRUPT_HARD) &&
-           mmix_cpu_interrupt_enabled(env);
+    return mmix_cpu_wakeup_pending(env) ||
+           (cpu_test_interrupt(cs, CPU_INTERRUPT_HARD) &&
+            mmix_cpu_interrupt_enabled(env));
 }
 
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env)
@@ -152,18 +153,24 @@ bool mmix_cpu_interrupt_enabled(CPUMMIXState *env)
            env->sregs[MMIX_SREG_RK];
 }
 
+bool mmix_cpu_wakeup_pending(CPUMMIXState *env)
+{
+    return env->sregs[MMIX_SREG_RQ] & MMIX_RQ_ASYNC_MASK;
+}
+
 void mmix_cpu_update_interrupt(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);
+    bool deliverable = mmix_cpu_interrupt_enabled(env);
+    bool wakeup = mmix_cpu_wakeup_pending(env);
 
-    if (env->interrupt_controller_level || env->ipi_level ||
-        mmix_cpu_interrupt_enabled(env)) {
+    if (deliverable) {
         cpu_set_interrupt(cs, CPU_INTERRUPT_HARD);
-        if (!qemu_cpu_is_self(cs)) {
-            qemu_cpu_kick(cs);
-        }
     } else {
         cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+    }
+    if ((deliverable || wakeup) && !qemu_cpu_is_self(cs)) {
+        qemu_cpu_kick(cs);
     }
 }
 

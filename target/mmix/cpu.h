@@ -107,6 +107,8 @@ enum {
 #define MMIX_RK_IPI                  MMIX_RQ_IPI
 #define MMIX_RQ_HARDWARE_MASK \
     (MMIX_RQ_INTERRUPT_CONTROLLER | MMIX_RQ_IPI)
+#define MMIX_RQ_ASYNC_MASK \
+    (MMIX_RQ_INTERVAL | MMIX_RQ_STACK_OVERFLOW | MMIX_RQ_HARDWARE_MASK)
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_TRAP_OPCODE 0x00U
@@ -331,6 +333,7 @@ void mmix_cpu_put_rl(CPUMMIXState *env, uint64_t val);
 bool mmix_cpu_kernel_operations_enabled(CPUMMIXState *env);
 bool mmix_cpu_in_privileged_location(CPUMMIXState *env);
 bool mmix_cpu_interrupt_enabled(CPUMMIXState *env);
+bool mmix_cpu_wakeup_pending(CPUMMIXState *env);
 void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 void mmix_cpu_set_ipi(CPUState *cs, int level);

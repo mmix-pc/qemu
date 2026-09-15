@@ -1906,10 +1906,12 @@ def _run_smp_timer_protocol(qtest, test):
         command(cpu, test.command_program, test.stage_programmed,
                 f"programming CPU{cpu}'s timer")
 
-    def enable(cpu):
+    def enable(cpu, trigger_after_sleep=True):
         wake_count = read(cpu, test.wake_count_offset)
         command(cpu, test.command_enable, test.stage_enabled,
                 f"enabling CPU{cpu}'s timer")
+        if not trigger_after_sleep:
+            return
         time.sleep(0.01)
         assert read(cpu, test.wake_count_offset) == wake_count
 
@@ -1924,6 +1926,9 @@ def _run_smp_timer_protocol(qtest, test):
              f"resuming CPU{cpu}'s timer handler {count}")
         wait(cpu, test.wake_count_offset, count,
              f"leaving CPU{cpu}'s power-saver wait {count}")
+        assert read(cpu, test.handler_count_at_wake_offset) == count - 1
+        assert read(cpu, test.rq_at_wake_offset) & test.interrupt_request
+        assert read(cpu, test.rk_at_wake_offset) == 0
         command(cpu, test.command_snapshot, test.stage_resumed,
                 f"confirming CPU{cpu} resumed after timer {count}")
         assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
@@ -1944,9 +1949,8 @@ def _run_smp_timer_protocol(qtest, test):
     assert read_mmio(test.timer_context_address(
         1, test.timer_context_status)) == 0
 
-    deadline = read_mmio(test.timer_base + test.timer_time) + 10_000_000_000
-    program(1, deadline)
-    enable(1)
+    program(1, 0)
+    enable(1, trigger_after_sleep=False)
     wait_for_delivery(1, 1)
     assert read(0, test.handler_count_offset) == 1
 
@@ -1970,6 +1974,22 @@ def _run_smp_timer_protocol(qtest, test):
     for cpu in range(test.cpu_count):
         wait_for_delivery(cpu, 2)
 
+    deadline = read_mmio(test.timer_base + test.timer_time) + 10_000_000_000
+    for cpu in range(test.cpu_count):
+        program(cpu, deadline)
+    for cpu in range(test.cpu_count):
+        write(cpu, test.command_offset, test.command_enable)
+    for cpu in range(test.cpu_count):
+        wait(cpu, test.command_offset, 0,
+             f"consuming racing enable for CPU{cpu}")
+        wait(cpu, test.stage_offset, test.stage_enabled,
+             f"racing CPU{cpu}'s power-saver entry")
+        deadline = read_mmio(test.timer_base + test.timer_time) + 1
+        write_mmio(test.timer_context_address(
+            cpu, test.timer_context_compare), deadline)
+    for cpu in range(test.cpu_count):
+        wait_for_delivery(cpu, 3)
+
     for cpu in range(test.cpu_count):
         command(cpu, test.command_finalize, test.stage_final,
                 "recording final CPU-local timer state")
@@ -1987,8 +2007,8 @@ def _run_smp_timer_protocol(qtest, test):
         }
         snapshots.append(snapshot)
 
-        assert read(cpu, test.handler_count_offset) == 2
-        assert read(cpu, test.handler_done_offset) == 2
+        assert read(cpu, test.handler_count_offset) == 3
+        assert read(cpu, test.handler_done_offset) == 3
         assert read(cpu, test.claim_offset) == test.timer_irq_base + cpu
         assert snapshot["rWW"] % 4 == 0
         assert test.main_start <= snapshot["rWW"] < test.main_end

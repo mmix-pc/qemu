@@ -44,6 +44,9 @@ SMP_TIMER_RQ_FINAL = 0x88
 SMP_TIMER_RK_FINAL = 0x90
 SMP_TIMER_SENTINEL_FINAL = 0x98
 SMP_TIMER_WAKE_COUNT = 0xa0
+SMP_TIMER_HANDLER_COUNT_AT_WAKE = 0xa8
+SMP_TIMER_RQ_AT_WAKE = 0xb0
+SMP_TIMER_RK_AT_WAKE = 0xb8
 
 SMP_TIMER_CMD_PROGRAM = 1
 SMP_TIMER_CMD_ENABLE = 2
@@ -95,6 +98,9 @@ class MMIXSMPTimerTest:
     rk_final_offset = SMP_TIMER_RK_FINAL
     sentinel_final_offset = SMP_TIMER_SENTINEL_FINAL
     wake_count_offset = SMP_TIMER_WAKE_COUNT
+    handler_count_at_wake_offset = SMP_TIMER_HANDLER_COUNT_AT_WAKE
+    rq_at_wake_offset = SMP_TIMER_RQ_AT_WAKE
+    rk_at_wake_offset = SMP_TIMER_RK_AT_WAKE
     command_program = SMP_TIMER_CMD_PROGRAM
     command_enable = SMP_TIMER_CMD_ENABLE
     command_snapshot = SMP_TIMER_CMD_SNAPSHOT
@@ -299,6 +305,7 @@ def smp_timer_lifecycle_program():
     program.mark("enable_timer")
     program.emit(
         smp_store(R254, R40, SMP_TIMER_COMMAND),
+        insn(PUTI, SR_K, 0, 0),
         wyde(SETL, R84, MMIX_VIRT_TIMER_CONTROL_ENABLE |
              MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
         smp_store(R84, R60, MMIX_VIRT_TIMER_CONTEXT_CONTROL),
@@ -308,9 +315,16 @@ def smp_timer_lifecycle_program():
         insn(SYNC, 0, 0, 1),
         smp_store(R83, R40, SMP_TIMER_STAGE),
         jump(SYNC, 4),
+        smp_load(R85, R40, SMP_TIMER_HANDLER_COUNT),
+        smp_store(R85, R40, SMP_TIMER_HANDLER_COUNT_AT_WAKE),
+        insn(GET, R86, 0, SR_Q),
+        smp_store(R86, R40, SMP_TIMER_RQ_AT_WAKE),
+        insn(GET, R87, 0, SR_K),
+        smp_store(R87, R40, SMP_TIMER_RK_AT_WAKE),
         smp_load(R84, R40, SMP_TIMER_WAKE_COUNT),
         insn(ADDUI, R84, R84, 1),
         smp_store(R84, R40, SMP_TIMER_WAKE_COUNT),
+        insn(PUT, SR_K, 0, R70),
         *set_octa(R82, SMP_WAIT_LIMIT),
     )
     program.emit_branch(BZ, R254, "command_loop")

@@ -890,8 +890,9 @@ G_NORETURN void helper_mmix_power_save(CPUMMIXState *env)
 {
     CPUState *cs = env_cpu(env);
 
-    /* mmix-doc section 31 defines SYNC 4 as waiting for a wake-up signal. */
-    if (!mmix_cpu_interrupt_enabled(env)) {
+    /* Delivery uses rK, but a masked asynchronous request still wakes. */
+    if (!mmix_cpu_wakeup_pending(env) &&
+        !mmix_cpu_interrupt_enabled(env)) {
         cs->exception_index = EXCP_HLT;
         cs->halted = 1;
         cpu_loop_exit(cs);
