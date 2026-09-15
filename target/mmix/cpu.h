@@ -187,6 +187,17 @@ typedef struct MMIXSaveRestartState {
     uint64_t packed;
 } MMIXSaveRestartState;
 
+typedef struct MMIXPopRestartState {
+    uint64_t output;
+    uint32_t x;
+    uint32_t yz;
+    uint32_t old_rl;
+    uint32_t base;
+    uint32_t saved;
+    bool frame_ready;
+    bool active;
+} MMIXPopRestartState;
+
 typedef struct MMIXSaveUnsaveTrapState {
     MMIXSaveRestartState save_restart;
     uint64_t local_regs[MMIX_LOCAL_REGS];
@@ -200,6 +211,7 @@ typedef struct MMIXSaveUnsaveTrapState {
 typedef struct MMIXTrapRestartState {
     MMIXStackAccessState stack_access;
     MMIXInsnReplayState interrupted_replay;
+    MMIXPopRestartState pop_restart;
     MMIXSaveUnsaveTrapState *save_unsave;
     /* This identity follows a suspended helper through SAVE and UNSAVE. */
     uint64_t sequence;
@@ -235,6 +247,7 @@ typedef struct CPUArchState {
     uint32_t lring_mask;
     MMIXStackAccessState stack_access;
     MMIXSaveRestartState save_restart;
+    MMIXPopRestartState pop_restart;
     uint64_t unsave_restart_address;
     /*
      * Private restart identity of the currently loaded guest context.

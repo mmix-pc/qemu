@@ -28,6 +28,12 @@ static bool mmix_cpu_pre_save(void *opaque, Error **errp)
                    "migration");
         return false;
     }
+    if (env->pop_restart.active) {
+        error_setg(errp,
+                   "MMIX POP register-stack refill is active during "
+                   "migration");
+        return false;
+    }
     if (env->semihosting_bounce_active ||
         env->semihosting_pending_open_handle ||
         env->semihosting_pending_io_length) {

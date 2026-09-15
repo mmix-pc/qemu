@@ -158,7 +158,7 @@ static unsigned mmix_cpu_local_index(CPUMMIXState *env, unsigned reg)
     return (base + reg) & env->lring_mask;
 }
 
-static bool mmix_cpu_local_room(CPUMMIXState *env, unsigned new_rl)
+static unsigned mmix_cpu_local_distance(CPUMMIXState *env)
 {
     unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
     unsigned stack = env->sregs[MMIX_SREG_RS] >> 3;
@@ -168,7 +168,12 @@ static bool mmix_cpu_local_room(CPUMMIXState *env, unsigned new_rl)
         distance = env->lring_size;
     }
 
-    return new_rl < distance;
+    return distance;
+}
+
+static bool mmix_cpu_local_room(CPUMMIXState *env, unsigned new_rl)
+{
+    return new_rl < mmix_cpu_local_distance(env);
 }
 
 static unsigned mmix_cpu_stack_depth(CPUMMIXState *env)
@@ -216,6 +221,18 @@ static void mmix_cpu_stack_load(CPUMMIXState *env, uintptr_t ra)
     env->local_regs[idx] = value;
     env->sregs[MMIX_SREG_RS] = addr;
     mmix_cpu_stack_access_commit(env, &env->stack_access);
+}
+
+static void mmix_cpu_pop_stack_load(CPUMMIXState *env, uintptr_t ra)
+{
+    unsigned rl = mmix_cpu_get_rl(env);
+
+    mmix_cpu_stack_load(env, ra);
+    if (rl > mmix_cpu_local_distance(env)) {
+        /* mmix-pipe section 114: Do not let gamma pass beta. */
+        g_assert(rl > 0);
+        env->sregs[MMIX_SREG_RL] = rl - 1;
+    }
 }
 
 static void mmix_cpu_stack_write_octa(CPUMMIXState *env, uint64_t val,
@@ -564,7 +581,8 @@ static bool mmix_cpu_debug_write_idle(CPUMMIXState *env)
     /* These continuations contain operands or ring state tied to the CPU. */
     return env->stack_access.kind == MMIX_STACK_ACCESS_NONE &&
            env->save_restart.phase == MMIX_SAVE_RESTART_NONE &&
-           !env->unsave_restart_active && !env->insn_replay.active;
+           !env->pop_restart.active && !env->unsave_restart_active &&
+           !env->insn_replay.active;
 }
 
 static bool mmix_cpu_debug_stack_valid(CPUMMIXState *env, uint64_t ro,
@@ -942,36 +960,55 @@ void helper_mmix_push(CPUMMIXState *env, uint32_t x, uint64_t next_pc)
 
 uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
 {
+    MMIXPopRestartState *restart = &env->pop_restart;
     uintptr_t ra = GETPC();
-    unsigned old_rl = mmix_cpu_get_rl(env);
-    unsigned base = env->sregs[MMIX_SREG_RO] >> 3;
-    unsigned saved;
     unsigned preserved;
-    uint64_t output = 0;
     uint64_t dest;
 
-    if (mmix_cpu_stack_depth(env) == 0) {
-        mmix_cpu_stack_load(env, ra);
+    if (!restart->active) {
+        *restart = (MMIXPopRestartState) {
+            .x = x,
+            .yz = yz,
+            .old_rl = mmix_cpu_get_rl(env),
+            .base = env->sregs[MMIX_SREG_RO] >> 3,
+            .active = true,
+        };
+    } else {
+        g_assert(restart->x == x);
+        g_assert(restart->yz == yz);
     }
 
-    if (x != 0 && x <= old_rl) {
-        output = env->local_regs[mmix_cpu_local_index(env, x - 1)];
+    if (!restart->frame_ready) {
+        if (mmix_cpu_stack_depth(env) == 0) {
+            mmix_cpu_pop_stack_load(env, ra);
+        }
+
+        if (x != 0 && x <= restart->old_rl) {
+            restart->output =
+                env->local_regs[mmix_cpu_local_index(env, x - 1)];
+        }
+
+        restart->saved =
+            env->local_regs[(restart->base - 1) & env->lring_mask] & 0xff;
+        restart->frame_ready = true;
     }
 
-    saved = env->local_regs[(base - 1) & env->lring_mask] & 0xff;
-    while (mmix_cpu_stack_depth(env) <= saved) {
-        mmix_cpu_stack_load(env, ra);
+    while (mmix_cpu_stack_depth(env) <= restart->saved) {
+        mmix_cpu_pop_stack_load(env, ra);
     }
 
     if (x != 0) {
-        env->local_regs[(base - 1) & env->lring_mask] = output;
+        env->local_regs[(restart->base - 1) & env->lring_mask] =
+            restart->output;
     }
 
-    preserved = x <= old_rl ? x : old_rl + 1;
-    env->sregs[MMIX_SREG_RO] -= (uint64_t)(saved + 1) * 8;
-    env->sregs[MMIX_SREG_RL] = MIN(saved + preserved, mmix_cpu_get_rg(env));
+    preserved = x <= restart->old_rl ? x : restart->old_rl + 1;
+    env->sregs[MMIX_SREG_RO] -= (uint64_t)(restart->saved + 1) * 8;
+    env->sregs[MMIX_SREG_RL] =
+        MIN(restart->saved + preserved, mmix_cpu_get_rg(env));
 
     dest = env->sregs[MMIX_SREG_RJ] + ((uint64_t)yz << 2);
+    memset(restart, 0, sizeof(*restart));
     return dest & ~3ULL;
 }
 

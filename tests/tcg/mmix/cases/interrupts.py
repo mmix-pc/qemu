@@ -859,6 +859,101 @@ def fill_fault_resume_program(depth=10):
 FILL_FAULT_RESUME = fill_fault_resume_program()
 
 
+def high_rl_partial_pop_fill_fault_program():
+    handler = 0x1000
+    sub_base = 0x400
+    saved_rl = 200
+    saved_rg = 240
+    saved_globals = MMIX_REGS - saved_rg
+    saved_specials = 12
+    stack_base = INITIAL_STACK + 0x1f00
+    context_top = stack_base + (saved_specials + saved_globals + 1 +
+                                saved_rl) * 8
+    marker = context_top - (saved_specials + saved_globals + 1) * 8
+    upper_stack_page = INITIAL_STACK + 0x2000
+    upper_stack_pte = VM_STACK_PTE + 8
+    physical_lower_stack_pte = (1 << 63) | VM_STACK_PTE
+    physical_upper_stack_pte = (1 << 63) | upper_stack_pte
+    image = bytearray()
+
+    def place(addr, instructions):
+        code = b"".join(instructions)
+
+        if len(image) > addr:
+            raise AssertionError("high-rL POP fill-fault sections overlap")
+        image.extend(insn(SWYM, 0, 0, 0) * ((addr - len(image)) // 4))
+        image.extend(code)
+
+    main = [
+        *set_octa(R32, context_top),
+        *set_octa(R33, saved_rg << 56),
+        insn(STOU, R33, R32, R250),
+        *set_octa(R34, marker),
+        wyde(SETL, R35, saved_rl),
+        insn(STOU, R35, R34, R250),
+        insn(UNSAVE, 0, 0, R32),
+        *set_octa(R240, VM_PAGE_TABLE),
+        wyde(SETL, R241, 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R240, VM_STACK_PTP_ADDRESS),
+        *set_octa(R241, VM_STACK_PTP),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R240, physical_lower_stack_pte),
+        *set_octa(R241, INITIAL_STACK | 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R240, physical_upper_stack_pte),
+        *set_octa(R241, upper_stack_page | 7),
+        insn(STOU, R241, R240, R250),
+        *set_octa(R240, physical_lower_stack_pte),
+        *set_octa(R241, INITIAL_STACK | 7),
+        *set_octa(R242, INITIAL_STACK),
+        *set_octa(R243, RQ_PROGRAM_R),
+        wyde(SETL, R246, handler),
+        insn(PUT, SR_TT, 0, R246),
+        insn(PUT, SR_K, 0, R243),
+        *set_octa(R246, VM_RV_STACK),
+        insn(PUT, SR_V, 0, R246),
+    ]
+    call_pc = len(b"".join(main))
+    main.extend([
+        branch(PUSHJ, R150, (sub_base - call_pc) // 4),
+        insn(ADDU, R247, R150, R250),
+        insn(GET, R248, 0, SR_O),
+        insn(GET, R249, 0, SR_S),
+        insn(GET, R250, 0, SR_L),
+        wyde(SETL, R255, 0),
+        halt(),
+    ])
+    place(0, main)
+
+    place(sub_base, [
+        wyde(SETL, R199, 0x77),
+        wyde(SETL, R136, 0x66),
+        *set_octa(R246, INITIAL_STACK | 2),
+        insn(STOU, R246, R240, R250),
+        insn(LDVTS, R246, R242, R250),
+        insn(POP, 200, 0, 0),
+    ])
+
+    place(handler, [
+        insn(GET, R244, 0, SR_L),
+        insn(GET, R245, 0, SR_S),
+        insn(ADDU, R251, R136, R250),
+        insn(STOU, R241, R240, R250),
+        insn(LDVTS, R246, R242, R250),
+        insn(GET, R246, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
+        insn(ADDU, R255, R243, R250),
+        insn(RESUME, 0, 0, 1),
+    ])
+
+    exit_pc = call_pc + 6 * 4
+    return bytes(image), exit_pc, stack_base, upper_stack_page
+
+
+HIGH_RL_PARTIAL_POP_FILL_FAULT = high_rl_partial_pop_fill_fault_program()
+
+
 def unsave_fault_resume_program():
     handler = 0x1000
     snapshots = 0x1800
@@ -1812,6 +1907,20 @@ INTERRUPT_TESTS = [
             R230: RQ_PROGRAM_R,
             R231: 0,
             R232: RQ_PROGRAM_B | RQ_PROGRAM_R,
+        },
+    ),
+    MMIXTest(
+        "register-stack-high-rl-partial-pop-fill-fault-resume",
+        HIGH_RL_PARTIAL_POP_FILL_FAULT[0],
+        pc=HIGH_RL_PARTIAL_POP_FILL_FAULT[1],
+        regs={
+            R244: 137,
+            R245: HIGH_RL_PARTIAL_POP_FILL_FAULT[3],
+            R247: 0x77,
+            R248: HIGH_RL_PARTIAL_POP_FILL_FAULT[2],
+            R249: HIGH_RL_PARTIAL_POP_FILL_FAULT[2],
+            R250: 240,
+            R251: 0x66,
         },
     ),
     MMIXTest(

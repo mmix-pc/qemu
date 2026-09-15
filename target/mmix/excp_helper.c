@@ -93,6 +93,7 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
     MMIXTrapRestartState restart = {
         .stack_access = env->stack_access,
         .interrupted_replay = env->insn_replay,
+        .pop_restart = env->pop_restart,
         .interrupted_context_sequence = env->trap_context_sequence,
         .trap_where = where,
         .trap_exec = exec,
@@ -103,6 +104,7 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
 
     if (!env->insn_replay.active &&
         env->save_restart.phase == MMIX_SAVE_RESTART_NONE &&
+        !env->pop_restart.active &&
         !env->unsave_restart_active &&
         env->stack_access.kind == MMIX_STACK_ACCESS_NONE) {
         return;
@@ -139,6 +141,7 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
     memset(&env->stack_access, 0, sizeof(env->stack_access));
     memset(&env->insn_replay, 0, sizeof(env->insn_replay));
     memset(&env->save_restart, 0, sizeof(env->save_restart));
+    memset(&env->pop_restart, 0, sizeof(env->pop_restart));
     env->unsave_restart_address = 0;
     env->unsave_restart_active = false;
     if (restart.save_unsave != NULL) {
@@ -167,6 +170,8 @@ static void mmix_trap_restart_restore_helper_state(
     CPUMMIXState *env, const MMIXTrapRestartState *restart)
 {
     const MMIXSaveUnsaveTrapState *save_unsave = restart->save_unsave;
+
+    env->pop_restart = restart->pop_restart;
 
     if (save_unsave == NULL) {
         return;
