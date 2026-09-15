@@ -3633,7 +3633,6 @@ ISA_TESTS = [
                 jump(SYNC, 1),
                 jump(SYNC, 2),
                 jump(SYNC, 3),
-                jump(SYNC, 4),
                 jump(SYNC, 5),
                 jump(SYNC, 6),
                 jump(SYNC, 7),
@@ -3641,7 +3640,7 @@ ISA_TESTS = [
                 halt(),
             ]
         ),
-        pc=0x74,
+        pc=0x70,
         regs={
             R1: 0x0380,
             R2: 0x0123456789abcdef,

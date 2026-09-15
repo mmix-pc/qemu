@@ -43,6 +43,7 @@ SMP_TIMER_RS_FINAL = 0x80
 SMP_TIMER_RQ_FINAL = 0x88
 SMP_TIMER_RK_FINAL = 0x90
 SMP_TIMER_SENTINEL_FINAL = 0x98
+SMP_TIMER_WAKE_COUNT = 0xa0
 
 SMP_TIMER_CMD_PROGRAM = 1
 SMP_TIMER_CMD_ENABLE = 2
@@ -93,6 +94,7 @@ class MMIXSMPTimerTest:
     rq_final_offset = SMP_TIMER_RQ_FINAL
     rk_final_offset = SMP_TIMER_RK_FINAL
     sentinel_final_offset = SMP_TIMER_SENTINEL_FINAL
+    wake_count_offset = SMP_TIMER_WAKE_COUNT
     command_program = SMP_TIMER_CMD_PROGRAM
     command_enable = SMP_TIMER_CMD_ENABLE
     command_snapshot = SMP_TIMER_CMD_SNAPSHOT
@@ -110,6 +112,7 @@ class MMIXSMPTimerTest:
     intc_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
     timer_irq_base = MMIX_VIRT_TIMER_IRQ_BASE
     timer_time = MMIX_VIRT_TIMER_TIME
+    timer_context_compare = MMIX_VIRT_TIMER_CONTEXT_COMPARE
     timer_context_status = MMIX_VIRT_TIMER_CONTEXT_STATUS
     timer_status_pending = MMIX_VIRT_TIMER_STATUS_PENDING
     sentinels = SMP_TIMER_SENTINELS
@@ -300,7 +303,17 @@ def smp_timer_lifecycle_program():
              MMIX_VIRT_TIMER_CONTROL_IRQ_ENABLE),
         smp_store(R84, R60, MMIX_VIRT_TIMER_CONTEXT_CONTROL),
     )
-    _emit_return_to_command_loop(program, SMP_TIMER_STAGE_ENABLED)
+    program.emit(
+        wyde(SETL, R83, SMP_TIMER_STAGE_ENABLED),
+        insn(SYNC, 0, 0, 1),
+        smp_store(R83, R40, SMP_TIMER_STAGE),
+        jump(SYNC, 4),
+        smp_load(R84, R40, SMP_TIMER_WAKE_COUNT),
+        insn(ADDUI, R84, R84, 1),
+        smp_store(R84, R40, SMP_TIMER_WAKE_COUNT),
+        *set_octa(R82, SMP_WAIT_LIMIT),
+    )
+    program.emit_branch(BZ, R254, "command_loop")
 
     program.mark("snapshot")
     program.emit(smp_store(R254, R40, SMP_TIMER_COMMAND))

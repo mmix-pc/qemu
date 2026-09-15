@@ -261,6 +261,22 @@ static bool gen_mmix_privileged_sync(DisasContext *ctx, uint32_t mode)
     return true;
 }
 
+static bool gen_mmix_power_save(DisasContext *ctx)
+{
+    uint64_t continuation = ctx->base.pc_next;
+
+    gen_helper_mmix_sync(tcg_env, tcg_constant_i32(ctx->insn),
+                         tcg_constant_i32(4));
+    tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+    gen_consume_insn_replay(ctx);
+    gen_complete_instruction(ctx, tcg_constant_i64(continuation));
+    tcg_gen_movi_i64(cpu_pc, continuation);
+    tcg_gen_movi_i64(cpu_npc, continuation + 4);
+    gen_helper_mmix_power_save(tcg_env);
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
+
 static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
@@ -1330,6 +1346,7 @@ static bool trans_SYNC(DisasContext *ctx, arg_xyz *a)
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
         return true;
     case 4:
+        return gen_mmix_power_save(ctx);
     case 5:
     case 6:
     case 7:

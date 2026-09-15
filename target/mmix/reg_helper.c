@@ -886,6 +886,20 @@ void helper_mmix_sync(CPUMMIXState *env, uint32_t insn, uint32_t mode)
     }
 }
 
+G_NORETURN void helper_mmix_power_save(CPUMMIXState *env)
+{
+    CPUState *cs = env_cpu(env);
+
+    /* mmix-doc section 31 defines SYNC 4 as waiting for a wake-up signal. */
+    if (!mmix_cpu_interrupt_enabled(env)) {
+        cs->exception_index = EXCP_HLT;
+        cs->halted = 1;
+        cpu_loop_exit(cs);
+    }
+
+    cpu_loop_exit_noexc(cs);
+}
+
 uint64_t helper_mmix_ldvts(CPUMMIXState *env, uint32_t insn, uint64_t key)
 {
     if (!mmix_cpu_kernel_operations_enabled(env)) {
