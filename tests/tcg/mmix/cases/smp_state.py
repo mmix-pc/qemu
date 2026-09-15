@@ -32,7 +32,8 @@ SMP_STATE_RO = 0x20
 SMP_STATE_RS = 0x28
 SMP_STATE_TRAPS = 0x30
 SMP_STATE_RL = 0x38
-SMP_STATE_READY = 0x40
+SMP_STATE_RI = 0x40
+SMP_STATE_READY = 0x48
 SMP_STATE_HANDLER = 0x1800
 SMP_STATE_CALL_DEPTH = 40
 
@@ -71,6 +72,10 @@ def cpu_local_state_program():
     program.emit(
         insn(ADDI, R32, R0, 0),
         wyde(SETL, R254, 0),
+        wyde(SETL, R115, 0x100),
+        insn(ADDU, R115, R115, R32),
+        insn(PUT, SR_I, 0, R115),
+        insn(GET, R116, 0, SR_I),
         wyde(SETL, R100, 0x100),
         insn(ADDU, R100, R100, R32),
         wyde(SETL, R110, 0x200),
@@ -121,6 +126,7 @@ def cpu_local_state_program():
         smp_store(R113, R40, SMP_STATE_RS),
         smp_store(R120, R40, SMP_STATE_TRAPS),
         smp_store(R111, R40, SMP_STATE_RL),
+        smp_store(R116, R40, SMP_STATE_RI),
         wyde(SETL, R42, 1),
         smp_sync(1),
         smp_store(R42, R40, SMP_STATE_READY),
@@ -149,6 +155,7 @@ def cpu_local_state_program():
         smp_load(R155, R49, SMP_STATE_RS),
         smp_load(R156, R49, SMP_STATE_TRAPS),
         smp_load(R157, R49, SMP_STATE_RL),
+        smp_load(R158, R49, SMP_STATE_RI),
         wyde(SETL, R90, 1),
     )
     program.mark("success")
@@ -181,6 +188,7 @@ def cpu_local_state_program():
             R111: 32,
             R114: 0x200,
             R120: 0,
+            R116: 0xff,
             R73: 0,
             R150: 0x11,
             R151: 0x101,
@@ -188,6 +196,7 @@ def cpu_local_state_program():
             R153: RA_EVENT_V,
             R156: 1,
             R157: 32,
+            R158: 0x100,
             R90: 1,
         },
     )

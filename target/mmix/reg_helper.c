@@ -347,6 +347,21 @@ void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits)
     env->rq_new_bits |= new_bits;
 }
 
+bool mmix_cpu_retire_instruction(CPUMMIXState *env)
+{
+    uint64_t interval = env->sregs[MMIX_SREG_RI];
+
+    /* Use one deterministic virtual clock pulse per retired instruction. */
+    env->sregs[MMIX_SREG_RI] = interval - 1;
+    if (interval != 1) {
+        return false;
+    }
+
+    mmix_cpu_set_rq_bits(env, MMIX_RQ_INTERVAL);
+    mmix_cpu_update_interrupt(env);
+    return env->sregs[MMIX_SREG_RK] & MMIX_RQ_INTERVAL;
+}
+
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes)
 {
     env->program_exception_causes |= causes & MMIX_RQ_PROGRAM_MASK;
@@ -409,17 +424,22 @@ uint64_t helper_mmix_check_instruction_security(CPUMMIXState *env,
     return cause;
 }
 
-void helper_mmix_complete_instruction_security(CPUMMIXState *env,
-                                               uint64_t cause,
-                                               uint32_t insn,
-                                               uint64_t continuation)
+void helper_mmix_complete_instruction(CPUMMIXState *env, uint64_t cause,
+                                      uint32_t insn, uint64_t continuation)
 {
-    if (cause == 0) {
-        return;
-    }
+    CPUState *cs = env_cpu(env);
+    bool interval_interrupt = mmix_cpu_retire_instruction(env);
 
-    env->npc = continuation;
-    mmix_cpu_raise_dynamic_trap(env, cause, insn);
+    if (cause != 0) {
+        env->npc = continuation;
+        mmix_cpu_raise_dynamic_trap(env, cause, insn);
+    }
+    if (interval_interrupt) {
+        env->pc = continuation;
+        env->npc = continuation + 4;
+        cs->exception_index = EXCP_MMIX_INTERRUPT;
+        cpu_loop_exit(cs);
+    }
 }
 
 void mmix_cpu_check_control_transfer(CPUMMIXState *env, uint32_t insn,

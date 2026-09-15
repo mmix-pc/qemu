@@ -624,6 +624,7 @@ void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
     CPUState *cs = env_cpu(env);
 
     mmix_commit_replay_before_synchronous_trap(env);
+    mmix_cpu_retire_instruction(env);
     if (!mmix_trip_handlers_available(env)) {
         env->pc = env->npc;
         env->npc += 4;
@@ -651,6 +652,7 @@ void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
     uint64_t handler = env->sregs[MMIX_SREG_RT];
 
     mmix_commit_replay_before_synchronous_trap(env);
+    mmix_cpu_retire_instruction(env);
     mmix_trap_restart_push(env, false, env->npc,
                            0x8000000000000000ULL | insn, y);
     env->sregs[MMIX_SREG_RWW] = env->npc;
@@ -1033,6 +1035,8 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
 
 void helper_mmix_resume(CPUMMIXState *env, uint32_t insn, uint32_t z)
 {
+    mmix_cpu_retire_instruction(env);
+
     switch (z) {
     case 0:
         mmix_resume_state(env, false, insn, z);
@@ -1070,6 +1074,7 @@ G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
 
 void helper_mmix_test_exit(CPUMMIXState *env)
 {
+    mmix_cpu_retire_instruction(env);
     mmix_cpu_shutdown_with_log(env, "MMIX test exit", 0);
 }
 

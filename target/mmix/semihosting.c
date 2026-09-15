@@ -83,6 +83,7 @@ typedef struct MMIXSemihostingArgs3 {
 
 static G_NORETURN void mmix_semihosting_halt(CPUMMIXState *env)
 {
+    mmix_cpu_retire_instruction(env);
     mmix_cpu_shutdown_with_log(env, "MMIX hosted Halt",
                                mmix_cpu_read_reg(env, 255) & 0xff);
 }

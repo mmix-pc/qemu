@@ -92,6 +92,9 @@ enum {
 #define MMIX_RQ_PROGRAM_P     (1ULL << 32)
 #define MMIX_RQ_PROGRAM_MASK  (0xffULL << MMIX_RQ_PROGRAM_SHIFT)
 
+/* mmix-doc section 40 assigns the interval request to bit 6. */
+#define MMIX_RQ_INTERVAL             (1ULL << 6)
+
 /* mmix-doc section 37 leaves high-priority I/O bits implementation-defined. */
 #define MMIX_RQ_STACK_OVERFLOW       (1ULL << 7)
 #define MMIX_RQ_INTERRUPT_CONTROLLER (1ULL << 8)
@@ -348,6 +351,7 @@ bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,
 bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env,
                                        MMIXStackAccessState *access);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
+bool mmix_cpu_retire_instruction(CPUMMIXState *env);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
                                  uint32_t insn);

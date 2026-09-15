@@ -2123,7 +2123,34 @@ def recoverable_store_test(name, instruction, address, source, expected,
     )
 
 
+def interval_counter_replay_test():
+    instruction = insn(LDOU, R111, R110, R0)
+    program, fault_pc, exit_pc = recoverable_data_access_program(
+        instruction,
+        RQ_PROGRAM_R,
+        0,
+        REPLAY_DATA_VALUE,
+        [
+            *set_octa(R110, REPLAY_DATA_VIRTUAL),
+            *set_octa(R111, 0xdeadbeefcafebabe),
+            insn(PUTI, SR_I, 0, 100),
+        ],
+        [insn(GET, R230, 0, SR_I), halt()],
+    )
+    return MMIXTest(
+        "interval-counter-replayed-load-counts-once",
+        program,
+        pc=exit_pc,
+        regs={
+            R111: REPLAY_DATA_VALUE,
+            R200: fault_pc + 4,
+            R230: 73,
+        },
+    )
+
+
 RECOVERABLE_LOAD_REPLAY_TESTS = [
+    interval_counter_replay_test(),
     recoverable_load_test(
         "resume-ropcode0-load-byte-missing-page",
         insn(LDB, R111, R110, R0),
@@ -4682,6 +4709,7 @@ ISA_TESTS = [
             **{33 + reg: 0 for reg in range(32)},
             33 + 10: INITIAL_STACK,
             33 + 11: INITIAL_STACK,
+            33 + 12: MASK64 - 11,
             33 + 13: 0x8000000500000000,
             33 + 14: 0x8000000600000000,
             33 + 15: 0,
@@ -4729,7 +4757,7 @@ ISA_TESTS = [
             R3: 0x7b,
             R4: 0xfeedcafe12345678,
             R40: 0x11,
-            R41: 0x12,
+            R41: 0xa,
             R42: 0x13,
             R43: 0x14,
             R44: 0x15,
@@ -4737,6 +4765,74 @@ ISA_TESTS = [
             R46: 0x17,
             R47: 0x18,
         },
+    ),
+    MMIXTest(
+        "interval-counter-wrap-and-masked-request",
+        b"".join(
+            [
+                insn(GET, R40, 0, SR_I),
+                insn(GET, R41, 0, SR_I),
+                insn(PUTI, SR_I, 0, 1),
+                insn(GET, R42, 0, SR_I),
+                insn(GET, R43, 0, SR_Q),
+                insn(PUTI, SR_Q, 0, 0),
+                insn(GET, R44, 0, SR_Q),
+                halt(),
+            ]
+        ),
+        pc=0x1c,
+        regs={
+            R40: 0,
+            R41: MASK64,
+            R42: 0,
+            R43: RQ_INTERVAL,
+            R44: 0,
+        },
+    ),
+    MMIXTest(
+        "interval-counter-branch-boundary-interrupt",
+        program_with_regions(
+            (0, [
+                *set_octa(R1, (1 << 63) | 0x200),
+                insn(PUT, SR_TT, 0, R1),
+                *set_octa(R2, RQ_INTERVAL),
+                insn(PUT, SR_K, 0, R2),
+                insn(PUTI, SR_I, 0, 2),
+                branch(BZ, R0, 2),
+                wyde(SETL, R50, 0xdead),
+                halt(),
+            ]),
+            (0x200, [
+                insn(GET, R40, 0, SR_WW),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_Q),
+                halt(),
+            ]),
+        ),
+        pc=(1 << 63) | 0x20c,
+        regs={
+            R40: 0x34,
+            R41: DYNAMIC_TRAP_RESUME_NEXT,
+            R42: RQ_INTERVAL,
+            R50: 0,
+        },
+    ),
+    MMIXTest(
+        "interval-counter-counts-negative-address-instructions",
+        program_with_regions(
+            (0, [
+                *set_octa(R1, (1 << 63) | 0x200),
+                insn(GO, R2, R1, R0),
+            ]),
+            (0x200, [
+                insn(PUTI, SR_I, 0, 4),
+                insn(SWYM, 0, 0, 0),
+                insn(GET, R40, 0, SR_I),
+                halt(),
+            ]),
+        ),
+        pc=(1 << 63) | 0x20c,
+        regs={R40: 2},
     ),
     MMIXTest(
         "special-register-ra-invalid-masked",
