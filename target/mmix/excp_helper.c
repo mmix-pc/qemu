@@ -561,8 +561,10 @@ static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
     cpu_loop_exit(cs);
 }
 
-void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
-                                  uint32_t insn, uint64_t y, uint64_t z)
+static void mmix_update_ra_events_internal(CPUMMIXState *env,
+                                           uint32_t events, uint32_t insn,
+                                           uint64_t y, uint64_t z,
+                                           bool instruction_retired)
 {
     uint32_t enables;
     uint32_t disabled_events;
@@ -588,8 +590,18 @@ void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
 
     selected_event = mmix_select_arithmetic_event(enabled_events);
     if (selected_event != 0) {
+        if (!instruction_retired) {
+            /* Arithmetic trips follow execution of the triggering command. */
+            mmix_cpu_retire_instruction(env, insn, env->pc);
+        }
         mmix_raise_arithmetic_trip(env, selected_event, insn, y, z);
     }
+}
+
+void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
+                           uint32_t insn, uint64_t y, uint64_t z)
+{
+    mmix_update_ra_events_internal(env, events, insn, y, z, false);
 }
 
 G_NORETURN void mmix_cpu_raise_emulator_failure(CPUMMIXState *env)
@@ -624,8 +636,8 @@ void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
     CPUState *cs = env_cpu(env);
 
     mmix_commit_replay_before_synchronous_trap(env);
-    mmix_cpu_retire_instruction(env);
     if (!mmix_trip_handlers_available(env)) {
+        mmix_cpu_retire_instruction(env, insn, env->pc);
         env->pc = env->npc;
         env->npc += 4;
         cpu_loop_exit_noexc(cs);
@@ -637,6 +649,7 @@ void helper_mmix_trip(CPUMMIXState *env, uint32_t insn, uint64_t y,
     env->sregs[MMIX_SREG_RZ] = z;
     env->sregs[MMIX_SREG_RB] = mmix_cpu_read_reg(env, 255);
     mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+    mmix_cpu_retire_instruction(env, insn, env->pc);
     env->pc = 0;
     env->npc = 4;
     qemu_log_mask(CPU_LOG_INT,
@@ -652,7 +665,6 @@ void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
     uint64_t handler = env->sregs[MMIX_SREG_RT];
 
     mmix_commit_replay_before_synchronous_trap(env);
-    mmix_cpu_retire_instruction(env);
     mmix_trap_restart_push(env, false, env->npc,
                            0x8000000000000000ULL | insn, y);
     env->sregs[MMIX_SREG_RWW] = env->npc;
@@ -662,6 +674,7 @@ void helper_mmix_trap(CPUMMIXState *env, uint32_t insn, uint64_t y,
     env->sregs[MMIX_SREG_RBB] = mmix_cpu_read_reg(env, 255);
     mmix_cpu_put_rk(env, 0);
     mmix_cpu_write_reg(env, 255, env->sregs[MMIX_SREG_RJ]);
+    mmix_cpu_retire_instruction(env, insn, env->pc);
     env->pc = handler;
     env->npc = handler + 4;
     qemu_log_mask(CPU_LOG_INT,
@@ -898,6 +911,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                     mmix_trap_restart_finish(env, restart,
                                              restart_detached);
                 }
+                mmix_cpu_retire_instruction(env, resume_insn, env->pc);
                 cpu_loop_exit_noexc(cs);
             }
 
@@ -921,10 +935,13 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                     mmix_trap_restart_finish(env, restart,
                                              restart_detached);
                 }
+                mmix_cpu_retire_instruction(env, resume_insn, env->pc);
                 cpu_loop_exit_noexc(cs);
             }
         }
     }
+
+    mmix_cpu_retire_instruction(env, resume_insn, env->pc);
 
     if ((int64_t)exec < 0) {
         env->pc = where;
@@ -944,13 +961,14 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         uint32_t reg = (insn >> 16) & 0xff;
 
         mmix_cpu_write_reg(env, reg, z);
+        mmix_cpu_retire_instruction(env, MMIX_ORI_OPCODE << 24, where - 4);
         if (events != 0) {
             env->pc = where - 4;
             env->npc = where;
             if (tracked_restart) {
                 mmix_trap_restart_finish(env, restart, restart_detached);
             }
-            mmix_update_ra_events(env, events, insn, y, z);
+            mmix_update_ra_events_internal(env, events, insn, y, z, true);
         }
         env->pc = where;
         env->npc = where + 4;
@@ -1035,8 +1053,6 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
 
 void helper_mmix_resume(CPUMMIXState *env, uint32_t insn, uint32_t z)
 {
-    mmix_cpu_retire_instruction(env);
-
     switch (z) {
     case 0:
         mmix_resume_state(env, false, insn, z);
@@ -1074,7 +1090,6 @@ G_NORETURN void mmix_cpu_shutdown_with_log(CPUMMIXState *env,
 
 void helper_mmix_test_exit(CPUMMIXState *env)
 {
-    mmix_cpu_retire_instruction(env);
     mmix_cpu_shutdown_with_log(env, "MMIX test exit", 0);
 }
 

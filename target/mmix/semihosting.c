@@ -81,9 +81,10 @@ typedef struct MMIXSemihostingArgs3 {
     uint64_t arg3;
 } MMIXSemihostingArgs3;
 
-static G_NORETURN void mmix_semihosting_halt(CPUMMIXState *env)
+static G_NORETURN void mmix_semihosting_halt(CPUMMIXState *env,
+                                             uint32_t insn)
 {
-    mmix_cpu_retire_instruction(env);
+    mmix_cpu_retire_instruction(env, insn, env->pc);
     mmix_cpu_shutdown_with_log(env, "MMIX hosted Halt",
                                mmix_cpu_read_reg(env, 255) & 0xff);
 }
@@ -1304,7 +1305,7 @@ void helper_mmix_semihosting_trap(CPUMMIXState *env, uint32_t insn,
 
     switch (call.action) {
     case MMIX_SEMIHOSTING_ACTION_HALT:
-        mmix_semihosting_halt(env);
+        mmix_semihosting_halt(env, insn);
         break;
     case MMIX_SEMIHOSTING_ACTION_FOPEN:
     case MMIX_SEMIHOSTING_ACTION_FCLOSE:

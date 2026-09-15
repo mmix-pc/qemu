@@ -347,10 +347,35 @@ void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits)
     env->rq_new_bits |= new_bits;
 }
 
-bool mmix_cpu_retire_instruction(CPUMMIXState *env)
+#define MMIX_RU_PATTERN_SHIFT 56
+#define MMIX_RU_MASK_SHIFT 48
+#define MMIX_RU_COUNT_NEGATIVE (1ULL << 47)
+#define MMIX_RU_COUNT_MASK (MMIX_RU_COUNT_NEGATIVE - 1)
+
+static void mmix_cpu_count_usage(CPUMMIXState *env, uint32_t insn,
+                                 uint64_t location)
+{
+    uint64_t usage = env->sregs[MMIX_SREG_RU];
+    uint8_t pattern = usage >> MMIX_RU_PATTERN_SHIFT;
+    uint8_t mask = usage >> MMIX_RU_MASK_SHIFT;
+    uint8_t opcode = insn >> 24;
+
+    if (((int64_t)location < 0 && !(usage & MMIX_RU_COUNT_NEGATIVE)) ||
+        (opcode & mask) != pattern) {
+        return;
+    }
+
+    env->sregs[MMIX_SREG_RU] =
+        (usage & ~MMIX_RU_COUNT_MASK) |
+        ((usage + 1) & MMIX_RU_COUNT_MASK);
+}
+
+bool mmix_cpu_retire_instruction(CPUMMIXState *env, uint32_t insn,
+                                 uint64_t location)
 {
     uint64_t interval = env->sregs[MMIX_SREG_RI];
 
+    mmix_cpu_count_usage(env, insn, location);
     /* Use one deterministic virtual clock pulse per retired instruction. */
     env->sregs[MMIX_SREG_RI] = interval - 1;
     if (interval != 1) {
@@ -428,7 +453,8 @@ void helper_mmix_complete_instruction(CPUMMIXState *env, uint64_t cause,
                                       uint32_t insn, uint64_t continuation)
 {
     CPUState *cs = env_cpu(env);
-    bool interval_interrupt = mmix_cpu_retire_instruction(env);
+    bool interval_interrupt =
+        mmix_cpu_retire_instruction(env, insn, env->pc);
 
     if (cause != 0) {
         env->npc = continuation;

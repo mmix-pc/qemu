@@ -2149,8 +2149,37 @@ def interval_counter_replay_test():
     )
 
 
+def usage_counter_replay_test():
+    instruction = insn(LDB, R111, R110, R0)
+    usage = (LDB << 56) | (0xff << 48)
+    program, fault_pc, exit_pc = recoverable_data_access_program(
+        instruction,
+        RQ_PROGRAM_R,
+        0,
+        REPLAY_DATA_VALUE,
+        [
+            *set_octa(R110, REPLAY_DATA_VIRTUAL),
+            *set_octa(R111, 0xdeadbeefcafebabe),
+            *set_octa(R229, usage),
+            insn(PUT, SR_U, 0, R229),
+        ],
+        [insn(GET, R230, 0, SR_U), halt()],
+    )
+    return MMIXTest(
+        "usage-counter-replayed-load-counts-once",
+        program,
+        pc=exit_pc,
+        regs={
+            R111: 0xffffffffffffff80,
+            R200: fault_pc + 4,
+            R230: usage | 1,
+        },
+    )
+
+
 RECOVERABLE_LOAD_REPLAY_TESTS = [
     interval_counter_replay_test(),
+    usage_counter_replay_test(),
     recoverable_load_test(
         "resume-ropcode0-load-byte-missing-page",
         insn(LDB, R111, R110, R0),
@@ -4713,6 +4742,7 @@ ISA_TESTS = [
             33 + 13: 0x8000000500000000,
             33 + 14: 0x8000000600000000,
             33 + 15: 0,
+            33 + 17: 17,
             33 + 18: 0x369c200400000000,
             33 + 19: 32,
         },
@@ -4761,7 +4791,7 @@ ISA_TESTS = [
             R42: 0x13,
             R43: 0x14,
             R44: 0x15,
-            R45: 0x16,
+            R45: 0x1e,
             R46: 0x17,
             R47: 0x18,
         },
@@ -4833,6 +4863,70 @@ ISA_TESTS = [
         ),
         pc=(1 << 63) | 0x20c,
         regs={R40: 2},
+    ),
+    MMIXTest(
+        "usage-counter-default-and-get-timing",
+        b"".join([
+            insn(GET, R40, 0, SR_U),
+            insn(GET, R41, 0, SR_U),
+            halt(),
+        ]),
+        pc=0x8,
+        regs={R40: 0, R41: 1},
+    ),
+    MMIXTest(
+        "usage-counter-opcode-selection",
+        b"".join([
+            *set_octa(R1, (ORI << 56) | (0xff << 48)),
+            insn(PUT, SR_U, 0, R1),
+            insn(ORI, R2, R0, 1),
+            insn(OR, R3, R0, R2),
+            insn(GET, R40, 0, SR_U),
+            *set_octa(R4, 1 << 56),
+            insn(PUT, SR_U, 0, R4),
+            insn(SWYM, 0, 0, 0),
+            insn(GET, R41, 0, SR_U),
+            halt(),
+        ]),
+        pc=0x3c,
+        regs={
+            R40: (ORI << 56) | (0xff << 48) | 1,
+            R41: 1 << 56,
+        },
+    ),
+    MMIXTest(
+        "usage-counter-wrap-preserves-negative-enable",
+        b"".join([
+            *set_octa(R1, RU_COUNT_NEGATIVE | RU_COUNT_MASK),
+            insn(PUT, SR_U, 0, R1),
+            insn(GET, R40, 0, SR_U),
+            halt(),
+        ]),
+        pc=0x18,
+        regs={R40: RU_COUNT_NEGATIVE},
+    ),
+    MMIXTest(
+        "usage-counter-negative-address-control",
+        program_with_regions(
+            (0, [
+                insn(PUTI, SR_U, 0, 0),
+                *set_octa(R1, (1 << 63) | 0x200),
+                insn(GO, R2, R1, R0),
+            ]),
+            (0x200, [
+                insn(GET, R40, 0, SR_U),
+                *set_octa(R3, RU_COUNT_NEGATIVE | 10),
+                insn(PUT, SR_U, 0, R3),
+                insn(SWYM, 0, 0, 0),
+                insn(GET, R41, 0, SR_U),
+                halt(),
+            ]),
+        ),
+        pc=(1 << 63) | 0x220,
+        regs={
+            R40: 6,
+            R41: RU_COUNT_NEGATIVE | 12,
+        },
     ),
     MMIXTest(
         "special-register-ra-invalid-masked",
@@ -5867,9 +5961,73 @@ ISA_TESTS = [
         regs={R3: 0, R10: 0x55, R11: RA_EVENT_Z << RA_ENABLE_SHIFT},
     ),
     MMIXTest(
+        "usage-counter-arithmetic-trip",
+        program_with_regions(
+            (0, [jump(JMP, 0x100 // 4)]),
+            (32, [
+                insn(GET, R41, 0, SR_I),
+                insn(GET, R40, 0, SR_U),
+                halt(),
+            ]),
+            (0x100, [
+                *set_octa(R1, (ADD << 56) | (0xff << 48)),
+                insn(PUT, SR_U, 0, R1),
+                *set_octa(R2, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R2),
+                *set_octa(R3, 0x7fffffffffffffff),
+                wyde(SETL, R4, 1),
+                insn(PUTI, SR_I, 0, 2),
+                insn(ADD, R5, R3, R4),
+            ]),
+        ),
+        pc=0x28,
+        regs={
+            R40: (ADD << 56) | (0xff << 48) | 1,
+            R41: 0,
+        },
+    ),
+    MMIXTest(
+        "usage-counter-ropcode2-arithmetic-trip",
+        program_with_regions(
+            (0, [jump(JMP, 0x100 // 4)]),
+            (32, [
+                insn(GET, R41, 0, SR_I),
+                insn(GET, R40, 0, SR_U),
+                halt(),
+            ]),
+            (0x100, [
+                *set_octa(R1, (ORI << 56) | (0xff << 48)),
+                insn(PUT, SR_U, 0, R1),
+                *set_octa(R2, RA_EVENT_V << RA_ENABLE_SHIFT),
+                insn(PUT, SR_A, 0, R2),
+                *set_octa(R3, 0x200),
+                insn(PUT, SR_W, 0, R3),
+                *set_octa(
+                    R4,
+                    (2 << 56) |
+                    (RA_EVENT_V << 40) |
+                    int.from_bytes(insn(ADDI, R32, R0, 7), "big"),
+                ),
+                insn(PUT, SR_X, 0, R4),
+                wyde(SETL, R5, 0x77),
+                insn(PUT, SR_Z, 0, R5),
+                insn(PUTI, SR_I, 0, 3),
+                insn(RESUME, 0, 0, 0),
+            ]),
+        ),
+        pc=0x28,
+        regs={
+            R32: 0x77,
+            R40: (ORI << 56) | (0xff << 48) | 1,
+            R41: 0,
+        },
+    ),
+    MMIXTest(
         "resume-ropcode-result",
         program_with_handler(
             [
+                *set_octa(R4, (ORI << 56) | (0xff << 48)),
+                insn(PUT, SR_U, 0, R4),
                 wyde(SETL, R1, 0x40),  # target address
                 insn(PUT, SR_W, 0, R1),
                 *set_octa(
@@ -5880,15 +6038,22 @@ ISA_TESTS = [
                 insn(PUT, SR_X, 0, R2),
                 wyde(SETL, R3, 0x77),
                 insn(PUT, SR_Z, 0, R3),
+                insn(PUTI, SR_I, 0, 3),
                 insn(RESUME, 0, 0, 0),
             ],
             0x40,
             [
+                insn(GET, R41, 0, SR_I),
+                insn(GET, R40, 0, SR_U),
                 halt(),
             ],
         ),
-        pc=0x40,
-        regs={R32: 0x77},
+        pc=0x48,
+        regs={
+            R32: 0x77,
+            R40: (ORI << 56) | (0xff << 48) | 1,
+            R41: 0,
+        },
     ),
     MMIXTest(
         "resume-ropcode0-integer-replay",

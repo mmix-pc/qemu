@@ -106,6 +106,7 @@ enum {
 #define MMIX_DYNAMIC_TRAP_RESUME_NEXT (1ULL << 63)
 #define MMIX_FORCED_TRANSLATION_EXEC_PREFIX 0x0300000000000000ULL
 #define MMIX_TRAP_OPCODE 0x00U
+#define MMIX_ORI_OPCODE 0xc1U
 #define MMIX_PUT_OPCODE 0xf6U
 #define MMIX_PUTI_OPCODE 0xf7U
 #define MMIX_SWYM_INSN 0xfd000000U
@@ -351,7 +352,8 @@ bool mmix_cpu_prepare_stack_store_retry(CPUMMIXState *env,
 bool mmix_cpu_prepare_stack_load_retry(CPUMMIXState *env,
                                        MMIXStackAccessState *access);
 void mmix_cpu_set_rq_bits(CPUMMIXState *env, uint64_t bits);
-bool mmix_cpu_retire_instruction(CPUMMIXState *env);
+bool mmix_cpu_retire_instruction(CPUMMIXState *env, uint32_t insn,
+                                 uint64_t location);
 void mmix_cpu_record_program_exception(CPUMMIXState *env, uint64_t causes);
 void mmix_cpu_raise_dynamic_trap(CPUMMIXState *env, uint64_t causes,
                                  uint32_t insn);
