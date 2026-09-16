@@ -116,6 +116,22 @@ def test_no_image_mttcg_startup(qemu):
     run_no_image_mttcg_test(qemu)
 
 
+@pytest.mark.parametrize("profile", ("platform", "hosted"))
+def test_no_image_rejects_elf_startup(qemu, profile):
+    result = subprocess.run(
+        [qemu, "-machine", f"virt,elf-startup={profile}",
+         "-display", "none", "-monitor", "none", "-serial", "none"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert ("elf-startup applies only to a directly loaded ELF -kernel image"
+            in result.stderr)
+
+
 @pytest.mark.boot_integration
 @pytest.mark.parametrize("cpu_count", (1, 64))
 def test_firmware_cpu_entry_state(qemu, workdir, cpu_count):
@@ -240,6 +256,26 @@ def test_firmware_preflight_accepts_bios_with_machine_pflash1(qemu, workdir):
     run_paused_machine(qemu, machine="virt,pflash1=vars", qemu_args=args)
 
     assert _file_states(files) == before
+
+
+@pytest.mark.parametrize("profile", ("platform", "hosted"))
+def test_firmware_preflight_rejects_elf_startup(
+    qemu, workdir, profile
+):
+    files = _firmware_files(workdir, f"elf-startup-{profile}")
+    result = subprocess.run(
+        [qemu, "-machine", f"virt,elf-startup={profile}",
+         "-display", "none", "-monitor", "none", "-serial", "none",
+         "-bios", str(files["bios"])],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert ("elf-startup applies only to a directly loaded ELF -kernel image"
+            in result.stderr)
 
 
 @pytest.mark.parametrize(

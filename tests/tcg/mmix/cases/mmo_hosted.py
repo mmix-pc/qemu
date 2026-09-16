@@ -460,7 +460,7 @@ MMO_HOSTED_FAILURE_TESTS = [
     MMIXLoaderFailure(
         "mmo-hosted-explicit-elf-abi",
         _hosted_image([halt()]),
-        ("does not accept an explicit ELF startup profile",),
+        ("elf-startup applies only to a directly loaded ELF -kernel image",),
         qemu_args=("-machine", "elf-startup=hosted"),
     ),
     MMIXLoaderFailure(

@@ -21,7 +21,6 @@ typedef struct MMIXMMOHostedOptions {
     bool has_explicit_arguments;
     bool semihosting_enabled;
     bool has_initrd;
-    bool has_explicit_elf_startup;
     bool has_firmware;
     bool linux_handoff;
 } MMIXMMOHostedOptions;

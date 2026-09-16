@@ -518,8 +518,13 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
         "raw-hosted-startup",
         bytes(0x104),
         ("-machine", "elf-startup=hosted"),
-        ("raw -kernel loading does not support ELF startup profile "
-         "'hosted'",),
+        ("elf-startup applies only to a directly loaded ELF -kernel image",),
+    ),
+    MMIXProcessFailure(
+        "raw-platform-startup",
+        bytes(0x104),
+        ("-machine", "elf-startup=platform"),
+        ("elf-startup applies only to a directly loaded ELF -kernel image",),
     ),
     MMIXProcessFailure(
         "elf-linux-maxcpus",

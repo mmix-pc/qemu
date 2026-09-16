@@ -524,6 +524,12 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
                    "-bios or pflash0");
         return false;
     }
+    if (vms->elf_startup_explicit &&
+        (firmware || !machine->kernel_filename)) {
+        error_setg(errp, "MMIX elf-startup applies only to a directly "
+                   "loaded ELF -kernel image");
+        return false;
+    }
     for (i = 0; i < MMIX_VIRT_FLASH_BANK_COUNT; i++) {
         if (!mmix_virt_validate_pflash_backend(pflash[i], i, errp)) {
             return false;
@@ -1357,6 +1363,11 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
     if (!mmix_classify_kernel_image(machine->kernel_filename, &type, errp)) {
         return false;
     }
+    if (vms->elf_startup_explicit && type != MMIX_KERNEL_IMAGE_ELF) {
+        error_setg(errp, "MMIX elf-startup applies only to a directly "
+                   "loaded ELF -kernel image");
+        return false;
+    }
 
     switch (type) {
     case MMIX_KERNEL_IMAGE_MMO: {
@@ -1386,7 +1397,6 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
             .has_explicit_arguments = has_explicit_arguments,
             .semihosting_enabled = semihosting_enabled(false),
             .has_initrd = machine->initrd_filename != NULL,
-            .has_explicit_elf_startup = vms->elf_startup_explicit,
             .has_firmware = false,
             .linux_handoff = false,
         };
@@ -1520,11 +1530,6 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
         if (machine->smp.cpus != 1) {
             error_setg(errp, "MMIX raw -kernel loading requires exactly one "
                        "CPU");
-            return false;
-        }
-        if (vms->elf_startup != MMIX_ELF_STARTUP_PLATFORM) {
-            error_setg(errp, "MMIX raw -kernel loading does not support ELF "
-                       "startup profile 'hosted'");
             return false;
         }
         if (mmix_virt_has_semihosting_args()) {
@@ -1861,7 +1866,7 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
                                   mmix_virt_set_elf_startup);
     object_class_property_set_description(
         oc, "elf-startup",
-        "Set the ELF startup profile (platform or hosted)");
+        "Set the directly loaded ELF startup profile (platform or hosted)");
     object_class_property_add_str(oc, "pflash0", mmix_virt_get_pflash0,
                                   mmix_virt_set_pflash0);
     object_class_property_set_description(
