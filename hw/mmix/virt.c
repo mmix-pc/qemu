@@ -1191,6 +1191,21 @@ static void mmix_virt_apply_mmo_startup(MMIXVirtMachineState *vms,
     mmix_cpu_update_interrupt(env);
 }
 
+static void mmix_virt_apply_elf_arguments_startup(
+    MMIXVirtMachineState *vms, CPUState *cs)
+{
+    CPUMMIXState *env = &MMIX_CPU(cs)->env;
+
+    g_assert(env->flat_translation);
+    g_assert(env->sregs[MMIX_SREG_RK] == MMIX_INITIAL_RK);
+    g_assert(env->sregs[MMIX_SREG_RQ] == 0);
+
+    env->sregs[MMIX_SREG_RK] = UINT64_MAX;
+    mmix_cpu_write_reg(env, 0, vms->argument_count);
+    mmix_cpu_write_reg(env, 1, vms->argument_argv);
+    mmix_cpu_update_interrupt(env);
+}
+
 static void mmix_virt_apply_linux_startup(
     CPUState *cs, unsigned int cpu_id, const MMIXKernelLoadInfo *info,
     const MMIXLinuxBootInfo *linux_info)
@@ -1304,10 +1319,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
             mmix_virt_apply_firmware_startup(vms->cpus[i], i);
         }
         if (i == (info ? info->boot_cpu_id : 0) && vms->argument_data) {
-            CPUMMIXState *env = &MMIX_CPU(vms->cpus[i])->env;
-
-            mmix_cpu_write_reg(env, 0, vms->argument_count);
-            mmix_cpu_write_reg(env, 1, vms->argument_argv);
+            mmix_virt_apply_elf_arguments_startup(vms, vms->cpus[i]);
         }
     }
 

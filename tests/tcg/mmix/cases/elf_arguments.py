@@ -30,8 +30,12 @@ from .common import (
     R45,
     R46,
     R47,
+    R48,
+    R49,
     R250,
+    SR_K,
     SR_L,
+    SR_Q,
     SUBUI,
     SUBU,
     elf64_image,
@@ -60,6 +64,8 @@ def explicit_arguments_program():
         insn(LDBUI, R42, R34, 4),
         insn(LDBUI, R43, R35, 0),
         insn(LDBUI, R44, R36, 0),
+        insn(GET, R48, 0, SR_K),
+        insn(GET, R49, 0, SR_Q),
         halt(),
     ]
     regs = {
@@ -74,6 +80,8 @@ def explicit_arguments_program():
         R43: ord("o"),
         R44: ord("t"),
         R47: 64,
+        R48: (1 << 64) - 1,
+        R49: 0,
     }
     return b"".join(program), (len(program) - 1) * 4, regs
 
@@ -179,6 +187,7 @@ HOSTED_ELF_TESTS = [
             "-semihosting-config",
             "enable=on,arg=prog,arg=one,arg=two",
         ),
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-arguments-fallback",
@@ -192,6 +201,7 @@ HOSTED_ELF_TESTS = [
             "-append",
             "one two",
         ),
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-arguments-empty",
