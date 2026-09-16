@@ -18,6 +18,11 @@ bool mmix_preflight_elf_kernel(const char *filename,
                                MMIXKernelLoadInfo *info,
                                GArray **image_ranges, Error **errp);
 
+bool mmix_preflight_bare_elf_kernel(const char *filename,
+                                    const MMIXPhysicalRAM *ram,
+                                    MMIXKernelLoadInfo *info,
+                                    GArray **image_ranges, Error **errp);
+
 bool mmix_prepare_linux_elf_kernel(const char *filename,
                                    const MMIXPhysicalRAM *ram,
                                    MMIXKernelLoadInfo *info,

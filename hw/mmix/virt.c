@@ -1518,6 +1518,11 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                 machine->kernel_filename, &vms->ram, info, image_ranges,
                 elf_source, errp);
         }
+        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_BARE) {
+            return mmix_preflight_bare_elf_kernel(
+                machine->kernel_filename, &vms->ram, info, image_ranges,
+                errp);
+        }
         return mmix_preflight_elf_kernel(machine->kernel_filename, &vms->ram,
                                          info, image_ranges, errp);
     case MMIX_KERNEL_IMAGE_RAW: {

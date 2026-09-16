@@ -4,6 +4,7 @@
 
 from .common import (
     MASK64,
+    MMIX_NEGATIVE_ALIAS_BIT,
     MMIXELFTest,
     MMIXProcessFailure,
     PT_INTERP,
@@ -50,24 +51,44 @@ def segment(address, data, *, offset, mem_size=None, flags=5,
 SIMPLE = elf64_image(0, halt())
 TWO_SEGMENTS_ONE_PAGE = elf64_segments(
     (
-        segment(0x2000, halt(), offset=0x200),
-        segment(0x2100, b"DATA", offset=0x300, flags=6),
+        segment(
+            0x2000, halt(), offset=0x200,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT | 0x2000,
+        ),
+        segment(
+            0x2100, b"DATA", offset=0x300, flags=6,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT | 0x2100,
+        ),
     ),
-    entry=0x2000,
+    entry=MMIX_NEGATIVE_ALIAS_BIT | 0x2000,
 )
 WITH_INTERPRETER = elf64_segments(
     (
-        segment(0, halt(), offset=0x200),
+        segment(
+            0, halt(), offset=0x200,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT,
+        ),
         segment(0, b"/ld.so\0", offset=0x300, ph_type=PT_INTERP, flags=4),
     ),
-    entry=0,
+    entry=MMIX_NEGATIVE_ALIAS_BIT,
 )
 OVERLAPPING_SEGMENTS = elf64_segments(
     (
-        segment(0x2000, halt(), offset=0x200, mem_size=0x100),
-        segment(0x2080, b"DATA", offset=0x300, mem_size=0x100, flags=6),
+        segment(
+            0x2000, halt(), offset=0x200, mem_size=0x100,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT | 0x2000,
+        ),
+        segment(
+            0x2080, b"DATA", offset=0x300, mem_size=0x100, flags=6,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT | 0x2080,
+        ),
     ),
-    entry=0x2000,
+    entry=MMIX_NEGATIVE_ALIAS_BIT | 0x2000,
+)
+
+SIMPLE = elf64_patch_ehdr_field(SIMPLE, "entry", MMIX_NEGATIVE_ALIAS_BIT)
+SIMPLE = elf64_patch_phdr_field(
+    SIMPLE, 0, "virtual_address", MMIX_NEGATIVE_ALIAS_BIT
 )
 
 
@@ -75,29 +96,41 @@ ELF_PREFLIGHT_VALID_TESTS = [
     MMIXELFTest(
         "elf-preflight-simple",
         SIMPLE,
-        pc=0,
+        pc=MMIX_NEGATIVE_ALIAS_BIT,
         regs={},
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-preflight-segments-share-reservation-page",
         TWO_SEGMENTS_ONE_PAGE,
-        pc=0x2000,
+        pc=MMIX_NEGATIVE_ALIAS_BIT | 0x2000,
         regs={},
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-preflight-ram-endpoint",
-        elf64_image(128 * 1024 * 1024 - 4, halt(),
-                    entry=128 * 1024 * 1024 - 4),
-        pc=128 * 1024 * 1024 - 4,
+        elf64_image(
+            128 * 1024 * 1024 - 4, halt(),
+            entry=MMIX_NEGATIVE_ALIAS_BIT | (128 * 1024 * 1024 - 4),
+            virtual_address=(MMIX_NEGATIVE_ALIAS_BIT |
+                             (128 * 1024 * 1024 - 4)),
+        ),
+        pc=MMIX_NEGATIVE_ALIAS_BIT | (128 * 1024 * 1024 - 4),
         regs={},
         qemu_args=("-m", "128M"),
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-preflight-above-4g",
-        elf64_image(0x100000000, halt(), entry=0x100000000),
-        pc=0x100000000,
+        elf64_image(
+            0x100000000, halt(),
+            entry=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
+        ),
+        pc=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
         regs={},
         qemu_args=("-m", "8G"),
+        security_checks=True,
     ),
 ]
 
@@ -116,7 +149,10 @@ ELF_PREFLIGHT_FAILURE_TESTS = [
     ),
     MMIXProcessFailure(
         "elf-preflight-no-nonempty-load-segment",
-        elf64_image(0, b"", mem_size=0),
+        elf64_image(
+            0, b"", mem_size=0, entry=MMIX_NEGATIVE_ALIAS_BIT,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT,
+        ),
         (),
         ("has no nonempty PT_LOAD segment",),
     ),
@@ -169,15 +205,19 @@ ELF_PREFLIGHT_FAILURE_TESTS = [
         ("invalid MMIX ELF PT_LOAD alignment",),
     ),
     MMIXProcessFailure(
-        "elf-preflight-nonidentity-address",
-        elf64_patch_phdr_field(SIMPLE, 0, "virtual_address", 0x1000),
+        "elf-preflight-non-alias-address",
+        elf64_patch_phdr_field(SIMPLE, 0, "virtual_address", 0),
         (),
-        ("does not use identical virtual and physical addresses",),
+        ("does not use a negative direct-alias mapping",),
     ),
     MMIXProcessFailure(
         "elf-preflight-outside-ram",
-        elf64_image(128 * 1024 * 1024 - 4, halt(), mem_size=8,
-                    entry=128 * 1024 * 1024 - 4),
+        elf64_image(
+            128 * 1024 * 1024 - 4, halt(), mem_size=8,
+            entry=MMIX_NEGATIVE_ALIAS_BIT | (128 * 1024 * 1024 - 4),
+            virtual_address=(MMIX_NEGATIVE_ALIAS_BIT |
+                             (128 * 1024 * 1024 - 4)),
+        ),
         ("-m", "128M"),
         ("targets non-RAM physical range",),
     ),
@@ -189,13 +229,17 @@ ELF_PREFLIGHT_FAILURE_TESTS = [
     ),
     MMIXProcessFailure(
         "elf-preflight-unaligned-entry",
-        elf64_patch_ehdr_field(SIMPLE, "entry", 2),
+        elf64_patch_ehdr_field(
+            SIMPLE, "entry", MMIX_NEGATIVE_ALIAS_BIT | 2
+        ),
         (),
         ("is not a complete aligned instruction",),
     ),
     MMIXProcessFailure(
         "elf-preflight-entry-outside-segment",
-        elf64_patch_ehdr_field(SIMPLE, "entry", 0x1000),
+        elf64_patch_ehdr_field(
+            SIMPLE, "entry", MMIX_NEGATIVE_ALIAS_BIT | 0x1000
+        ),
         (),
         ("is not a complete aligned instruction",),
     ),
@@ -207,7 +251,10 @@ ELF_PREFLIGHT_FAILURE_TESTS = [
     ),
     MMIXProcessFailure(
         "elf-preflight-incomplete-entry-instruction",
-        elf64_image(0, b"\0\0", entry=0),
+        elf64_image(
+            0, b"\0\0", entry=MMIX_NEGATIVE_ALIAS_BIT,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT,
+        ),
         (),
         ("is not a complete aligned instruction",),
     ),

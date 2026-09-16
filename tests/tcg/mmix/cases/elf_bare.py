@@ -6,6 +6,7 @@ from .common import (
     ADDI,
     GET,
     LDOU,
+    MMIX_NEGATIVE_ALIAS_BIT,
     MMIXELFTest,
     MMIXProcessFailure,
     R0,
@@ -25,6 +26,7 @@ from .common import (
 
 
 BARE_ENTRY = 0x2000
+BARE_VIRTUAL_ENTRY = MMIX_NEGATIVE_ALIAS_BIT | BARE_ENTRY
 BARE_BSS = BARE_ENTRY + 0x40
 
 BARE_PROGRAM = b"".join((
@@ -44,24 +46,35 @@ BARE_ELF_TESTS = [
             BARE_ENTRY,
             BARE_PROGRAM,
             mem_size=BARE_BSS + 8 - BARE_ENTRY,
-            entry=BARE_ENTRY,
+            entry=BARE_VIRTUAL_ENTRY,
+            virtual_address=BARE_VIRTUAL_ENTRY,
         ),
-        pc=BARE_ENTRY + len(BARE_PROGRAM) - 4,
+        pc=BARE_VIRTUAL_ENTRY + len(BARE_PROGRAM) - 4,
         regs={R32: 0, R33: 0, R34: 0, R35: 32, R36: 0},
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-bare-semihosting-enabled",
-        elf64_image(BARE_ENTRY, BARE_PROGRAM, entry=BARE_ENTRY),
-        pc=BARE_ENTRY + len(BARE_PROGRAM) - 4,
+        elf64_image(
+            BARE_ENTRY, BARE_PROGRAM, entry=BARE_VIRTUAL_ENTRY,
+            virtual_address=BARE_VIRTUAL_ENTRY,
+        ),
+        pc=BARE_VIRTUAL_ENTRY + len(BARE_PROGRAM) - 4,
         regs={R32: 0, R33: 0, R34: 0, R35: 32, R36: 0},
         qemu_args=("-semihosting",),
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-bare-entry-above-4g",
-        elf64_image(0x100000000, halt(), entry=0x100000000),
-        pc=0x100000000,
+        elf64_image(
+            0x100000000, halt(),
+            entry=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
+        ),
+        pc=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
         regs={},
         qemu_args=("-m", "8G"),
+        security_checks=True,
     ),
 ]
 

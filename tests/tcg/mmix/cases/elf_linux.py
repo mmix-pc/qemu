@@ -421,10 +421,10 @@ LINUX_STATE_TESTS = [linux_state_program()]
 
 LINUX_PREFLIGHT_REJECTION_TESTS = [
     MMIXProcessFailure(
-        "elf-bare-negative-direct-alias",
-        LINUX_DIRECT_ALIAS_IMAGE,
+        "elf-bare-identity-mapping",
+        elf64_image(0x2000, halt(), entry=0x2000),
         (),
-        ("does not use identical virtual and physical addresses",),
+        ("does not use a negative direct-alias mapping",),
     ),
     MMIXProcessFailure(
         "elf-argc-argv-negative-direct-alias",

@@ -64,6 +64,7 @@ RK_IPI = RQ_IPI
 RU_COUNT_NEGATIVE = 1 << 47
 RU_COUNT_MASK = RU_COUNT_NEGATIVE - 1
 DYNAMIC_TRAP_RESUME_NEXT = 1 << 63
+MMIX_NEGATIVE_ALIAS_BIT = 1 << 63
 VM_PAGE_TABLE = 0x2000
 VM_RV_PAGE0 = 0x11110d0000002000
 VM_RV_SOFTWARE = VM_RV_PAGE0 | 1
@@ -740,7 +741,8 @@ def _align_up(value, alignment):
 
 
 def elf64_image_with_reg_contents(load_address, data, global_base, values,
-                                  entry=0, segment_offset=0x100):
+                                  entry=0, segment_offset=0x100,
+                                  virtual_address=None):
     if not MMIX_GLOBAL_REG_MIN <= global_base < MMIX_REGS:
         raise ValueError("ELF global-register base must be in 32..255")
     if len(values) > MMIX_REGS - 1 - global_base:
@@ -763,7 +765,8 @@ def elf64_image_with_reg_contents(load_address, data, global_base, values,
         shnum=section_count,
         shstrndx=1,
     )
-    phdr = elf64_phdr(load_address, data, offset=segment_offset)
+    phdr = elf64_phdr(load_address, data, offset=segment_offset,
+                      virtual_address=virtual_address)
     prefix = header + phdr
     if segment_offset < len(prefix):
         raise ValueError("ELF segment offset overlaps the program header table")

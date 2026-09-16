@@ -6,6 +6,7 @@ from .common import (
     ADDI,
     GET,
     MASK64,
+    MMIX_NEGATIVE_ALIAS_BIT,
     MMIXELFTest,
     MMIXProcessFailure,
     R20,
@@ -63,15 +64,20 @@ ABSENT_PROGRAM = b"".join((
 ))
 
 VALID_IMAGE = elf64_image_with_reg_contents(
-    0, REGISTER_PROGRAM, GLOBAL_BASE, GLOBAL_VALUES
+    0, REGISTER_PROGRAM, GLOBAL_BASE, GLOBAL_VALUES,
+    entry=MMIX_NEGATIVE_ALIAS_BIT,
+    virtual_address=MMIX_NEGATIVE_ALIAS_BIT,
 )
-EMPTY_IMAGE = elf64_image_with_reg_contents(0, halt(), GLOBAL_BASE, ())
+EMPTY_IMAGE = elf64_image_with_reg_contents(
+    0, halt(), GLOBAL_BASE, (), entry=MMIX_NEGATIVE_ALIAS_BIT,
+    virtual_address=MMIX_NEGATIVE_ALIAS_BIT,
+)
 
 ELF_REGISTER_TESTS = [
     MMIXELFTest(
         "elf-register-contents-bare",
         VALID_IMAGE,
-        pc=len(REGISTER_PROGRAM) - 4,
+        pc=MMIX_NEGATIVE_ALIAS_BIT + len(REGISTER_PROGRAM) - 4,
         regs={
             R20: GLOBAL_VALUES[0],
             R21: GLOBAL_VALUES[1],
@@ -80,12 +86,17 @@ ELF_REGISTER_TESTS = [
             R24: GLOBAL_VALUES[4],
             R25: GLOBAL_BASE,
         },
+        security_checks=True,
     ),
     MMIXELFTest(
         "elf-register-contents-absent",
-        elf64_image(0, ABSENT_PROGRAM),
-        pc=len(ABSENT_PROGRAM) - 4,
+        elf64_image(
+            0, ABSENT_PROGRAM, entry=MMIX_NEGATIVE_ALIAS_BIT,
+            virtual_address=MMIX_NEGATIVE_ALIAS_BIT,
+        ),
+        pc=MMIX_NEGATIVE_ALIAS_BIT + len(ABSENT_PROGRAM) - 4,
         regs={R40: 0, R41: 0, R42: 32},
+        security_checks=True,
     ),
 ]
 
