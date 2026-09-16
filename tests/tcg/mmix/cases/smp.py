@@ -11,7 +11,8 @@ from .common import *
 
 
 SMP_CPU_COUNT = 2
-SMP_ENTRY = 0x1000
+SMP_ENTRY_PHYS = 0x1000
+SMP_ENTRY = MMIX_NEGATIVE_ALIAS_BIT | SMP_ENTRY_PHYS
 SMP_MAILBOX_BASE = 0x00200000
 SMP_MAILBOX_SLOT_SIZE = 0x40
 SMP_WAIT_LIMIT = 1 << 28
@@ -118,16 +119,19 @@ class SMPProgram:
 
 
 def smp_elf_image(code, *regions):
-    all_regions = ((SMP_ENTRY, code), *regions)
+    all_regions = ((SMP_ENTRY_PHYS, code), *regions)
     end = max(address + len(data) for address, data in all_regions)
-    image = bytearray(end - SMP_ENTRY)
+    image = bytearray(end - SMP_ENTRY_PHYS)
 
     for address, data in all_regions:
-        if address < SMP_ENTRY:
+        if address < SMP_ENTRY_PHYS:
             raise ValueError("SMP ELF region precedes the entry point")
-        offset = address - SMP_ENTRY
+        offset = address - SMP_ENTRY_PHYS
         image[offset:offset + len(data)] = data
-    return elf64_image(SMP_ENTRY, bytes(image), entry=SMP_ENTRY)
+    return elf64_image(
+        SMP_ENTRY_PHYS, bytes(image), entry=SMP_ENTRY,
+        virtual_address=SMP_ENTRY,
+    )
 
 
 def smp_emit_unconditional_branch(program, label, zero=R254):
@@ -282,22 +286,14 @@ SMP_MAILBOX_TIMEOUT = smp_mailbox_baseline_program(SMP_TIMEOUT_WAIT_LIMIT)
 SMP_TESTS = [
     MMIXSMPTest(
         "smp-single-thread-mailbox-baseline",
-        elf64_image(
-            SMP_ENTRY,
-            SMP_MAILBOX_BASELINE.code,
-            entry=SMP_ENTRY,
-        ),
+        smp_elf_image(SMP_MAILBOX_BASELINE.code),
         pc=SMP_MAILBOX_BASELINE.success_pc,
         regs=SMP_MAILBOX_BASELINE.success_regs,
         thread_mode=TCG_THREAD_SINGLE,
     ),
     MMIXSMPTest(
         "smp-single-thread-missing-peer-timeout",
-        elf64_image(
-            SMP_ENTRY,
-            SMP_MAILBOX_TIMEOUT.code,
-            entry=SMP_ENTRY,
-        ),
+        smp_elf_image(SMP_MAILBOX_TIMEOUT.code),
         pc=SMP_MAILBOX_TIMEOUT.timeout_pc,
         regs={
             R32: 0,
@@ -314,11 +310,7 @@ SMP_TESTS = [
 SMP_MTTCG_TESTS = [
     MMIXSMPTest(
         "smp-multi-thread-mailbox-smoke",
-        elf64_image(
-            SMP_ENTRY,
-            SMP_MAILBOX_BASELINE.code,
-            entry=SMP_ENTRY,
-        ),
+        smp_elf_image(SMP_MAILBOX_BASELINE.code),
         pc=SMP_MAILBOX_BASELINE.success_pc,
         regs=SMP_MAILBOX_BASELINE.success_regs,
         thread_mode=TCG_THREAD_MULTI,

@@ -374,7 +374,9 @@ def test_firmware_dtb_matches_other_boot_modes(qemu, workdir):
     bios = workdir / "firmware-fdt.bin"
     kernel = workdir / "direct-fdt.elf"
     bios.write_bytes(halt())
-    kernel.write_bytes(elf64_image(0, halt()))
+    kernel.write_bytes(elf64_image(
+        0, halt(), entry=1 << 63, virtual_address=1 << 63
+    ))
     blobs = []
 
     for name, machine, args in (

@@ -544,6 +544,8 @@ static char *mmix_create_bare_elf(const char *directory, uint64_t ram_size)
     };
     const uint64_t code_address = 4 * GiB;
     const uint64_t data_address = ram_size - SEGMENT_MEMORY_SIZE;
+    const uint64_t code_virtual = (1ULL << 63) | code_address;
+    const uint64_t data_virtual = (1ULL << 63) | data_address;
     const uint8_t code[] = { 0x11, 0x22, 0x33, 0x44 };
     const uint8_t data[] = { 0xaa, 0xbb, 0xcc, 0xdd };
     uint8_t image[DATA_OFFSET + sizeof(data)] = { 0 };
@@ -560,7 +562,7 @@ static char *mmix_create_bare_elf(const char *directory, uint64_t ram_size)
     ehdr.e_type = cpu_to_be16(ET_EXEC);
     ehdr.e_machine = cpu_to_be16(EM_MMIX);
     ehdr.e_version = cpu_to_be32(EV_CURRENT);
-    ehdr.e_entry = cpu_to_be64(code_address);
+    ehdr.e_entry = cpu_to_be64(code_virtual);
     ehdr.e_phoff = cpu_to_be64(sizeof(ehdr));
     ehdr.e_ehsize = cpu_to_be16(sizeof(ehdr));
     ehdr.e_phentsize = cpu_to_be16(sizeof(phdrs[0]));
@@ -569,7 +571,7 @@ static char *mmix_create_bare_elf(const char *directory, uint64_t ram_size)
     phdrs[0].p_type = cpu_to_be32(PT_LOAD);
     phdrs[0].p_flags = cpu_to_be32(PF_R | PF_X);
     phdrs[0].p_offset = cpu_to_be64(CODE_OFFSET);
-    phdrs[0].p_vaddr = cpu_to_be64(code_address);
+    phdrs[0].p_vaddr = cpu_to_be64(code_virtual);
     phdrs[0].p_paddr = cpu_to_be64(code_address);
     phdrs[0].p_filesz = cpu_to_be64(sizeof(code));
     phdrs[0].p_memsz = cpu_to_be64(SEGMENT_MEMORY_SIZE);
@@ -578,7 +580,7 @@ static char *mmix_create_bare_elf(const char *directory, uint64_t ram_size)
     phdrs[1].p_type = cpu_to_be32(PT_LOAD);
     phdrs[1].p_flags = cpu_to_be32(PF_R | PF_W);
     phdrs[1].p_offset = cpu_to_be64(DATA_OFFSET);
-    phdrs[1].p_vaddr = cpu_to_be64(data_address);
+    phdrs[1].p_vaddr = cpu_to_be64(data_virtual);
     phdrs[1].p_paddr = cpu_to_be64(data_address);
     phdrs[1].p_filesz = cpu_to_be64(sizeof(data));
     phdrs[1].p_memsz = cpu_to_be64(SEGMENT_MEMORY_SIZE);
@@ -625,7 +627,7 @@ static void test_mmix_bare_elf_load_and_reset(void)
     g_assert_cmpmem(actual, sizeof(actual),
                     expected_data, sizeof(expected_data));
     registers = qtest_hmp(qts, "info registers");
-    g_assert_nonnull(strstr(registers, "pc=0x0000000100000000"));
+    g_assert_nonnull(strstr(registers, "pc=0x8000000100000000"));
     g_assert_nonnull(strstr(registers, "rL=0"));
     g_assert_nonnull(strstr(registers, "r0  =0x0000000000000000"));
     g_assert_nonnull(strstr(registers, "r1  =0x0000000000000000"));
@@ -641,7 +643,7 @@ static void test_mmix_bare_elf_load_and_reset(void)
                     expected_data, sizeof(expected_data));
     g_clear_pointer(&registers, g_free);
     registers = qtest_hmp(qts, "info registers");
-    g_assert_nonnull(strstr(registers, "pc=0x0000000100000000"));
+    g_assert_nonnull(strstr(registers, "pc=0x8000000100000000"));
     qtest_quit(qts);
 
     g_assert_cmpint(g_unlink(filename), ==, 0);

@@ -1146,6 +1146,7 @@ def run_linux_entry_state_test(qemu, workdir, test):
         qemu,
         image,
         qemu_args=(*qemu_args, "-S", "-qmp", "stdio"),
+        security_checks=test.security_checks,
     )
     process = subprocess.Popen(
         command,
@@ -1232,13 +1233,21 @@ def run_linux_smp_entry_test(qemu, workdir, test):
         qemu_args=qemu_args,
         check=False,
         timeout=10,
+        security_checks=test.security_checks,
     )
     result = read_log(log)
     assert_exit_pc(test.name, result, test.success_pc)
     assert_exit_status(test.name, completed, 0)
 
     regs = result.regs
-    expected = {32: 0, 46: 1, 50: 1, 52: 0x1000, 55: 1, 56: 1}
+    expected = {
+        32: 0,
+        46: 1,
+        50: 1,
+        52: (1 << 63) | 0x1000,
+        55: 1,
+        56: 1,
+    }
     assert_regs(test.name, result, expected)
     if regs[33] == 0 or regs[33] % 8 or regs[33] != regs[51]:
         raise AssertionError(f"{test.name}: invalid common FDT pointer")

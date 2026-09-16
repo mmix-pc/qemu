@@ -10,6 +10,8 @@ import re
 import subprocess
 from typing import Dict, Optional
 
+from .mmix_asm import GOI, R255, insn, set_octa
+
 QEMU_SEMIHOSTING_ARGS = (
     "-semihosting-config",
     "enable=on,userspace=on",
@@ -83,12 +85,18 @@ def build_loader_command(qemu, image, *, serial="none", trace=None, log=None,
 
 
 def build_smp_elf_loader_command(qemu, image, entry, *, trace=None, log=None,
-                                 qemu_args=(), security_checks=False):
-    if entry & 3 or entry >= 1 << 26:
-        raise ValueError(
-            f"MMIX SMP test entry is not JMP-reachable: {entry:#x}"
-        )
-    trampoline = ((0xf0 << 24) | (entry >> 2)) << 32
+                                 qemu_args=(),
+                                 security_checks=False):
+    if entry & 3:
+        raise ValueError(f"MMIX SMP test entry is not aligned: {entry:#x}")
+    if entry < 1 << 26:
+        trampoline = (((0xf0 << 24) | (entry >> 2)) << 32).to_bytes(8, "big")
+        trampoline = trampoline[:4]
+    else:
+        trampoline = b"".join((
+            *set_octa(R255, entry),
+            insn(GOI, R255, R255, 0),
+        ))
     cmd = [
         str(qemu),
         "-machine",
@@ -103,9 +111,15 @@ def build_smp_elf_loader_command(qemu, image, entry, *, trace=None, log=None,
         *qemu_args,
         "-device",
         f"loader,file={image}",
-        "-device",
-        f"loader,data={trampoline:#x},data-len=4,addr=0,data-be=on",
     ]
+    for offset in range(0, len(trampoline), 8):
+        chunk = trampoline[offset:offset + 8]
+        data = int.from_bytes(chunk.ljust(8, b"\0"), "big")
+        cmd.extend((
+            "-device",
+            f"loader,data={data:#x},data-len={len(chunk)},"
+            f"addr={offset:#x},data-be=on",
+        ))
     if trace is not None:
         cmd.extend(["-d", trace])
     if log is not None:

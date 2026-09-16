@@ -20,6 +20,7 @@ class MMIXLinuxEntryStateTest:
     cpu_count: int
     qemu_args: tuple[str, ...]
     minimum_fdt: int = 0
+    security_checks: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -28,6 +29,7 @@ class MMIXLinuxSMPEntryTest:
     image: bytes
     success_pc: int
     qemu_args: tuple[str, ...]
+    security_checks: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -45,6 +47,7 @@ class MMIXLinuxStateTest:
 
 def linux_direct_alias_image():
     bootstrap_address = 0x1000
+    bootstrap_virtual_address = LINUX_NEGATIVE_ALIAS_BIT | bootstrap_address
     kernel_address = 0x2000
     kernel_virtual_address = LINUX_NEGATIVE_ALIAS_BIT | kernel_address
     bootstrap = b"".join((
@@ -55,11 +58,12 @@ def linux_direct_alias_image():
     bootstrap_offset = 0x200
     kernel_offset = 0x300
     headers = b"".join((
-        elf64_phdr(bootstrap_address, bootstrap, offset=bootstrap_offset),
+        elf64_phdr(bootstrap_address, bootstrap, offset=bootstrap_offset,
+                   virtual_address=bootstrap_virtual_address),
         elf64_phdr(kernel_address, kernel, offset=kernel_offset,
                    virtual_address=kernel_virtual_address),
     ))
-    image = bytearray(elf64_header(entry=bootstrap_address, phnum=2) +
+    image = bytearray(elf64_header(entry=bootstrap_virtual_address, phnum=2) +
                       headers)
 
     image.extend(bytes(bootstrap_offset - len(image)))
@@ -114,7 +118,10 @@ def linux_positive_privileged_put_image():
     headers = b"".join((
         elf64_phdr(kernel_address, kernel, offset=kernel_offset,
                    virtual_address=kernel_virtual_address),
-        elf64_phdr(user_address, user, offset=user_offset),
+        elf64_phdr(
+            user_address, user, offset=user_offset,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT | user_address,
+        ),
     ))
     image = bytearray(elf64_header(entry=kernel_virtual_address, phnum=2) +
                       headers)
@@ -216,22 +223,32 @@ LINUX_DIRECT_ALIAS_TESTS = [
 LINUX_ENTRY_STATE_TESTS = [
     MMIXLinuxEntryStateTest(
         "elf-linux-one-cpu",
-        elf64_image(0, jump(JMP, 0)),
-        0,
+        elf64_image(
+            0, jump(JMP, 0), entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
+        ),
+        LINUX_NEGATIVE_ALIAS_BIT,
         1,
         LINUX_MACHINE,
     ),
     MMIXLinuxEntryStateTest(
         "elf-linux-64-cpus",
-        elf64_image(0, jump(JMP, 0)),
-        0,
+        elf64_image(
+            0, jump(JMP, 0), entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
+        ),
+        LINUX_NEGATIVE_ALIAS_BIT,
         64,
         ("-smp", "64", *LINUX_MACHINE),
     ),
     MMIXLinuxEntryStateTest(
         "elf-linux-above-4g",
-        elf64_image(0x100000000, jump(JMP, 0), entry=0x100000000),
-        0x100000000,
+        elf64_image(
+            0x100000000, jump(JMP, 0),
+            entry=LINUX_NEGATIVE_ALIAS_BIT | 0x100000000,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT | 0x100000000,
+        ),
+        LINUX_NEGATIVE_ALIAS_BIT | 0x100000000,
         1,
         ("-m", "8G", *LINUX_MACHINE),
         minimum_fdt=0x100000000,
@@ -245,22 +262,31 @@ LINUX_ENTRY_STATE_TESTS = [
     ),
     MMIXLinuxEntryStateTest(
         "elf-linux-command-line-limit",
-        elf64_image(0, jump(JMP, 0)),
-        0,
+        elf64_image(
+            0, jump(JMP, 0), entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
+        ),
+        LINUX_NEGATIVE_ALIAS_BIT,
         1,
         (*LINUX_MACHINE, "-append", "x" * 4095),
     ),
     MMIXLinuxEntryStateTest(
         "elf-linux-initrd",
-        elf64_image(0, jump(JMP, 0)),
-        0,
+        elf64_image(
+            0, jump(JMP, 0), entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
+        ),
+        LINUX_NEGATIVE_ALIAS_BIT,
         1,
         (*LINUX_MACHINE, "-initrd", "$IMAGE"),
     ),
     MMIXLinuxEntryStateTest(
         "elf-linux-semihosting",
-        elf64_image(0, jump(JMP, 0)),
-        0,
+        elf64_image(
+            0, jump(JMP, 0), entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
+        ),
+        LINUX_NEGATIVE_ALIAS_BIT,
         1,
         (*LINUX_MACHINE, "-semihosting"),
     ),
@@ -281,7 +307,8 @@ LINUX_SMP_IPI_STATUS = 0x40
 
 
 def linux_smp_entry_program():
-    entry = 0x1000
+    load_address = 0x1000
+    entry = LINUX_NEGATIVE_ALIAS_BIT | load_address
     program = SMPProgram()
 
     program.emit(
@@ -364,7 +391,10 @@ def linux_smp_entry_program():
 
     return MMIXLinuxSMPEntryTest(
         name="elf-linux-smp-entry-barrier",
-        image=elf64_image(entry, program.build(), entry=entry),
+        image=elf64_image(
+            load_address, program.build(), entry=entry,
+            virtual_address=entry,
+        ),
         success_pc=program.address("success_halt", base=entry),
         qemu_args=(
             "-smp", "2",
@@ -436,12 +466,18 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
         ("does not use identical virtual and physical addresses",),
     ),
     MMIXProcessFailure(
+        "elf-linux-identity-mapping",
+        elf64_image(0x2000, halt(), entry=0x2000),
+        LINUX_MACHINE,
+        ("does not use a negative direct-alias mapping",),
+    ),
+    MMIXProcessFailure(
         "elf-linux-arbitrary-virtual-address",
         elf64_patch_phdr_field(
             LINUX_DIRECT_ALIAS_IMAGE, 1, "virtual_address", 0x4000
         ),
         LINUX_MACHINE,
-        ("does not use an identity or negative direct-alias mapping",),
+        ("does not use a negative direct-alias mapping",),
     ),
     MMIXProcessFailure(
         "elf-linux-negative-entry-outside-segment",
@@ -450,7 +486,7 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
             LINUX_NEGATIVE_ALIAS_BIT | 0x4000
         ),
         LINUX_MACHINE,
-        ("identity or negative direct-alias executable PT_LOAD segment",),
+        ("negative direct-alias executable PT_LOAD segment",),
     ),
     MMIXProcessFailure(
         "elf-linux-negative-entry-unaligned",
@@ -458,7 +494,7 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
             LINUX_DIRECT_ALIAS_IMAGE, "entry", LINUX_DIRECT_ALIAS_ADDRESS + 2
         ),
         LINUX_MACHINE,
-        ("identity or negative direct-alias executable PT_LOAD segment",),
+        ("negative direct-alias executable PT_LOAD segment",),
     ),
     MMIXProcessFailure(
         "elf-retired-bootinfo-startup-abi",
@@ -548,6 +584,8 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
             0,
             halt(),
             mem_size=128 * 1024 * 1024 - 3 * 1024 * 1024 - 32 * 1024,
+            entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
         ),
         ("-m", "128M", *LINUX_MACHINE, "-initrd", "$IMAGE"),
         ("MMIX RAM reservation 'mmix-kernel/initrd' does not fit",),
@@ -558,6 +596,8 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
             0,
             halt(),
             mem_size=128 * 1024 * 1024 - 3 * 1024 * 1024 - 32 * 1024,
+            entry=LINUX_NEGATIVE_ALIAS_BIT,
+            virtual_address=LINUX_NEGATIVE_ALIAS_BIT,
         ),
         ("-m", "128M", *LINUX_MACHINE),
         ("MMIX RAM reservation 'mmix-fdt/blob' does not fit",),

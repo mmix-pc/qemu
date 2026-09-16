@@ -236,11 +236,11 @@ static bool mmix_preflight_elf_segments(
             (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS &&
              !negative_alias_mapping) ||
             (addressing == MMIX_ELF_ADDRESSING_LINUX &&
-             !identity_mapping && !negative_alias_mapping)) {
+             !negative_alias_mapping)) {
             if (addressing == MMIX_ELF_ADDRESSING_LINUX) {
                 error_setg(errp, "MMIX Linux ELF PT_LOAD segment %u in '%s' "
-                           "does not use an identity or negative direct-alias "
-                           "mapping", i, filename);
+                           "does not use a negative direct-alias mapping",
+                           i, filename);
             } else if (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS) {
                 error_setg(errp, "MMIX bare ELF PT_LOAD segment %u in '%s' "
                            "does not use a negative direct-alias mapping",
@@ -295,8 +295,8 @@ static bool mmix_preflight_elf_segments(
     if (!entry_valid) {
         if (addressing == MMIX_ELF_ADDRESSING_LINUX) {
             error_setg(errp, "MMIX Linux ELF entry 0x%" PRIx64 " in '%s' is "
-                       "not a complete aligned instruction in an identity or "
-                       "negative direct-alias executable PT_LOAD segment",
+                       "not a complete aligned instruction in a negative "
+                       "direct-alias executable PT_LOAD segment",
                        entry, filename);
         } else if (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS) {
             error_setg(errp, "MMIX bare ELF entry 0x%" PRIx64 " in '%s' is "

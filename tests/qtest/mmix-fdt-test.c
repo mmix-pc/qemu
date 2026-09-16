@@ -299,7 +299,8 @@ static uint64_t cpu_initial_stack(QTestState *qts, unsigned int cpu)
 static char *create_linux_elf(const char *directory)
 {
     enum { CODE_OFFSET = 0x100 };
-    const uint64_t entry = 0x10000;
+    const uint64_t load_address = 0x10000;
+    const uint64_t entry = (1ULL << 63) | load_address;
     const uint8_t code[] = { 0xfd, 0x00, 0x00, 0x00 };
     uint8_t image[CODE_OFFSET + sizeof(code)] = { 0 };
     Elf64_Ehdr ehdr = { 0 };
@@ -325,7 +326,7 @@ static char *create_linux_elf(const char *directory)
     phdr.p_flags = cpu_to_be32(PF_R | PF_X);
     phdr.p_offset = cpu_to_be64(CODE_OFFSET);
     phdr.p_vaddr = cpu_to_be64(entry);
-    phdr.p_paddr = cpu_to_be64(entry);
+    phdr.p_paddr = cpu_to_be64(load_address);
     phdr.p_filesz = cpu_to_be64(sizeof(code));
     phdr.p_memsz = cpu_to_be64(sizeof(code));
     phdr.p_align = cpu_to_be64(1);

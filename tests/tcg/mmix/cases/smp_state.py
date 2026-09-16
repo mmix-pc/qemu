@@ -77,7 +77,10 @@ def cpu_local_state_program():
         insn(ADDU, R115, R115, R32),
         insn(PUT, SR_I, 0, R115),
         insn(GET, R116, 0, SR_I),
-        *set_octa(R117, (ADDU << 56) | (0xff << 48)),
+        *set_octa(
+            R117,
+            (ADDU << 56) | (0xff << 48) | RU_COUNT_NEGATIVE,
+        ),
         insn(ADDU, R117, R117, R32),
         insn(PUT, SR_U, 0, R117),
         insn(ADDU, R118, R32, R0),
@@ -197,7 +200,8 @@ def cpu_local_state_program():
             R114: 0x200,
             R120: 0,
             R116: 0xff,
-            R119: (ADDU << 56) | (0xff << 48) | 1,
+            R119: ((ADDU << 56) | (0xff << 48) |
+                   RU_COUNT_NEGATIVE | 1),
             R73: 0,
             R150: 0x11,
             R151: 0x101,
@@ -206,7 +210,8 @@ def cpu_local_state_program():
             R156: 1,
             R157: 32,
             R158: 0x100,
-            R159: (ADDU << 56) | (0xff << 48) | 2,
+            R159: ((ADDU << 56) | (0xff << 48) |
+                   RU_COUNT_NEGATIVE | 2),
             R90: 1,
         },
     )
