@@ -57,11 +57,10 @@
 
 #define TYPE_MMIX_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 
-typedef enum MMIXELFStartupABI {
-    MMIX_ELF_STARTUP_ABI_BARE,
-    MMIX_ELF_STARTUP_ABI_ARGC_ARGV,
-    MMIX_ELF_STARTUP_ABI_LINUX,
-} MMIXELFStartupABI;
+typedef enum MMIXELFStartup {
+    MMIX_ELF_STARTUP_PLATFORM,
+    MMIX_ELF_STARTUP_HOSTED,
+} MMIXELFStartup;
 
 typedef enum MMIXBootMode {
     MMIX_BOOT_MODE_ERASED_FLASH,
@@ -75,7 +74,7 @@ typedef struct MMIXFWCfgFile {
 } MMIXFWCfgFile;
 
 enum {
-    MMIX_LINUX_COMMAND_LINE_MAX = 4095,
+    MMIX_PLATFORM_COMMAND_LINE_MAX = 4095,
 };
 
 OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
@@ -101,8 +100,8 @@ struct MMIXVirtMachineState {
     GBytes *firmware_kernel_data;
     GBytes *firmware_initrd_data;
     GBytes *firmware_cmdline_data;
-    MMIXELFStartupABI elf_startup_abi;
-    bool elf_startup_abi_explicit;
+    MMIXELFStartup elf_startup;
+    bool elf_startup_explicit;
     MMIXMMOPlan *mmo_plan;
     MMIXMMOHostedPlan *mmo_hosted_plan;
     MMIXSparseMemory *mmo_memory;
@@ -790,7 +789,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                                const GArray *image_ranges,
                                char *const *arguments, uint64_t argument_count,
                                uint64_t argument_size,
-                               const MMIXLinuxBootInfo *linux_info,
+                               const MMIXPlatformBootInfo *platform_info,
                                GBytes *elf_source,
                                Error **errp)
 {
@@ -802,11 +801,11 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     size_t argument_index = stack_index + stack_count;
     bool has_arguments = arguments != NULL;
     size_t initrd_index = argument_index + has_arguments;
-    bool has_initrd = linux_info && linux_info->has_initrd;
+    bool has_initrd = platform_info && platform_info->has_initrd;
     size_t image_index = initrd_index + has_initrd;
     size_t image_range_count = image_ranges ? image_ranges->len : 0;
     size_t fdt_index = image_index + image_range_count;
-    size_t request_count = fdt_index + (linux_info != NULL);
+    size_t request_count = fdt_index + (platform_info != NULL);
     g_autofree MMIXRAMReservationRequest *requests =
         g_new0(MMIXRAMReservationRequest, request_count);
     g_auto(GStrv) stack_names = g_new0(char *, stack_count + 1);
@@ -830,7 +829,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
     MMIXBootPlan *boot_plan = NULL;
     MMIXBootPlan *preliminary_plan = NULL;
     MMIXBootPayload *boot_payload = NULL;
-    MMIXLinuxBootInfo planned_linux;
+    MMIXPlatformBootInfo planned_platform;
     unsigned int i;
 
     if (has_framebuffer) {
@@ -894,28 +893,28 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
             .ownership_class = MMIX_RAM_OWNERSHIP_IMAGE,
             .lifetime = MMIX_RAM_LIFETIME_UNTIL_CONSUMED,
             .placement_class = MMIX_RAM_PLACEMENT_INITRD,
-            .size = linux_info->initrd_size,
+            .size = platform_info->initrd_size,
             .alignment = MMIX_VIRT_RAM_ALIGN,
         };
     }
 
-    if (linux_info) {
-        planned_linux = *linux_info;
-        planned_linux.initrd_request_index = initrd_index;
-        planned_linux.fdt = NULL;
-        planned_linux.fdt_request_index = fdt_index;
+    if (platform_info) {
+        planned_platform = *platform_info;
+        planned_platform.initrd_request_index = initrd_index;
+        planned_platform.fdt = NULL;
+        planned_platform.fdt_request_index = fdt_index;
     }
 
     if (!mmix_boot_plan_build(machine->ram_size,
                               image_info ? machine->kernel_filename : NULL,
                               image_info,
-                              linux_info ? &planned_linux : NULL,
+                              platform_info ? &planned_platform : NULL,
                               requests, fdt_index,
                               &preliminary_plan, errp)) {
         return false;
     }
 
-    if (linux_info) {
+    if (platform_info) {
         const MMIXRAMReservation *initrd = has_initrd ?
             mmix_boot_plan_reservation(preliminary_plan, initrd_index) : NULL;
         MMIXFDTConfig config;
@@ -928,7 +927,7 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
         }
         config = (MMIXFDTConfig) {
             .ram_size = machine->ram_size,
-            .command_line = linux_info->command_line,
+            .command_line = platform_info->command_line,
             .cpu_count = machine->smp.cpus,
             .cpu_stacks = fdt_stacks,
             .has_framebuffer = has_framebuffer,
@@ -955,10 +954,10 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
             .size = g_bytes_get_size(fdt_template),
             .alignment = 8,
         };
-        planned_linux.fdt = fdt_template;
+        planned_platform.fdt = fdt_template;
         if (!mmix_boot_plan_build(machine->ram_size,
                                   machine->kernel_filename, image_info,
-                                  &planned_linux, requests, request_count,
+                                  &planned_platform, requests, request_count,
                                   &boot_plan, errp)) {
             goto fail;
         }
@@ -983,10 +982,10 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                 &finalized_fdt, errp)) {
             goto fail;
         }
-        planned_linux.fdt = finalized_fdt;
+        planned_platform.fdt = finalized_fdt;
         if (!mmix_boot_plan_build(machine->ram_size,
                                   machine->kernel_filename, image_info,
-                                  &planned_linux, requests, request_count,
+                                  &planned_platform, requests, request_count,
                                   &boot_plan, errp)) {
             goto fail;
         }
@@ -1009,9 +1008,9 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
         }
     }
 
-    if (linux_info) {
-        const MMIXLinuxBootInfo *stored_linux =
-            mmix_boot_plan_linux_info(boot_plan);
+    if (platform_info) {
+        const MMIXPlatformBootInfo *stored_platform =
+            mmix_boot_plan_platform_info(boot_plan);
 
         boot_payload = mmix_boot_payload_new(machine->ram_size);
         if (!mmix_elf_add_boot_payload(elf_source,
@@ -1019,17 +1018,17 @@ static bool mmix_virt_plan_ram(MMIXVirtMachineState *vms,
                                        boot_payload, errp)) {
             goto fail;
         }
-        if (stored_linux->has_initrd &&
-            !mmix_boot_payload_add(boot_payload, "Linux initrd",
-                                   stored_linux->initrd_base,
-                                   stored_linux->initrd,
-                                   stored_linux->initrd_size, errp)) {
+        if (stored_platform->has_initrd &&
+            !mmix_boot_payload_add(boot_payload, "platform initrd",
+                                   stored_platform->initrd_base,
+                                   stored_platform->initrd,
+                                   stored_platform->initrd_size, errp)) {
             goto fail;
         }
-        if (!mmix_boot_payload_add(boot_payload, "Linux FDT",
-                                   stored_linux->fdt_base,
-                                   stored_linux->fdt,
-                                   g_bytes_get_size(stored_linux->fdt),
+        if (!mmix_boot_payload_add(boot_payload, "platform FDT",
+                                   stored_platform->fdt_base,
+                                   stored_platform->fdt,
+                                   g_bytes_get_size(stored_platform->fdt),
                                    errp)) {
             goto fail;
         }
@@ -1218,20 +1217,20 @@ static void mmix_virt_apply_raw_startup(CPUState *cs)
     mmix_cpu_update_interrupt(env);
 }
 
-static void mmix_virt_apply_linux_startup(
+static void mmix_virt_apply_platform_startup(
     CPUState *cs, unsigned int cpu_id, const MMIXKernelLoadInfo *info,
-    const MMIXLinuxBootInfo *linux_info)
+    const MMIXPlatformBootInfo *platform_info)
 {
     CPUMMIXState *env = &MMIX_CPU(cs)->env;
 
     g_assert(info != NULL);
-    g_assert(linux_info != NULL);
+    g_assert(platform_info != NULL);
     g_assert(env->flat_translation);
     g_assert(env->sregs[MMIX_SREG_RK] == MMIX_INITIAL_RK);
     g_assert(env->sregs[MMIX_SREG_RQ] == 0);
 
     mmix_cpu_write_reg(env, 0, cpu_id);
-    mmix_cpu_write_reg(env, 1, linux_info->fdt_base);
+    mmix_cpu_write_reg(env, 1, platform_info->fdt_base);
     g_assert(env->sregs[MMIX_SREG_RL] == 2);
     cpu_set_pc(cs, info->entry);
 }
@@ -1274,8 +1273,8 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     const MMIXKernelLoadInfo *info =
         mmix_boot_plan_image_info(vms->boot_plan);
-    const MMIXLinuxBootInfo *linux_info =
-        mmix_boot_plan_linux_info(vms->boot_plan);
+    const MMIXPlatformBootInfo *platform_info =
+        mmix_boot_plan_platform_info(vms->boot_plan);
     Error *local_err = NULL;
     unsigned int i;
 
@@ -1292,12 +1291,12 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         return;
     }
 
-    if (linux_info &&
+    if (platform_info &&
         !mmix_boot_payload_commit_address_space(
             vms->boot_payload, &address_space_memory, machine->ram_size,
             &local_err)) {
         error_reportf_err(local_err,
-                          "could not restore MMIX Linux boot payload: ");
+                          "could not restore MMIX platform boot payload: ");
         qemu_system_shutdown_request(SHUTDOWN_CAUSE_HOST_ERROR);
         return;
     }
@@ -1313,7 +1312,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
     }
 
     for (i = 0; i < machine->smp.cpus; i++) {
-        if (!vms->mmo_memory && !linux_info) {
+        if (!vms->mmo_memory && !platform_info) {
             MemTxResult result = address_space_set(
                 &address_space_memory, vms->initial_stacks[i], 0,
                 MMIX_VIRT_INITIAL_STACK_SIZE, MEMTXATTRS_UNSPECIFIED);
@@ -1326,9 +1325,9 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
             mmix_virt_apply_raw_startup(vms->cpus[i]);
         } else if (vms->mmo_memory) {
             mmix_virt_apply_mmo_startup(vms, vms->cpus[i]);
-        } else if (linux_info) {
-            mmix_virt_apply_linux_startup(vms->cpus[i], i, info,
-                                          linux_info);
+        } else if (platform_info) {
+            mmix_virt_apply_platform_startup(vms->cpus[i], i, info,
+                                             platform_info);
         } else if (vms->boot_mode == MMIX_BOOT_MODE_FIRMWARE) {
             mmix_virt_apply_firmware_startup(vms->cpus[i], i);
         }
@@ -1337,7 +1336,7 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         }
     }
 
-    if (info && !linux_info) {
+    if (info && !platform_info) {
         cpu_set_pc(vms->cpus[info->boot_cpu_id], info->entry);
     }
 }
@@ -1347,7 +1346,7 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                                      GArray **image_ranges, char ***arguments,
                                      uint64_t *argument_count,
                                      uint64_t *argument_size,
-                                     MMIXLinuxBootInfo *linux_info,
+                                     MMIXPlatformBootInfo *platform_info,
                                      GBytes **elf_source,
                                      GBytes **initrd_source,
                                      Error **errp)
@@ -1387,8 +1386,7 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
             .has_explicit_arguments = has_explicit_arguments,
             .semihosting_enabled = semihosting_enabled(false),
             .has_initrd = machine->initrd_filename != NULL,
-            .has_explicit_elf_startup_abi =
-                vms->elf_startup_abi_explicit,
+            .has_explicit_elf_startup = vms->elf_startup_explicit,
             .has_firmware = false,
             .linux_handoff = false,
         };
@@ -1413,45 +1411,36 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
         return true;
     }
     case MMIX_KERNEL_IMAGE_ELF:
-        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_BARE) {
-            if (machine->smp.cpus != 1) {
-                error_setg(errp, "MMIX ELF startup ABI 'bare' requires "
-                           "exactly one CPU");
-                return false;
-            }
-            if (mmix_virt_has_semihosting_args()) {
-                error_setg(errp, "MMIX ELF startup ABI 'bare' does not "
-                           "accept semihosting arguments");
-                return false;
-            }
-            if (machine->kernel_cmdline && machine->kernel_cmdline[0]) {
-                error_setg(errp, "MMIX ELF startup ABI 'bare' does not "
-                           "accept -append");
-                return false;
-            }
-        } else if (vms->elf_startup_abi ==
-                   MMIX_ELF_STARTUP_ABI_ARGC_ARGV) {
+        if (vms->elf_startup == MMIX_ELF_STARTUP_HOSTED) {
             if (!semihosting_enabled(false)) {
-                error_setg(errp, "MMIX ELF startup ABI 'argc-argv' requires "
+                error_setg(errp, "MMIX ELF startup profile 'hosted' requires "
                            "semihosting");
                 return false;
             }
             if (machine->smp.cpus != 1) {
-                error_setg(errp, "MMIX ELF startup ABI 'argc-argv' requires "
+                error_setg(errp, "MMIX ELF startup profile 'hosted' requires "
                            "exactly one CPU");
                 return false;
             }
             if (mmix_virt_has_semihosting_args() &&
                 machine->kernel_cmdline && machine->kernel_cmdline[0]) {
-                error_setg(errp, "MMIX ELF startup ABI 'argc-argv' does not "
+                error_setg(errp, "MMIX ELF startup profile 'hosted' does not "
                            "allow explicit semihosting arguments with "
                            "-append");
+                return false;
+            }
+            if (machine->initrd_filename) {
+                error_setg(errp, "MMIX ELF startup profile 'hosted' does not "
+                           "accept -initrd");
                 return false;
             }
             if (!mmix_virt_copy_arguments(arguments, argument_count,
                                           argument_size, errp)) {
                 return false;
             }
+            return mmix_preflight_elf_kernel(
+                machine->kernel_filename, &vms->ram, info, image_ranges,
+                errp);
         } else {
             const char *command_line = machine->kernel_cmdline ?: "";
             g_autofree char *initrd_contents = NULL;
@@ -1460,7 +1449,7 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
             gsize initrd_read_size = 0;
 
             if (machine->smp.max_cpus != machine->smp.cpus) {
-                error_setg(errp, "MMIX Linux direct boot requires maxcpus "
+                error_setg(errp, "MMIX platform ELF startup requires maxcpus "
                            "to equal the active CPU count");
                 return false;
             }
@@ -1469,18 +1458,19 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                 machine->smp.clusters != 1 || machine->smp.modules != 1 ||
                 machine->smp.cores != machine->smp.cpus ||
                 machine->smp.threads != 1) {
-                error_setg(errp, "MMIX Linux direct boot requires one "
+                error_setg(errp, "MMIX platform ELF startup requires one "
                            "socket with one single-threaded core per CPU");
                 return false;
             }
             if (mmix_virt_has_semihosting_args()) {
-                error_setg(errp, "MMIX Linux direct boot does not accept "
+                error_setg(errp, "MMIX platform ELF startup does not accept "
                            "semihosting arguments");
                 return false;
             }
-            if (strlen(command_line) > MMIX_LINUX_COMMAND_LINE_MAX) {
-                error_setg(errp, "MMIX Linux command line exceeds %u bytes",
-                           MMIX_LINUX_COMMAND_LINE_MAX);
+            if (strlen(command_line) > MMIX_PLATFORM_COMMAND_LINE_MAX) {
+                error_setg(errp, "MMIX platform command line exceeds %u "
+                           "bytes",
+                           MMIX_PLATFORM_COMMAND_LINE_MAX);
                 return false;
             }
             if (machine->initrd_filename) {
@@ -1489,21 +1479,21 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                     return false;
                 }
                 if (initrd_size == 0) {
-                    error_setg(errp, "MMIX Linux initrd '%s' is empty",
+                    error_setg(errp, "MMIX platform initrd '%s' is empty",
                                machine->initrd_filename);
                     return false;
                 }
                 if (!g_file_get_contents(machine->initrd_filename,
                                          &initrd_contents,
                                          &initrd_read_size, &gerr)) {
-                    error_setg(errp, "could not read MMIX Linux initrd '%s': "
-                               "%s", machine->initrd_filename,
+                    error_setg(errp, "could not read MMIX platform initrd "
+                               "'%s': %s", machine->initrd_filename,
                                gerr->message);
                     return false;
                 }
                 if (initrd_read_size != initrd_size) {
-                    error_setg(errp, "MMIX Linux initrd '%s' changed during "
-                               "preflight", machine->initrd_filename);
+                    error_setg(errp, "MMIX platform initrd '%s' changed "
+                               "during preflight", machine->initrd_filename);
                     return false;
                 }
             }
@@ -1511,7 +1501,7 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                 *initrd_source = g_bytes_new_take(
                     g_steal_pointer(&initrd_contents), initrd_read_size);
             }
-            *linux_info = (MMIXLinuxBootInfo) {
+            *platform_info = (MMIXPlatformBootInfo) {
                 .command_line = command_line,
                 .initrd_filename = machine->initrd_filename,
                 .initrd = *initrd_source,
@@ -1519,26 +1509,10 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                 .cpu_count = machine->smp.cpus,
                 .has_initrd = machine->initrd_filename != NULL,
             };
-        }
-        if (vms->elf_startup_abi != MMIX_ELF_STARTUP_ABI_LINUX &&
-            machine->initrd_filename) {
-            error_setg(errp, "MMIX ELF startup ABI '%s' does not accept "
-                       "-initrd", vms->elf_startup_abi ==
-                       MMIX_ELF_STARTUP_ABI_BARE ? "bare" : "argc-argv");
-            return false;
-        }
-        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_LINUX) {
-            return mmix_prepare_linux_elf_kernel(
+            return mmix_prepare_platform_elf_kernel(
                 machine->kernel_filename, &vms->ram, info, image_ranges,
                 elf_source, errp);
         }
-        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_BARE) {
-            return mmix_preflight_bare_elf_kernel(
-                machine->kernel_filename, &vms->ram, info, image_ranges,
-                errp);
-        }
-        return mmix_preflight_elf_kernel(machine->kernel_filename, &vms->ram,
-                                         info, image_ranges, errp);
     case MMIX_KERNEL_IMAGE_RAW: {
         uint64_t image_size;
         MMIXKernelImageRange range;
@@ -1548,11 +1522,9 @@ static bool mmix_virt_prepare_kernel(MMIXVirtMachineState *vms,
                        "CPU");
             return false;
         }
-        if (vms->elf_startup_abi != MMIX_ELF_STARTUP_ABI_BARE) {
+        if (vms->elf_startup != MMIX_ELF_STARTUP_PLATFORM) {
             error_setg(errp, "MMIX raw -kernel loading does not support ELF "
-                       "startup ABI '%s'", vms->elf_startup_abi ==
-                       MMIX_ELF_STARTUP_ABI_ARGC_ARGV ? "argc-argv" :
-                       "linux");
+                       "startup profile 'hosted'");
             return false;
         }
         if (mmix_virt_has_semihosting_args()) {
@@ -1605,10 +1577,10 @@ static void mmix_virt_init(MachineState *machine)
     g_auto(GStrv) arguments = NULL;
     uint64_t argument_count = 0;
     uint64_t argument_size = 0;
-    MMIXLinuxBootInfo linux_info = { 0 };
+    MMIXPlatformBootInfo platform_info = { 0 };
     g_autoptr(GBytes) elf_source = NULL;
     g_autoptr(GBytes) initrd_source = NULL;
-    const MMIXLinuxBootInfo *linux_info_ptr = NULL;
+    const MMIXPlatformBootInfo *platform_info_ptr = NULL;
     uint64_t serial_number;
     unsigned int i;
 
@@ -1625,18 +1597,19 @@ static void mmix_virt_init(MachineState *machine)
     if (vms->boot_mode == MMIX_BOOT_MODE_DIRECT_IMAGE) {
         if (!mmix_virt_prepare_kernel(vms, &image_info, &image_ranges,
                                       &arguments, &argument_count,
-                                      &argument_size, &linux_info,
+                                      &argument_size, &platform_info,
                                       &elf_source, &initrd_source,
                                       &error_fatal)) {
             return;
         }
         image_info_ptr = &image_info;
-        if (vms->elf_startup_abi == MMIX_ELF_STARTUP_ABI_LINUX) {
-            linux_info_ptr = &linux_info;
+        if (vms->elf_startup == MMIX_ELF_STARTUP_PLATFORM &&
+            image_info.image_type == MMIX_KERNEL_IMAGE_ELF) {
+            platform_info_ptr = &platform_info;
         }
     }
     if (!mmix_virt_plan_ram(vms, image_info_ptr, image_ranges, arguments,
-                            argument_count, argument_size, linux_info_ptr,
+                            argument_count, argument_size, platform_info_ptr,
                             elf_source,
                             &error_fatal) ||
         !mmix_virt_prepare_dump_fdt(vms, &error_fatal) ||
@@ -1646,7 +1619,7 @@ static void mmix_virt_init(MachineState *machine)
     memory_region_add_subregion(get_system_memory(), vms->ram.start,
                                 machine->ram);
 
-    if (linux_info_ptr) {
+    if (platform_info_ptr) {
         if (!mmix_boot_payload_commit_address_space(
                 vms->boot_payload, &address_space_memory,
                 machine->ram_size, &error_fatal)) {
@@ -1795,40 +1768,35 @@ static void mmix_virt_init(MachineState *machine)
     }
 }
 
-static char *mmix_virt_get_elf_startup_abi(Object *obj, Error **errp)
+static char *mmix_virt_get_elf_startup(Object *obj, Error **errp)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
 
-    switch (vms->elf_startup_abi) {
-    case MMIX_ELF_STARTUP_ABI_BARE:
-        return g_strdup("bare");
-    case MMIX_ELF_STARTUP_ABI_ARGC_ARGV:
-        return g_strdup("argc-argv");
-    case MMIX_ELF_STARTUP_ABI_LINUX:
-        return g_strdup("linux");
+    switch (vms->elf_startup) {
+    case MMIX_ELF_STARTUP_PLATFORM:
+        return g_strdup("platform");
+    case MMIX_ELF_STARTUP_HOSTED:
+        return g_strdup("hosted");
     default:
         g_assert_not_reached();
     }
 }
 
-static void mmix_virt_set_elf_startup_abi(Object *obj, const char *value,
-                                          Error **errp)
+static void mmix_virt_set_elf_startup(Object *obj, const char *value,
+                                      Error **errp)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
 
-    if (!strcmp(value, "bare")) {
-        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BARE;
-    } else if (!strcmp(value, "argc-argv")) {
-        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_ARGC_ARGV;
-    } else if (!strcmp(value, "linux")) {
-        vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_LINUX;
+    if (!strcmp(value, "platform")) {
+        vms->elf_startup = MMIX_ELF_STARTUP_PLATFORM;
+    } else if (!strcmp(value, "hosted")) {
+        vms->elf_startup = MMIX_ELF_STARTUP_HOSTED;
     } else {
-        error_setg(errp, "Invalid MMIX ELF startup ABI '%s'", value);
-        error_append_hint(errp, "Valid values are bare, argc-argv, and "
-                          "linux.\n");
+        error_setg(errp, "Invalid MMIX ELF startup profile '%s'", value);
+        error_append_hint(errp, "Valid values are platform and hosted.\n");
         return;
     }
-    vms->elf_startup_abi_explicit = true;
+    vms->elf_startup_explicit = true;
 }
 
 static char *mmix_virt_get_pflash_backend(Object *obj, Error **errp,
@@ -1888,12 +1856,12 @@ static void mmix_virt_class_init(ObjectClass *oc, const void *data)
     mmix_parent_create_default_memdev = mc->create_default_memdev;
     mc->create_default_memdev = mmix_virt_create_default_memdev;
 
-    object_class_property_add_str(oc, "elf-startup-abi",
-                                  mmix_virt_get_elf_startup_abi,
-                                  mmix_virt_set_elf_startup_abi);
+    object_class_property_add_str(oc, "elf-startup",
+                                  mmix_virt_get_elf_startup,
+                                  mmix_virt_set_elf_startup);
     object_class_property_set_description(
-        oc, "elf-startup-abi",
-        "Set the ELF startup ABI (bare, argc-argv, or linux)");
+        oc, "elf-startup",
+        "Set the ELF startup profile (platform or hosted)");
     object_class_property_add_str(oc, "pflash0", mmix_virt_get_pflash0,
                                   mmix_virt_set_pflash0);
     object_class_property_set_description(
@@ -1909,7 +1877,7 @@ static void mmix_virt_instance_init(Object *obj)
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
 
     vms->boot_mode = MMIX_BOOT_MODE_ERASED_FLASH;
-    vms->elf_startup_abi = MMIX_ELF_STARTUP_ABI_BARE;
+    vms->elf_startup = MMIX_ELF_STARTUP_PLATFORM;
 }
 
 static void mmix_virt_instance_finalize(Object *obj)

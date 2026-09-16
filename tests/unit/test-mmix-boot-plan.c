@@ -191,7 +191,7 @@ static void test_no_image_plan(void)
                                        &request, 1, &plan, &error_abort));
     g_assert_null(mmix_boot_plan_image_filename(plan));
     g_assert_null(mmix_boot_plan_image_info(plan));
-    g_assert_null(mmix_boot_plan_linux_info(plan));
+    g_assert_null(mmix_boot_plan_platform_info(plan));
     g_assert_cmpuint(mmix_boot_plan_request_count(plan), ==, 1);
     mmix_boot_plan_free(plan);
 }
@@ -291,7 +291,7 @@ static void test_invalid_image_pair(void)
     g_assert_null(plan);
 }
 
-static void test_linux_boot_information(void)
+static void test_platform_boot_information(void)
 {
     g_autofree char *command_line = g_strdup("console=ttyS0");
     g_autofree char *initrd_filename = g_strdup("initrd.img");
@@ -310,7 +310,7 @@ static void test_linux_boot_information(void)
         .entry = 4 * GiB,
         .image_type = MMIX_KERNEL_IMAGE_ELF,
     };
-    MMIXLinuxBootInfo linux_info = {
+    MMIXPlatformBootInfo platform_info = {
         .command_line = command_line,
         .initrd_filename = initrd_filename,
         .initrd = initrd_data,
@@ -321,19 +321,19 @@ static void test_linux_boot_information(void)
         .cpu_count = 1,
         .has_initrd = true,
     };
-    const MMIXLinuxBootInfo *stored;
+    const MMIXPlatformBootInfo *stored;
     const MMIXRAMReservation *initrd;
     const MMIXRAMReservation *fdt_reservation;
     MMIXBootPlan *plan = NULL;
 
     g_assert_true(mmix_boot_plan_build(TEST_LARGE_RAM_SIZE, "kernel.elf",
-                                       &image_info, &linux_info, requests,
+                                       &image_info, &platform_info, requests,
                                        ARRAY_SIZE(requests), &plan,
                                        &error_abort));
     g_clear_pointer(&command_line, g_free);
     g_clear_pointer(&initrd_filename, g_free);
 
-    stored = mmix_boot_plan_linux_info(plan);
+    stored = mmix_boot_plan_platform_info(plan);
     g_assert_nonnull(stored);
     g_assert_cmpstr(stored->command_line, ==, "console=ttyS0");
     g_assert_cmpstr(stored->initrd_filename, ==, "initrd.img");
@@ -358,14 +358,14 @@ static void test_linux_boot_information(void)
     mmix_boot_plan_free(plan);
 }
 
-static void test_linux_fdt_failure_is_atomic(void)
+static void test_platform_fdt_failure_is_atomic(void)
 {
     g_autoptr(GBytes) fdt = g_bytes_new_static("fdt", 3);
     MMIXRAMReservationRequest request = fdt_request(3);
     MMIXKernelLoadInfo image_info = {
         .image_type = MMIX_KERNEL_IMAGE_ELF,
     };
-    MMIXLinuxBootInfo linux_info = {
+    MMIXPlatformBootInfo platform_info = {
         .command_line = "",
         .fdt = fdt,
         .fdt_request_index = 0,
@@ -376,18 +376,18 @@ static void test_linux_fdt_failure_is_atomic(void)
     Error *err = NULL;
 
     g_assert_true(mmix_boot_plan_build(TEST_RAM_SIZE, "good.elf",
-                                       &image_info, &linux_info, &request, 1,
+                                       &image_info, &platform_info, &request, 1,
                                        &plan, &error_abort));
     original = plan;
     request.size = 4;
-    g_assert_false(mmix_boot_plan_build(TEST_RAM_SIZE, "bad.elf",
-                                        &image_info, &linux_info, &request, 1,
-                                        &plan, &err));
+    g_assert_false(mmix_boot_plan_build(
+        TEST_RAM_SIZE, "bad.elf", &image_info, &platform_info, &request, 1,
+        &plan, &err));
     g_assert_nonnull(err);
     g_assert_nonnull(strstr(error_get_pretty(err),
                             "FDT reservation has the wrong size"));
     g_assert_true(plan == original);
-    g_assert_true(g_bytes_equal(mmix_boot_plan_linux_info(plan)->fdt, fdt));
+    g_assert_true(g_bytes_equal(mmix_boot_plan_platform_info(plan)->fdt, fdt));
     error_free(err);
     mmix_boot_plan_free(plan);
 }
@@ -402,9 +402,9 @@ int main(int argc, char **argv)
                     test_failure_is_atomic);
     g_test_add_func("/mmix/boot-plan/invalid-image-pair",
                     test_invalid_image_pair);
-    g_test_add_func("/mmix/boot-plan/linux-information",
-                    test_linux_boot_information);
-    g_test_add_func("/mmix/boot-plan/linux-fdt-failure-atomic",
-                    test_linux_fdt_failure_is_atomic);
+    g_test_add_func("/mmix/boot-plan/platform-information",
+                    test_platform_boot_information);
+    g_test_add_func("/mmix/boot-plan/platform-fdt-failure-atomic",
+                    test_platform_fdt_failure_is_atomic);
     return g_test_run();
 }

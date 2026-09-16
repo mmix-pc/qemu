@@ -53,7 +53,7 @@ class MMIXSMPTest:
         return (
             "-smp", str(self.cpu_count),
             "-accel", f"tcg,thread={self.thread_mode}",
-            "-machine", "elf-startup-abi=linux",
+            "-machine", "elf-startup=platform",
         )
 
 

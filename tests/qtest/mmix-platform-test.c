@@ -131,7 +131,7 @@ typedef struct MMIXPlatformRange {
 typedef enum MMIXPlatformBootMode {
     MMIX_PLATFORM_NO_IMAGE,
     MMIX_PLATFORM_RAW,
-    MMIX_PLATFORM_BARE_ELF,
+    MMIX_PLATFORM_ELF,
     MMIX_PLATFORM_HOSTED_ELF,
     MMIX_PLATFORM_MMO,
     MMIX_PLATFORM_LINUX,
@@ -641,7 +641,7 @@ static char *mmix_create_platform_image(const char *directory,
         raw[0x100] = 0xfd;
         return mmix_write_platform_image(directory, "kernel.raw", raw,
                                          sizeof(raw));
-    case MMIX_PLATFORM_BARE_ELF:
+    case MMIX_PLATFORM_ELF:
     case MMIX_PLATFORM_HOSTED_ELF:
     case MMIX_PLATFORM_LINUX:
         return mmix_create_platform_elf(directory, mode);
@@ -665,9 +665,9 @@ static void test_mmix_platform_boot_mode(gconstpointer opaque)
     g_autofree char *image = NULL;
     g_autoptr(GString) args = g_string_new(NULL);
     const char *machine = test->mode == MMIX_PLATFORM_HOSTED_ELF ?
-                          "virt,elf-startup-abi=argc-argv" :
+                          "virt,elf-startup=hosted" :
                           test->mode == MMIX_PLATFORM_LINUX ?
-                          "virt,elf-startup-abi=linux" : "virt";
+                          "virt,elf-startup=platform" : "virt";
     QTestState *qts;
 
     g_string_append_printf(args, "-machine %s -m %s -smp %u",
@@ -683,7 +683,7 @@ static void test_mmix_platform_boot_mode(gconstpointer opaque)
     case MMIX_PLATFORM_NO_IMAGE:
         break;
     case MMIX_PLATFORM_RAW:
-    case MMIX_PLATFORM_BARE_ELF:
+    case MMIX_PLATFORM_ELF:
     case MMIX_PLATFORM_MMO:
         g_string_append_printf(args, " -kernel %s", image);
         break;
@@ -943,14 +943,14 @@ int main(int argc, char **argv)
     static const MMIXPlatformBootCase boot_modes[] = {
         { MMIX_PLATFORM_NO_IMAGE, "512M", 1 },
         { MMIX_PLATFORM_RAW, "128M", 1 },
-        { MMIX_PLATFORM_BARE_ELF, "512M", 1 },
+        { MMIX_PLATFORM_ELF, "512M", 2 },
         { MMIX_PLATFORM_HOSTED_ELF, "512M", 1 },
         { MMIX_PLATFORM_MMO, "128M", 1 },
         { MMIX_PLATFORM_LINUX, "8G", 64 },
         { MMIX_PLATFORM_FIRMWARE, "512M", 2 },
     };
     static const char * const boot_mode_names[] = {
-        "no-image", "raw", "bare-elf", "hosted-elf", "mmo", "linux",
+        "no-image", "raw", "platform-elf", "hosted-elf", "mmo", "linux",
         "firmware",
     };
     unsigned int i;

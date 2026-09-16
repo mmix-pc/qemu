@@ -183,7 +183,7 @@ def test_rsp_register_description_and_reads(qemu, workdir):
             assert value == register_data[offset:offset + 8]
 
         ro = MMIX_GDB_GENERAL_REGS + MMIX_GDB_SPECIAL_REGS.index("rO")
-        assert register_data[8:16] == bytes(8)
+        assert struct.unpack(">Q", register_data[8:16])[0] != 0
         assert register_data[ro * 8:(ro + 1) * 8] == struct.pack(
             ">Q", INITIAL_STACK
         )
@@ -318,7 +318,7 @@ def test_rsp_general_register_writes_follow_logical_window(qemu, workdir):
         initial_ro = _read_register(client, ro)
         initial_rs = _read_register(client, rs)
 
-        assert _read_register(client, rl) == 0
+        assert _read_register(client, rl) == 2
         assert _read_register(client, rg) == 32
         for number, value in values.items():
             _write_register(client, number, value)

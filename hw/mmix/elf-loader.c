@@ -24,7 +24,6 @@ static const char mmix_elf_reg_contents_name[] = ".MMIX.reg_contents";
 typedef enum MMIXELFAddressing {
     MMIX_ELF_ADDRESSING_IDENTITY,
     MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS,
-    MMIX_ELF_ADDRESSING_LINUX,
 } MMIXELFAddressing;
 
 bool mmix_kernel_is_elf(const char *filename, Error **errp)
@@ -234,17 +233,11 @@ static bool mmix_preflight_elf_segments(
         if ((addressing == MMIX_ELF_ADDRESSING_IDENTITY &&
              !identity_mapping) ||
             (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS &&
-             !negative_alias_mapping) ||
-            (addressing == MMIX_ELF_ADDRESSING_LINUX &&
              !negative_alias_mapping)) {
-            if (addressing == MMIX_ELF_ADDRESSING_LINUX) {
-                error_setg(errp, "MMIX Linux ELF PT_LOAD segment %u in '%s' "
-                           "does not use a negative direct-alias mapping",
-                           i, filename);
-            } else if (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS) {
-                error_setg(errp, "MMIX bare ELF PT_LOAD segment %u in '%s' "
-                           "does not use a negative direct-alias mapping",
-                           i, filename);
+            if (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS) {
+                error_setg(errp, "MMIX platform ELF PT_LOAD segment %u in "
+                           "'%s' does not use a negative direct-alias "
+                           "mapping", i, filename);
             } else {
                 error_setg(errp, "MMIX ELF PT_LOAD segment %u in '%s' does "
                            "not use identical virtual and physical "
@@ -293,14 +286,9 @@ static bool mmix_preflight_elf_segments(
         return false;
     }
     if (!entry_valid) {
-        if (addressing == MMIX_ELF_ADDRESSING_LINUX) {
-            error_setg(errp, "MMIX Linux ELF entry 0x%" PRIx64 " in '%s' is "
-                       "not a complete aligned instruction in a negative "
-                       "direct-alias executable PT_LOAD segment",
-                       entry, filename);
-        } else if (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS) {
-            error_setg(errp, "MMIX bare ELF entry 0x%" PRIx64 " in '%s' is "
-                       "not a complete aligned instruction in a negative "
+        if (addressing == MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS) {
+            error_setg(errp, "MMIX platform ELF entry 0x%" PRIx64 " in '%s' "
+                       "is not a complete aligned instruction in a negative "
                        "direct-alias executable PT_LOAD segment",
                        entry, filename);
         } else {
@@ -369,24 +357,11 @@ bool mmix_preflight_elf_kernel(const char *filename,
         image_ranges, errp);
 }
 
-bool mmix_preflight_bare_elf_kernel(const char *filename,
-                                    const MMIXPhysicalRAM *ram,
-                                    MMIXKernelLoadInfo *info,
-                                    GArray **image_ranges, Error **errp)
-{
-    g_autoptr(GBytes) source = mmix_elf_read_source(filename, errp);
-
-    g_return_val_if_fail(image_ranges != NULL, false);
-    return source && mmix_preflight_elf_source(
-        filename, source, ram, MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS, info,
-        image_ranges, errp);
-}
-
-bool mmix_prepare_linux_elf_kernel(const char *filename,
-                                   const MMIXPhysicalRAM *ram,
-                                   MMIXKernelLoadInfo *info,
-                                   GArray **image_ranges, GBytes **source,
-                                   Error **errp)
+bool mmix_prepare_platform_elf_kernel(const char *filename,
+                                      const MMIXPhysicalRAM *ram,
+                                      MMIXKernelLoadInfo *info,
+                                      GArray **image_ranges, GBytes **source,
+                                      Error **errp)
 {
     g_autoptr(GBytes) result = NULL;
 
@@ -394,7 +369,7 @@ bool mmix_prepare_linux_elf_kernel(const char *filename,
 
     result = mmix_elf_read_source(filename, errp);
     if (!result || !mmix_preflight_elf_source(
-            filename, result, ram, MMIX_ELF_ADDRESSING_LINUX, info,
+            filename, result, ram, MMIX_ELF_ADDRESSING_NEGATIVE_ALIAS, info,
             image_ranges, errp)) {
         return false;
     }

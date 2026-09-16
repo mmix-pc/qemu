@@ -67,7 +67,7 @@ class MMIXL3SMPTest:
     @property
     def qemu_args(self):
         return (
-            "-machine", "elf-startup-abi=linux",
+            "-machine", "elf-startup=platform",
             "-smp", str(self.cpu_count),
             "-accel", f"tcg,thread={self.thread_mode}",
         )

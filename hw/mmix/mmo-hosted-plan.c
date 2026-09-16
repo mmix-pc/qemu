@@ -42,9 +42,9 @@ static bool mmix_mmo_hosted_validate_options(
         error_setg(errp, "MMIX MMO hosted startup does not accept -initrd");
         return false;
     }
-    if (options->has_explicit_elf_startup_abi) {
+    if (options->has_explicit_elf_startup) {
         error_setg(errp, "MMIX MMO hosted startup does not accept an "
-                   "explicit ELF startup ABI");
+                   "explicit ELF startup profile");
         return false;
     }
     if (options->has_firmware) {

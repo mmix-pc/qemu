@@ -8,7 +8,7 @@ from .common import *
 from .smp import SMPProgram, smp_load, smp_store, smp_sync
 
 
-LINUX_MACHINE = ("-machine", "elf-startup-abi=linux")
+LINUX_MACHINE = ("-machine", "elf-startup=platform")
 LINUX_NEGATIVE_ALIAS_BIT = 1 << 63
 
 
@@ -457,10 +457,10 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
         ("does not use a negative direct-alias mapping",),
     ),
     MMIXProcessFailure(
-        "elf-argc-argv-negative-direct-alias",
+        "elf-hosted-negative-direct-alias",
         LINUX_DIRECT_ALIAS_IMAGE,
         (
-            "-machine", "elf-startup-abi=argc-argv",
+            "-machine", "elf-startup=hosted",
             "-semihosting-config", "enable=on,userspace=on",
         ),
         ("does not use identical virtual and physical addresses",),
@@ -499,26 +499,27 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
     MMIXProcessFailure(
         "elf-retired-bootinfo-startup-abi",
         elf64_image(0, halt()),
-        ("-machine", "elf-startup-abi=bootinfo"),
+        ("-machine", "elf-startup=bootinfo"),
         (
-            "Invalid MMIX ELF startup ABI 'bootinfo'",
-            "Valid values are bare, argc-argv, and linux",
+            "Invalid MMIX ELF startup profile 'bootinfo'",
+            "Valid values are platform and hosted",
         ),
     ),
     MMIXProcessFailure(
         "elf-invalid-startup-abi",
         elf64_image(0, halt()),
-        ("-machine", "elf-startup-abi=invalid"),
+        ("-machine", "elf-startup=invalid"),
         (
-            "Invalid MMIX ELF startup ABI 'invalid'",
-            "Valid values are bare, argc-argv, and linux",
+            "Invalid MMIX ELF startup profile 'invalid'",
+            "Valid values are platform and hosted",
         ),
     ),
     MMIXProcessFailure(
-        "raw-linux-startup-abi",
+        "raw-hosted-startup",
         bytes(0x104),
-        LINUX_MACHINE,
-        ("raw -kernel loading does not support ELF startup ABI 'linux'",),
+        ("-machine", "elf-startup=hosted"),
+        ("raw -kernel loading does not support ELF startup profile "
+         "'hosted'",),
     ),
     MMIXProcessFailure(
         "elf-linux-maxcpus",
@@ -558,13 +559,13 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
             "-semihosting-config",
             "enable=on,arg=kernel",
         ),
-        ("Linux direct boot does not accept semihosting arguments",),
+        ("platform ELF startup does not accept semihosting arguments",),
     ),
     MMIXProcessFailure(
         "elf-linux-command-line-too-long",
         elf64_image(0, halt()),
         (*LINUX_MACHINE, "-append", "x" * 4096),
-        ("Linux command line exceeds 4095 bytes",),
+        ("platform command line exceeds 4095 bytes",),
     ),
     MMIXProcessFailure(
         "elf-linux-missing-initrd",
@@ -576,7 +577,7 @@ LINUX_PREFLIGHT_REJECTION_TESTS = [
         "elf-linux-empty-initrd",
         elf64_image(0, halt()),
         (*LINUX_MACHINE, "-initrd", "$EMPTY"),
-        ("Linux initrd", "is empty"),
+        ("platform initrd", "is empty"),
     ),
     MMIXProcessFailure(
         "elf-linux-initrd-no-free-page",

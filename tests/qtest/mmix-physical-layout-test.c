@@ -600,6 +600,9 @@ static char *mmix_create_bare_elf(const char *directory, uint64_t ram_size)
     return g_steal_pointer(&filename);
 }
 
+static uint64_t mmix_hmp_register_value(const char *registers,
+                                        const char *name);
+
 static void test_mmix_bare_elf_load_and_reset(void)
 {
     const uint64_t ram_size = 8 * GiB;
@@ -632,9 +635,9 @@ static void test_mmix_bare_elf_load_and_reset(void)
                     expected_data, sizeof(expected_data));
     registers = qtest_hmp(qts, "info registers");
     g_assert_nonnull(strstr(registers, "pc=0x8000000100000000"));
-    g_assert_nonnull(strstr(registers, "rL=0"));
-    g_assert_nonnull(strstr(registers, "r0  =0x0000000000000000"));
-    g_assert_nonnull(strstr(registers, "r1  =0x0000000000000000"));
+    g_assert_cmphex(mmix_hmp_register_value(registers, "rL "), ==, 2);
+    g_assert_cmphex(mmix_hmp_register_value(registers, "r0  "), ==, 0);
+    g_assert_cmphex(mmix_hmp_register_value(registers, "r1  "), !=, 0);
 
     qtest_memset(qts, code_address, 0xa5, sizeof(actual));
     qtest_memset(qts, data_address, 0xa5, sizeof(actual));
@@ -667,7 +670,7 @@ static void test_mmix_retired_bootinfo_absent(void)
     g_assert_no_error(error);
     g_assert_nonnull(directory);
     filename = mmix_create_bare_elf(directory, ram_size);
-    qts = qtest_initf("-machine virt,elf-startup-abi=linux -m 8G "
+    qts = qtest_initf("-machine virt,elf-startup=platform -m 8G "
                       "-kernel %s", filename);
 
     qtest_memread(qts, MMIX_RETIRED_BOOTINFO_BASE, bootinfo_magic,
@@ -755,7 +758,7 @@ static void test_mmix_hosted_arguments_reset(void)
     g_assert_nonnull(directory);
     filename = mmix_create_hosted_elf(directory);
     qts = qtest_initf(
-        "-machine virt,elf-startup-abi=argc-argv "
+        "-machine virt,elf-startup=hosted "
         "-semihosting-config enable=on,arg=prog,arg=one -kernel %s",
         filename);
 
@@ -880,8 +883,8 @@ int main(int argc, char **argv)
             "requires exactly one CPU",
         },
         {
-            0x104, NULL, "virt,elf-startup-abi=argc-argv", NULL, NULL,
-            "does not support ELF startup ABI 'argc-argv'",
+            0x104, NULL, "virt,elf-startup=hosted", NULL, NULL,
+            "does not support ELF startup profile 'hosted'",
         },
         {
             0x104, NULL, NULL, "-semihosting-config", "enable=on,arg=x",
@@ -898,7 +901,7 @@ int main(int argc, char **argv)
     };
     static const char * const raw_rejection_names[] = {
         "ram-endpoint", "oversized", "startup-collision", "smp",
-        "argc-argv", "semihosting-args", "append", "initrd",
+        "hosted", "semihosting-args", "append", "initrd",
     };
     unsigned int i;
 

@@ -8,7 +8,6 @@ from .common import (
     LDOU,
     MMIX_NEGATIVE_ALIAS_BIT,
     MMIXELFTest,
-    MMIXProcessFailure,
     R0,
     R1,
     R32,
@@ -50,7 +49,7 @@ BARE_ELF_TESTS = [
             virtual_address=BARE_VIRTUAL_ENTRY,
         ),
         pc=BARE_VIRTUAL_ENTRY + len(BARE_PROGRAM) - 4,
-        regs={R32: 0, R33: 0, R34: 0, R35: 32, R36: 0},
+        regs={R32: 0, R34: 2, R35: 32, R36: 0},
         security_checks=True,
     ),
     MMIXELFTest(
@@ -60,7 +59,7 @@ BARE_ELF_TESTS = [
             virtual_address=BARE_VIRTUAL_ENTRY,
         ),
         pc=BARE_VIRTUAL_ENTRY + len(BARE_PROGRAM) - 4,
-        regs={R32: 0, R33: 0, R34: 0, R35: 32, R36: 0},
+        regs={R32: 0, R34: 2, R35: 32, R36: 0},
         qemu_args=("-semihosting",),
         security_checks=True,
     ),
@@ -75,32 +74,5 @@ BARE_ELF_TESTS = [
         regs={},
         qemu_args=("-m", "8G"),
         security_checks=True,
-    ),
-]
-
-BARE_ELF_REJECTION_TESTS = [
-    MMIXProcessFailure(
-        "elf-bare-smp",
-        elf64_image(0, halt()),
-        ("-smp", "2"),
-        ("startup ABI 'bare' requires exactly one CPU",),
-    ),
-    MMIXProcessFailure(
-        "elf-bare-semihosting-arguments",
-        elf64_image(0, halt()),
-        ("-semihosting-config", "enable=on,arg=program"),
-        ("startup ABI 'bare' does not accept semihosting arguments",),
-    ),
-    MMIXProcessFailure(
-        "elf-bare-append",
-        elf64_image(0, halt()),
-        ("-append", "argument"),
-        ("startup ABI 'bare' does not accept -append",),
-    ),
-    MMIXProcessFailure(
-        "elf-bare-initrd",
-        elf64_image(0, halt()),
-        ("-initrd", "$IMAGE"),
-        ("startup ABI 'bare' does not accept -initrd",),
     ),
 ]

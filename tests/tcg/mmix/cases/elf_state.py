@@ -57,7 +57,7 @@ ELF_STATE_TEST = MMIXELFStateTest(
     global_value=GLOBAL_VALUE,
     qemu_args=(
         "-machine",
-        "elf-startup-abi=argc-argv",
+        "elf-startup=hosted",
         "-semihosting-config",
         "enable=on,arg=prog,arg=one",
     ),

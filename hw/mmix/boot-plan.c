@@ -11,12 +11,12 @@
 struct MMIXBootPlan {
     char *image_filename;
     MMIXKernelLoadInfo image_info;
-    MMIXLinuxBootInfo linux_info;
+    MMIXPlatformBootInfo platform_info;
     MMIXRAMReservationRequest *requests;
     MMIXRAMReservationPlan ram;
     size_t request_count;
     bool has_image;
-    bool has_linux_info;
+    bool has_platform_info;
 };
 
 static void mmix_boot_plan_clear_requests(MMIXBootPlan *plan)
@@ -39,10 +39,10 @@ void mmix_boot_plan_free(MMIXBootPlan *plan)
     mmix_ram_reservation_plan_clear(&plan->ram);
     mmix_boot_plan_clear_requests(plan);
     g_free(plan->image_filename);
-    g_free((char *)plan->linux_info.command_line);
-    g_free((char *)plan->linux_info.initrd_filename);
-    g_clear_pointer(&plan->linux_info.initrd, g_bytes_unref);
-    g_clear_pointer(&plan->linux_info.fdt, g_bytes_unref);
+    g_free((char *)plan->platform_info.command_line);
+    g_free((char *)plan->platform_info.initrd_filename);
+    g_clear_pointer(&plan->platform_info.initrd, g_bytes_unref);
+    g_clear_pointer(&plan->platform_info.fdt, g_bytes_unref);
     g_free(plan);
 }
 
@@ -63,7 +63,7 @@ static void mmix_boot_plan_copy_requests(
 
 bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
                           const MMIXKernelLoadInfo *image_info,
-                          const MMIXLinuxBootInfo *linux_info,
+                          const MMIXPlatformBootInfo *platform_info,
                           const MMIXRAMReservationRequest *requests,
                           size_t request_count, MMIXBootPlan **plan,
                           Error **errp)
@@ -80,27 +80,29 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
         error_setg(errp, "MMIX boot plan has an invalid image type");
         return false;
     }
-    if (linux_info && !image_info) {
-        error_setg(errp, "MMIX Linux boot information requires an image");
+    if (platform_info && !image_info) {
+        error_setg(errp, "MMIX platform boot information requires an image");
         return false;
     }
-    if (linux_info && image_info->image_type != MMIX_KERNEL_IMAGE_ELF) {
-        error_setg(errp, "MMIX Linux boot information requires an ELF image");
+    if (platform_info && image_info->image_type != MMIX_KERNEL_IMAGE_ELF) {
+        error_setg(errp, "MMIX platform boot information requires an ELF "
+                   "image");
         return false;
     }
-    if (linux_info && (!linux_info->command_line ||
-                       linux_info->cpu_count == 0)) {
-        error_setg(errp, "MMIX Linux boot information is incomplete");
+    if (platform_info && (!platform_info->command_line ||
+                          platform_info->cpu_count == 0)) {
+        error_setg(errp, "MMIX platform boot information is incomplete");
         return false;
     }
-    if (linux_info &&
-        (linux_info->has_initrd != (linux_info->initrd_filename != NULL) ||
-         linux_info->has_initrd != (linux_info->initrd != NULL) ||
-         (linux_info->has_initrd &&
-          (linux_info->initrd_size == 0 ||
-           linux_info->initrd_size !=
-               g_bytes_get_size(linux_info->initrd))))) {
-        error_setg(errp, "MMIX Linux initrd information is inconsistent");
+    if (platform_info &&
+        (platform_info->has_initrd !=
+             (platform_info->initrd_filename != NULL) ||
+         platform_info->has_initrd != (platform_info->initrd != NULL) ||
+         (platform_info->has_initrd &&
+          (platform_info->initrd_size == 0 ||
+           platform_info->initrd_size !=
+               g_bytes_get_size(platform_info->initrd))))) {
+        error_setg(errp, "MMIX platform initrd information is inconsistent");
         return false;
     }
     if (request_count != 0 && requests == NULL) {
@@ -115,19 +117,19 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
         result->image_filename = g_strdup(image_filename);
         result->image_info = *image_info;
     }
-    result->has_linux_info = linux_info != NULL;
-    if (result->has_linux_info) {
-        result->linux_info = *linux_info;
-        result->linux_info.initrd_base = 0;
-        result->linux_info.fdt_base = 0;
-        result->linux_info.command_line =
-            g_strdup(linux_info->command_line);
-        result->linux_info.initrd_filename =
-            g_strdup(linux_info->initrd_filename);
-        result->linux_info.initrd = linux_info->initrd ?
-            g_bytes_ref(linux_info->initrd) : NULL;
-        result->linux_info.fdt = linux_info->fdt ?
-            g_bytes_ref(linux_info->fdt) : NULL;
+    result->has_platform_info = platform_info != NULL;
+    if (result->has_platform_info) {
+        result->platform_info = *platform_info;
+        result->platform_info.initrd_base = 0;
+        result->platform_info.fdt_base = 0;
+        result->platform_info.command_line =
+            g_strdup(platform_info->command_line);
+        result->platform_info.initrd_filename =
+            g_strdup(platform_info->initrd_filename);
+        result->platform_info.initrd = platform_info->initrd ?
+            g_bytes_ref(platform_info->initrd) : NULL;
+        result->platform_info.fdt = platform_info->fdt ?
+            g_bytes_ref(platform_info->fdt) : NULL;
     }
     mmix_boot_plan_copy_requests(result, requests, request_count);
     if (!mmix_ram_reservation_plan(ram_size, result->requests,
@@ -135,42 +137,43 @@ bool mmix_boot_plan_build(uint64_t ram_size, const char *image_filename,
         mmix_boot_plan_free(result);
         return false;
     }
-    if (result->has_linux_info && result->linux_info.has_initrd) {
-        size_t index = result->linux_info.initrd_request_index;
+    if (result->has_platform_info && result->platform_info.has_initrd) {
+        size_t index = result->platform_info.initrd_request_index;
         const MMIXRAMReservation *reservation;
 
         if (index >= result->ram.count) {
-            error_setg(errp, "MMIX Linux initrd reservation is missing");
+            error_setg(errp, "MMIX platform initrd reservation is missing");
             mmix_boot_plan_free(result);
             return false;
         }
         reservation = &result->ram.reservations[index];
         if (mmix_phys_range_size(&reservation->content) !=
-            result->linux_info.initrd_size) {
-            error_setg(errp, "MMIX Linux initrd reservation has the wrong "
+            result->platform_info.initrd_size) {
+            error_setg(errp, "MMIX platform initrd reservation has the wrong "
                        "size");
             mmix_boot_plan_free(result);
             return false;
         }
-        result->linux_info.initrd_base = reservation->content.start;
+        result->platform_info.initrd_base = reservation->content.start;
     }
-    if (result->has_linux_info && result->linux_info.fdt) {
-        size_t index = result->linux_info.fdt_request_index;
+    if (result->has_platform_info && result->platform_info.fdt) {
+        size_t index = result->platform_info.fdt_request_index;
         const MMIXRAMReservation *reservation;
 
         if (index >= result->ram.count) {
-            error_setg(errp, "MMIX Linux FDT reservation is missing");
+            error_setg(errp, "MMIX platform FDT reservation is missing");
             mmix_boot_plan_free(result);
             return false;
         }
         reservation = &result->ram.reservations[index];
         if (mmix_phys_range_size(&reservation->content) !=
-            g_bytes_get_size(result->linux_info.fdt)) {
-            error_setg(errp, "MMIX Linux FDT reservation has the wrong size");
+            g_bytes_get_size(result->platform_info.fdt)) {
+            error_setg(errp, "MMIX platform FDT reservation has the wrong "
+                       "size");
             mmix_boot_plan_free(result);
             return false;
         }
-        result->linux_info.fdt_base = reservation->content.start;
+        result->platform_info.fdt_base = reservation->content.start;
     }
 
     mmix_boot_plan_free(*plan);
@@ -188,9 +191,10 @@ const MMIXKernelLoadInfo *mmix_boot_plan_image_info(const MMIXBootPlan *plan)
     return plan && plan->has_image ? &plan->image_info : NULL;
 }
 
-const MMIXLinuxBootInfo *mmix_boot_plan_linux_info(const MMIXBootPlan *plan)
+const MMIXPlatformBootInfo *
+mmix_boot_plan_platform_info(const MMIXBootPlan *plan)
 {
-    return plan && plan->has_linux_info ? &plan->linux_info : NULL;
+    return plan && plan->has_platform_info ? &plan->platform_info : NULL;
 }
 
 size_t mmix_boot_plan_request_count(const MMIXBootPlan *plan)

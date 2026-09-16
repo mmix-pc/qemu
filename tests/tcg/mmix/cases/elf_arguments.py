@@ -183,7 +183,7 @@ HOSTED_ELF_TESTS = [
         regs=EXPLICIT_ARGUMENTS[2],
         qemu_args=(
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=prog,arg=one,arg=two",
         ),
@@ -196,7 +196,7 @@ HOSTED_ELF_TESTS = [
         regs=FALLBACK_ARGUMENTS[2],
         qemu_args=(
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting",
             "-append",
             "one two",
@@ -210,7 +210,7 @@ HOSTED_ELF_TESTS = [
         regs=EMPTY_ARGUMENT[2],
         qemu_args=(
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=",
         ),
@@ -222,7 +222,7 @@ HOSTED_ELF_TESTS = [
         regs=LARGE_ARGUMENT_PROBE[2],
         qemu_args=(
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             f"enable=on,arg={LARGE_ARGUMENT}",
         ),
@@ -243,7 +243,7 @@ HOSTED_ELF_TESTS = [
         },
         qemu_args=(
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=prog",
         ),
@@ -255,8 +255,8 @@ HOSTED_ELF_REJECTION_TESTS = [
     MMIXProcessFailure(
         "elf-arguments-semihosting-disabled",
         elf64_image(0, halt()),
-        ("-machine", "elf-startup-abi=argc-argv"),
-        ("startup ABI 'argc-argv' requires semihosting",),
+        ("-machine", "elf-startup=hosted"),
+        ("startup profile 'hosted' requires semihosting",),
     ),
     MMIXProcessFailure(
         "elf-arguments-smp",
@@ -265,18 +265,18 @@ HOSTED_ELF_REJECTION_TESTS = [
             "-smp",
             "2",
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=prog",
         ),
-        ("startup ABI 'argc-argv' requires exactly one CPU",),
+        ("startup profile 'hosted' requires exactly one CPU",),
     ),
     MMIXProcessFailure(
         "elf-arguments-explicit-with-append",
         elf64_image(0, halt()),
         (
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=prog",
             "-append",
@@ -289,13 +289,13 @@ HOSTED_ELF_REJECTION_TESTS = [
         elf64_image(0, halt()),
         (
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=prog",
             "-initrd",
             "$IMAGE",
         ),
-        ("startup ABI 'argc-argv' does not accept -initrd",),
+        ("startup profile 'hosted' does not accept -initrd",),
     ),
     MMIXProcessFailure(
         "elf-arguments-no-free-page",
@@ -308,7 +308,7 @@ HOSTED_ELF_REJECTION_TESTS = [
             "-m",
             "128M",
             "-machine",
-            "elf-startup-abi=argc-argv",
+            "elf-startup=hosted",
             "-semihosting-config",
             "enable=on,arg=prog",
         ),

@@ -592,8 +592,8 @@ static void test_hosted_option_policy(void)
     options.has_initrd = true;
     assert_hosted_plan_fails(mmo, &options, "does not accept -initrd");
     options = hosted_options();
-    options.has_explicit_elf_startup_abi = true;
-    assert_hosted_plan_fails(mmo, &options, "explicit ELF startup ABI");
+    options.has_explicit_elf_startup = true;
+    assert_hosted_plan_fails(mmo, &options, "explicit ELF startup profile");
     options = hosted_options();
     options.has_firmware = true;
     assert_hosted_plan_fails(mmo, &options, "does not accept firmware");

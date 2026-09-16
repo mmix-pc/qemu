@@ -381,7 +381,7 @@ def test_firmware_dtb_matches_other_boot_modes(qemu, workdir):
 
     for name, machine, args in (
         ("erased", "virt", ()),
-        ("direct", "virt,elf-startup-abi=linux",
+        ("direct", "virt,elf-startup=platform",
          ("-kernel", str(kernel))),
         ("firmware", "virt", ("-bios", str(bios))),
     ):
