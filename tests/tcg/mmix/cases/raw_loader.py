@@ -54,7 +54,6 @@ RAW_DIRECT_ISA_TESTS = [
             R36: (1 << 64) - 1,
             R37: 0,
         },
-        security_checks=True,
     ),
 ]
 
@@ -64,7 +63,6 @@ RAW_DIRECT_TESTS = [
         raw_direct_image(SERIAL_PROGRAM),
         pc=MMIX_RAW_ENTRY + SERIAL_EXIT_PC,
         output=b"MMIX raw direct boot\n",
-        security_checks=True,
     ),
     MMIXSerialTest(
         "raw-direct-semihosting-enabled",
@@ -72,6 +70,5 @@ RAW_DIRECT_TESTS = [
         pc=MMIX_RAW_ENTRY + SERIAL_EXIT_PC,
         output=b"MMIX raw direct boot\n",
         qemu_args=("-semihosting",),
-        security_checks=True,
     ),
 ]

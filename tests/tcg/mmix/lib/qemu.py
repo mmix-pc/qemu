@@ -23,7 +23,9 @@ QEMU_SEMIHOSTING_STDIN_ARGS = (
     "-semihosting-config",
     f"enable=on,userspace=on,chardev={QEMU_SEMIHOSTING_STDIN_CHARDEV}",
 )
-QEMU_TEST_CPU_ARGS = (
+
+# White-box fixtures may bypass architectural entry or return state.
+QEMU_DISABLE_SECURITY_CHECKS_ARGS = (
     "-global",
     "mmix-cpu.x-security-checks=off",
 )
@@ -37,7 +39,7 @@ class QemuLog:
 
 
 def build_kernel_command(qemu, kernel, *, serial="none", trace=None, log=None,
-                         qemu_args=(), security_checks=False):
+                         qemu_args=()):
     cmd = [
         str(qemu),
         "-machine",
@@ -48,7 +50,6 @@ def build_kernel_command(qemu, kernel, *, serial="none", trace=None, log=None,
         "none",
         "-serial",
         str(serial),
-        *(() if security_checks else QEMU_TEST_CPU_ARGS),
         *qemu_args,
         "-kernel",
         str(kernel),
@@ -61,7 +62,9 @@ def build_kernel_command(qemu, kernel, *, serial="none", trace=None, log=None,
 
 
 def build_loader_command(qemu, image, *, serial="none", trace=None, log=None,
-                         qemu_args=(), security_checks=False):
+                         qemu_args=(), disable_security_checks=True):
+    security_args = (QEMU_DISABLE_SECURITY_CHECKS_ARGS
+                     if disable_security_checks else ())
     cmd = [
         str(qemu),
         "-machine",
@@ -72,7 +75,7 @@ def build_loader_command(qemu, image, *, serial="none", trace=None, log=None,
         "none",
         "-serial",
         str(serial),
-        *(() if security_checks else QEMU_TEST_CPU_ARGS),
+        *security_args,
         *qemu_args,
         "-device",
         f"loader,file={image},addr=0,cpu-num=0",
@@ -86,7 +89,7 @@ def build_loader_command(qemu, image, *, serial="none", trace=None, log=None,
 
 def build_smp_elf_loader_command(qemu, image, entry, *, trace=None, log=None,
                                  qemu_args=(),
-                                 security_checks=False):
+                                 disable_security_checks=True):
     if entry & 3:
         raise ValueError(f"MMIX SMP test entry is not aligned: {entry:#x}")
     if entry < 1 << 26:
@@ -97,6 +100,8 @@ def build_smp_elf_loader_command(qemu, image, entry, *, trace=None, log=None,
             *set_octa(R255, entry),
             insn(GOI, R255, R255, 0),
         ))
+    security_args = (QEMU_DISABLE_SECURITY_CHECKS_ARGS
+                     if disable_security_checks else ())
     cmd = [
         str(qemu),
         "-machine",
@@ -107,7 +112,7 @@ def build_smp_elf_loader_command(qemu, image, entry, *, trace=None, log=None,
         "none",
         "-serial",
         "none",
-        *(() if security_checks else QEMU_TEST_CPU_ARGS),
+        *security_args,
         *qemu_args,
         "-device",
         f"loader,file={image}",
@@ -150,12 +155,10 @@ def run_kernel(
     timeout=10,
     capture_output=False,
     stdin_data: Optional[bytes] = None,
-    security_checks=False,
 ):
     return _run_command(
         build_kernel_command(qemu, kernel, serial=serial, trace=trace, log=log,
-                             qemu_args=qemu_args,
-                             security_checks=security_checks),
+                             qemu_args=qemu_args),
         check=check, timeout=timeout, capture_output=capture_output,
         stdin_data=stdin_data,
     )
@@ -173,12 +176,12 @@ def run_loader(
     timeout=10,
     capture_output=False,
     stdin_data: Optional[bytes] = None,
-    security_checks=False,
+    disable_security_checks=True,
 ):
     return _run_command(
         build_loader_command(qemu, image, serial=serial, trace=trace, log=log,
                              qemu_args=qemu_args,
-                             security_checks=security_checks),
+                             disable_security_checks=disable_security_checks),
         check=check, timeout=timeout, capture_output=capture_output,
         stdin_data=stdin_data,
     )

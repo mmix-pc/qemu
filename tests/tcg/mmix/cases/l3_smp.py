@@ -200,12 +200,12 @@ def l3_cpu0_cpu63_interrupt_program():
 
     program.mark("cpu63")
     program.emit(*set_octa(R40, _mailbox(63)))
-    program.emit(*set_octa(R41, L3_HANDLER63))
+    program.emit(*set_octa(R41, MMIX_NEGATIVE_ALIAS_BIT | L3_HANDLER63))
     program.emit_branch(BZ, R254, "setup")
 
     program.mark("cpu0")
     program.emit(*set_octa(R40, _mailbox(0)))
-    program.emit(*set_octa(R41, L3_HANDLER0))
+    program.emit(*set_octa(R41, MMIX_NEGATIVE_ALIAS_BIT | L3_HANDLER0))
 
     program.mark("setup")
     irq = MMIX_VIRT_TIMER_IRQ_BASE

@@ -45,6 +45,7 @@ UART_LSR = 5
 UART_LSR_THRE = 0x20
 FDT_ADDRESS = 0x00100000
 KERNEL_ADDRESS = 0x00200000
+KERNEL_ENTRY = 0x8000000000200000
 RECORD_ADDRESS = 0x00300000
 RELEASE_ADDRESS = 0x00008000
 SUCCESS_ADDRESS = 0x00300800
@@ -194,11 +195,11 @@ def firmware_image():
     p.branch(BZ, zero, "copy_kernel")
     p.mark("release")
     p.emit(insn(SYNC, 0, 0, 1), insn(STOUI, 35, 34, 0),
-           insn(SYNC, 0, 0, 1))
+           insn(SYNC, 0, 0, 1), *set_octa(36, KERNEL_ENTRY))
     p.branch(BZ, zero, "handoff")
 
     p.mark("secondary")
-    p.emit(*set_octa(34, RELEASE_ADDRESS), *set_octa(36, KERNEL_ADDRESS))
+    p.emit(*set_octa(34, RELEASE_ADDRESS), *set_octa(36, KERNEL_ENTRY))
     p.mark("secondary_wait")
     p.emit(insn(LDOUI, 35, 34, 0))
     p.branch(BZ, 35, "secondary_wait")

@@ -27,7 +27,6 @@ from lib.mmo import MMIX_MMO_ESCAPE, MMIX_MMO_LOP_PRE, mmo_hosted_text_image
 from lib.qemu import (
     QEMU_SEMIHOSTING_ARGS,
     QEMU_SEMIHOSTING_STDIN_ARGS,
-    QEMU_TEST_CPU_ARGS,
     build_kernel_command,
     build_smp_elf_loader_command,
     read_log,
@@ -99,7 +98,6 @@ def _run_one(qemu, workdir, test, runner, *, qemu_args=(), stdin_data=None,
         qemu, image, trace="int", log=log, qemu_args=qemu_args,
         check=False, timeout=10,
         stdin_data=_test_stdin_data(test, stdin_data),
-        security_checks=getattr(test, "security_checks", False),
     )
 
     result = read_log(log)
@@ -122,7 +120,14 @@ def run_one(qemu, workdir, test, *, qemu_args=(), stdin_data=None,
 
 
 def run_one_with_loader(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
-    _run_one(qemu, workdir, test, run_loader, qemu_args=qemu_args,
+    def loader(*args, **kwargs):
+        return run_loader(
+            *args,
+            disable_security_checks=test.loader_disables_security_checks,
+            **kwargs,
+        )
+
+    _run_one(qemu, workdir, test, loader, qemu_args=qemu_args,
              stdin_data=stdin_data)
 
 
@@ -244,7 +249,6 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
         check=False,
         timeout=10,
         stdin_data=_test_stdin_data(test, stdin_data),
-        security_checks=getattr(test, "security_checks", False),
     )
 
     result = read_log(log)
@@ -379,8 +383,7 @@ def run_elf_test(qemu, workdir, test):
     qemu_args = _trusted_semihosting_args(test.qemu_args)
     completed = run_kernel(qemu, image, serial=serial_arg, trace="int",
                            log=log, qemu_args=qemu_args, check=False,
-                           timeout=10,
-                           security_checks=getattr(test, "security_checks", False))
+                           timeout=10)
 
     result = read_log(log)
     assert_exit_pc(test.name, result, test.pc)
@@ -975,7 +978,6 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         "-display", "none",
         "-monitor", "none",
         "-serial", f"file:{serial}",
-        *QEMU_TEST_CPU_ARGS,
         "-S",
         "-qmp", "stdio",
         "-qtest", f"unix:{qtest_path}",
@@ -1147,7 +1149,6 @@ def run_linux_entry_state_test(qemu, workdir, test):
         qemu,
         image,
         qemu_args=(*qemu_args, "-S", "-qmp", "stdio"),
-        security_checks=test.security_checks,
     )
     process = subprocess.Popen(
         command,
@@ -1234,7 +1235,6 @@ def run_linux_smp_entry_test(qemu, workdir, test):
         qemu_args=qemu_args,
         check=False,
         timeout=10,
-        security_checks=test.security_checks,
     )
     result = read_log(log)
     assert_exit_pc(test.name, result, test.success_pc)
@@ -1374,7 +1374,6 @@ def run_linux_state_test(qemu, workdir, test):
             "-qtest-log", "/dev/null",
             "-drive", f"file={snapshot},format=qcow2,if=none",
         ),
-        security_checks=test.security_checks,
     )
     process = subprocess.Popen(
         command,

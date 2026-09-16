@@ -45,15 +45,20 @@ class MMIXSMPTest:
     cpu_count: int = SMP_CPU_COUNT
     output: Optional[bytes] = None
     exit_status: int = 0
+    disable_security_checks: bool = False
 
     @property
     def qemu_args(self):
         if self.thread_mode not in TCG_THREAD_MODES:
             raise ValueError(f"unsupported TCG thread mode: {self.thread_mode}")
+        security_args = (
+            "-global", "mmix-cpu.x-security-checks=off",
+        ) if self.disable_security_checks else ()
         return (
             "-smp", str(self.cpu_count),
             "-accel", f"tcg,thread={self.thread_mode}",
             "-machine", "elf-startup=platform",
+            *security_args,
         )
 
 

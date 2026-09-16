@@ -86,7 +86,6 @@ ELF_REGISTER_TESTS = [
             R24: GLOBAL_VALUES[4],
             R25: GLOBAL_BASE,
         },
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-register-contents-absent",
@@ -96,7 +95,6 @@ ELF_REGISTER_TESTS = [
         ),
         pc=MMIX_NEGATIVE_ALIAS_BIT + len(ABSENT_PROGRAM) - 4,
         regs={R40: 0, R41: 0, R42: 32},
-        security_checks=True,
     ),
 ]
 

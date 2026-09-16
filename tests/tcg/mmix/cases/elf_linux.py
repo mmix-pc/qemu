@@ -20,7 +20,6 @@ class MMIXLinuxEntryStateTest:
     cpu_count: int
     qemu_args: tuple[str, ...]
     minimum_fdt: int = 0
-    security_checks: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -29,7 +28,6 @@ class MMIXLinuxSMPEntryTest:
     image: bytes
     success_pc: int
     qemu_args: tuple[str, ...]
-    security_checks: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,7 +40,6 @@ class MMIXLinuxStateTest:
     idle_pcs: tuple[int, ...]
     bss: int
     qemu_args: tuple[str, ...]
-    security_checks: bool = False
 
 
 def linux_direct_alias_image():
@@ -185,7 +182,6 @@ def linux_privilege_qualification_test(name, fixture, rc, rq):
             R42: 0,
         },
         qemu_args=LINUX_MACHINE,
-        security_checks=True,
     )
 
 
@@ -203,7 +199,6 @@ LINUX_DIRECT_ALIAS_TESTS = [
         pc=LINUX_DIRECT_ALIAS_ADDRESS + 4,
         regs={R34: 0x55},
         qemu_args=LINUX_MACHINE,
-        security_checks=True,
     ),
     linux_privilege_qualification_test(
         "elf-linux-positive-put-k-disabled",
@@ -442,7 +437,6 @@ def linux_state_program():
             *LINUX_MACHINE,
             "-initrd", "$INITRD",
         ),
-        security_checks=True,
     )
 
 

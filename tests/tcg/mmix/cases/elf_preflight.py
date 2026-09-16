@@ -98,14 +98,12 @@ ELF_PREFLIGHT_VALID_TESTS = [
         SIMPLE,
         pc=MMIX_NEGATIVE_ALIAS_BIT,
         regs={},
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-preflight-segments-share-reservation-page",
         TWO_SEGMENTS_ONE_PAGE,
         pc=MMIX_NEGATIVE_ALIAS_BIT | 0x2000,
         regs={},
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-preflight-ram-endpoint",
@@ -118,7 +116,6 @@ ELF_PREFLIGHT_VALID_TESTS = [
         pc=MMIX_NEGATIVE_ALIAS_BIT | (128 * 1024 * 1024 - 4),
         regs={},
         qemu_args=("-m", "128M"),
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-preflight-above-4g",
@@ -130,7 +127,6 @@ ELF_PREFLIGHT_VALID_TESTS = [
         pc=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
         regs={},
         qemu_args=("-m", "8G"),
-        security_checks=True,
     ),
 ]
 

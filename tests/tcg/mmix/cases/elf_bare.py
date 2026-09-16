@@ -50,7 +50,6 @@ BARE_ELF_TESTS = [
         ),
         pc=BARE_VIRTUAL_ENTRY + len(BARE_PROGRAM) - 4,
         regs={R32: 0, R34: 2, R35: 32, R36: 0},
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-bare-semihosting-enabled",
@@ -61,7 +60,6 @@ BARE_ELF_TESTS = [
         pc=BARE_VIRTUAL_ENTRY + len(BARE_PROGRAM) - 4,
         regs={R32: 0, R34: 2, R35: 32, R36: 0},
         qemu_args=("-semihosting",),
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-bare-entry-above-4g",
@@ -73,6 +71,5 @@ BARE_ELF_TESTS = [
         pc=MMIX_NEGATIVE_ALIAS_BIT | 0x100000000,
         regs={},
         qemu_args=("-m", "8G"),
-        security_checks=True,
     ),
 ]

@@ -809,7 +809,7 @@ class MMIXTest:
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
     stdin_data: Optional[bytes] = None
-    security_checks: bool = False
+    loader_disables_security_checks: bool = True
     log_patterns: tuple[str, ...] = ()
 
 
@@ -831,7 +831,6 @@ class MMIXSerialTest:
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
     stdin_data: Optional[bytes] = None
-    security_checks: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -870,7 +869,6 @@ class MMIXELFTest:
     output: Optional[bytes] = None
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
-    security_checks: bool = False
 
 
 def case_id(test):

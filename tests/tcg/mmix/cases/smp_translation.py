@@ -1061,6 +1061,8 @@ SMP_TRANSLATION_TESTS = [
         pc=SMP_INSTRUCTION_TRANSLATION.success_pc,
         regs=SMP_INSTRUCTION_TRANSLATION.success_regs,
         thread_mode=TCG_THREAD_MULTI,
+        # The translated routine returns directly to its privileged harness.
+        disable_security_checks=True,
     ),
     MMIXSMPTest(
         "smp-multi-thread-unsave-context-migration",

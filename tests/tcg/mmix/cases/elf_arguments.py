@@ -187,7 +187,6 @@ HOSTED_ELF_TESTS = [
             "-semihosting-config",
             "enable=on,arg=prog,arg=one,arg=two",
         ),
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-arguments-fallback",
@@ -201,7 +200,6 @@ HOSTED_ELF_TESTS = [
             "-append",
             "one two",
         ),
-        security_checks=True,
     ),
     MMIXELFTest(
         "elf-arguments-empty",

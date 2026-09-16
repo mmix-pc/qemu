@@ -3395,7 +3395,7 @@ ISA_TESTS = [
         ]),
         pc=0x8000000600000000,
         regs={R5: 0x55},
-        security_checks=True,
+        loader_disables_security_checks=False,
         log_patterns=(
             "MMIX dynamic trap causes=0x0000000200000000 from "
             "0x0000000000000000",
