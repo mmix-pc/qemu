@@ -831,6 +831,7 @@ class MMIXSerialTest:
     exit_status: int = 0
     qemu_args: tuple[str, ...] = ()
     stdin_data: Optional[bytes] = None
+    security_checks: bool = False
 
 
 @dataclasses.dataclass(frozen=True)

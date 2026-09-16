@@ -244,6 +244,7 @@ def run_serial_test(qemu, workdir, test, *, qemu_args=(), stdin_data=None):
         check=False,
         timeout=10,
         stdin_data=_test_stdin_data(test, stdin_data),
+        security_checks=getattr(test, "security_checks", False),
     )
 
     result = read_log(log)

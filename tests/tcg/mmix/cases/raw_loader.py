@@ -14,8 +14,12 @@ from .common import (
     R33,
     R34,
     R35,
+    R36,
+    R37,
     SR_G,
+    SR_K,
     SR_L,
+    SR_Q,
     halt,
     insn,
     raw_direct_image,
@@ -31,6 +35,8 @@ STARTUP_PROGRAM = b"".join(
         insn(ADDI, R33, R1, 0),
         insn(GET, R34, 0, SR_L),
         insn(GET, R35, 0, SR_G),
+        insn(GET, R36, 0, SR_K),
+        insn(GET, R37, 0, SR_Q),
         halt(),
     )
 )
@@ -40,7 +46,15 @@ RAW_DIRECT_ISA_TESTS = [
         "raw-direct-startup-registers",
         raw_direct_image(STARTUP_PROGRAM),
         pc=MMIX_RAW_ENTRY + len(STARTUP_PROGRAM) - 4,
-        regs={R32: 0, R33: 0, R34: 0, R35: 32},
+        regs={
+            R32: 0,
+            R33: 0,
+            R34: 0,
+            R35: 32,
+            R36: (1 << 64) - 1,
+            R37: 0,
+        },
+        security_checks=True,
     ),
 ]
 
@@ -50,6 +64,7 @@ RAW_DIRECT_TESTS = [
         raw_direct_image(SERIAL_PROGRAM),
         pc=MMIX_RAW_ENTRY + SERIAL_EXIT_PC,
         output=b"MMIX raw direct boot\n",
+        security_checks=True,
     ),
     MMIXSerialTest(
         "raw-direct-semihosting-enabled",
@@ -57,5 +72,6 @@ RAW_DIRECT_TESTS = [
         pc=MMIX_RAW_ENTRY + SERIAL_EXIT_PC,
         output=b"MMIX raw direct boot\n",
         qemu_args=("-semihosting",),
+        security_checks=True,
     ),
 ]

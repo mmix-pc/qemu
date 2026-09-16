@@ -586,31 +586,40 @@ def ftell_failure_test(name, handle):
 
 
 def _semihosting_userspace_halt_test(userspace_enabled):
-    handler = (1 << 63) | (MMIX_RAW_ENTRY + 0x80)
-    program = raw_direct_image(program_with_handler(
-        [
-            *set_octa(R1, handler),
-            insn(PUT, SR_T, 0, R1),
-            *set_octa(R2, RQ_PROGRAM_K),
-            insn(PUT, SR_K, 0, R2),
-            halt(),
-        ],
-        0x80,
-        [
-            insn(GET, R40, 0, SR_WW),
-            insn(GET, R41, 0, SR_XX),
-            insn(GET, R42, 0, SR_YY),
-            insn(GET, R43, 0, SR_ZZ),
-            insn(GET, R44, 0, SR_K),
-            halt(),
-        ],
-    ))
+    entry = MMIX_NEGATIVE_ALIAS_BIT | MMIX_RAW_ENTRY
+    handler = entry + 0x80
+    user_halt = MMIX_RAW_ENTRY + 0x3c
+    program = elf64_image(
+        MMIX_RAW_ENTRY,
+        program_with_handler(
+            [
+                *set_octa(R1, handler),
+                insn(PUT, SR_T, 0, R1),
+                *set_octa(R2, RQ_PROGRAM_K),
+                *set_octa(R3, user_halt - 4),
+                insn(GOI, R4, R3, 0),
+                insn(PUT, SR_K, 0, R2),
+                halt(),
+            ],
+            0x80,
+            [
+                insn(GET, R40, 0, SR_WW),
+                insn(GET, R41, 0, SR_XX),
+                insn(GET, R42, 0, SR_YY),
+                insn(GET, R43, 0, SR_ZZ),
+                insn(GET, R44, 0, SR_K),
+                halt(),
+            ],
+        ),
+        entry=entry,
+        virtual_address=entry,
+    )
 
     if userspace_enabled:
         return MMIXTest(
             "semihosting-userspace-halt-enabled",
             program,
-            pc=MMIX_RAW_ENTRY + 0x28,
+            pc=user_halt,
             regs={R2: RQ_PROGRAM_K},
             qemu_args=("-semihosting-config", "enable=on,userspace=on"),
         )
@@ -620,7 +629,7 @@ def _semihosting_userspace_halt_test(userspace_enabled):
         program,
         pc=handler + 5 * 4,
         regs={
-            R40: MMIX_RAW_ENTRY + 0x2c,
+            R40: user_halt + 4,
             R41: 1 << 63,
             R42: 0,
             R43: 0,

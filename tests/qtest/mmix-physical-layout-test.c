@@ -481,6 +481,8 @@ static void test_mmix_raw_minimum_and_reset(void)
     g_assert_cmpmem(actual, sizeof(actual), image, sizeof(image));
     registers = qtest_hmp(qts, "info registers");
     g_assert_nonnull(strstr(registers, "pc=0x0000000000000100"));
+    g_assert_nonnull(strstr(registers, "rK =0xffffffffffffffff"));
+    g_assert_nonnull(strstr(registers, "rQ =0x0000000000000000"));
 
     qtest_memset(qts, 0, 0xa5, sizeof(image));
     qtest_system_reset(qts);
@@ -489,6 +491,8 @@ static void test_mmix_raw_minimum_and_reset(void)
     g_clear_pointer(&registers, g_free);
     registers = qtest_hmp(qts, "info registers");
     g_assert_nonnull(strstr(registers, "pc=0x0000000000000100"));
+    g_assert_nonnull(strstr(registers, "rK =0xffffffffffffffff"));
+    g_assert_nonnull(strstr(registers, "rQ =0x0000000000000000"));
     qtest_quit(qts);
 
     g_assert_cmpint(g_unlink(filename), ==, 0);

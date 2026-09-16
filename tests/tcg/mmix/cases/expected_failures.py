@@ -9,17 +9,21 @@ EXPECTED_FAILURE_TESTS = []
 
 
 def semihosting_disabled_trap_test(name, program):
-    handler = MMIX_RAW_ENTRY + 0x100
-    image = raw_direct_image(
+    entry = MMIX_NEGATIVE_ALIAS_BIT | MMIX_RAW_ENTRY
+    handler = entry + 0x100
+    image = elf64_image(
+        MMIX_RAW_ENTRY,
         program_with_handler(
             [
-                wyde(SETL, R1, handler),
+                *set_octa(R1, handler),
                 insn(PUT, SR_T, 0, R1),
                 program,
             ],
             0x100,
             [jump(JMP, 0)],
-        )
+        ),
+        entry=entry,
+        virtual_address=entry,
     )
 
     return MMIXExpectedFailure(
