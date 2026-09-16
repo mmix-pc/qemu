@@ -2706,47 +2706,50 @@ def _run_mttcg_qtest_test(qemu, workdir, test, protocol, socket_name,
 def run_mttcg_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_interrupt_protocol,
-        "m45-qtest.sock", use_loader=True, publish_initial_stack=True,
+        "smp-interrupt-delivery.sock", use_loader=True,
+        publish_initial_stack=True,
     )
 
 
 def run_mttcg_timer_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_timer_protocol,
-        "m46-qtest.sock", use_loader=True, publish_initial_stack=True,
+        "smp-timer.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_shared_interrupt_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shared_interrupt_protocol,
-        "m47-qtest.sock", use_loader=True, publish_initial_stack=True,
+        "smp-shared-interrupt.sock", use_loader=True,
+        publish_initial_stack=True,
     )
 
 
 def run_mttcg_ipi_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_ipi_protocol,
-        "m48-qtest.sock", use_loader=True, publish_initial_stack=True,
+        "smp-ipi.sock", use_loader=True, publish_initial_stack=True,
     )
 
 
 def run_mttcg_shootdown_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
         qemu, workdir, test, _run_smp_shootdown_protocol,
-        "m49-qtest.sock", use_loader=True, publish_initial_stack=True,
-    )
-
-
-def run_l3_mttcg_shared_interrupt_test(qemu, workdir, test):
-    _run_mttcg_qtest_test(
-        qemu, workdir, test, _run_l3_shared_interrupt_protocol,
-        "l3-shared-interrupt-qtest.sock", use_loader=True,
+        "smp-tlb-shootdown.sock", use_loader=True,
         publish_initial_stack=True,
     )
 
 
-def _run_l3_shared_interrupt_protocol(qtest, test):
+def run_mttcg_shared_interrupt_routing_test(qemu, workdir, test):
+    _run_mttcg_qtest_test(
+        qemu, workdir, test, _run_shared_interrupt_routing_protocol,
+        "smp-shared-interrupt-routing.sock", use_loader=True,
+        publish_initial_stack=True,
+    )
+
+
+def _run_shared_interrupt_routing_protocol(qtest, test):
     def read(cpu, offset):
         address = test.mailbox_base + cpu * test.mailbox_slot_size + offset
         response = _qtest_command(qtest, f"readq {address:#x}")
@@ -2823,7 +2826,7 @@ def _run_l3_shared_interrupt_protocol(qtest, test):
     write(0, test.halt_offset, 1)
 
 
-def _run_l3_cpu_isolation_protocol(qtest, test):
+def _run_cpu_interrupt_isolation_protocol(qtest, test):
     def read(cpu, offset):
         return int.from_bytes(
             _qtest_read(qtest, test.mailbox(cpu, offset), 8), "big"
@@ -2889,8 +2892,8 @@ def _run_l3_cpu_isolation_protocol(qtest, test):
     write(test.mailbox(0, test.halt_offset), 1)
 
 
-def run_l3_mttcg_cpu_isolation_test(qemu, workdir, test):
+def run_mttcg_cpu_interrupt_isolation_test(qemu, workdir, test):
     _run_mttcg_qtest_test(
-        qemu, workdir, test, _run_l3_cpu_isolation_protocol,
-        "l3-cpu-isolation-qtest.sock", validate_initial_stacks=True,
+        qemu, workdir, test, _run_cpu_interrupt_isolation_protocol,
+        "smp-cpu-interrupt-isolation.sock", validate_initial_stacks=True,
     )

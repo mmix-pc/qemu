@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# MMIX replacement-platform SMP acceptance case
+# MMIX SMP interrupt-isolation acceptance case
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -17,47 +17,47 @@ from .smp import (
 )
 
 
-L3_CPU_IDS = (0, 63)
-L3_CPU_COUNT = 64
-L3_MAILBOX_BASE = 0x00300000
-L3_MAILBOX_STRIDE = 0x100
-L3_READY = 0x00
-L3_IPI_COUNT = 0x08
-L3_TIMER_COUNT = 0x10
-L3_IPI_RQ = 0x18
-L3_TIMER_RQ = 0x20
-L3_TIMER_CLAIM = 0x28
-L3_HANDLER_RO = 0x30
-L3_HANDLER_RS = 0x38
-L3_HALT = 0x40
-L3_HANDLER0 = 0x4000
-L3_HANDLER63 = 0x4400
-L3_INITIAL_STACK = INITIAL_STACK
+SMP_ISOLATION_CPU_IDS = (0, 63)
+SMP_ISOLATION_CPU_COUNT = 64
+SMP_ISOLATION_MAILBOX_BASE = 0x00300000
+SMP_ISOLATION_MAILBOX_STRIDE = 0x100
+SMP_ISOLATION_READY = 0x00
+SMP_ISOLATION_IPI_COUNT = 0x08
+SMP_ISOLATION_TIMER_COUNT = 0x10
+SMP_ISOLATION_IPI_RQ = 0x18
+SMP_ISOLATION_TIMER_RQ = 0x20
+SMP_ISOLATION_TIMER_CLAIM = 0x28
+SMP_ISOLATION_HANDLER_RO = 0x30
+SMP_ISOLATION_HANDLER_RS = 0x38
+SMP_ISOLATION_HALT = 0x40
+SMP_ISOLATION_HANDLER0 = 0x4000
+SMP_ISOLATION_HANDLER63 = 0x4400
+SMP_ISOLATION_INITIAL_STACK = INITIAL_STACK
 
 
 @dataclasses.dataclass(frozen=True)
-class MMIXL3SMPTest:
+class MMIXSMPInterruptIsolationTest:
     name: str
     image: bytes
     main_end: int
-    cpu_count: int = L3_CPU_COUNT
+    cpu_count: int = SMP_ISOLATION_CPU_COUNT
     thread_mode: str = TCG_THREAD_MULTI
 
-    cpu_ids = L3_CPU_IDS
-    mailbox_base = L3_MAILBOX_BASE
-    mailbox_stride = L3_MAILBOX_STRIDE
-    ready_offset = L3_READY
-    ipi_count_offset = L3_IPI_COUNT
-    timer_count_offset = L3_TIMER_COUNT
-    ipi_rq_offset = L3_IPI_RQ
-    timer_rq_offset = L3_TIMER_RQ
-    timer_claim_offset = L3_TIMER_CLAIM
-    handler_ro_offset = L3_HANDLER_RO
-    handler_rs_offset = L3_HANDLER_RS
-    halt_offset = L3_HALT
+    cpu_ids = SMP_ISOLATION_CPU_IDS
+    mailbox_base = SMP_ISOLATION_MAILBOX_BASE
+    mailbox_stride = SMP_ISOLATION_MAILBOX_STRIDE
+    ready_offset = SMP_ISOLATION_READY
+    ipi_count_offset = SMP_ISOLATION_IPI_COUNT
+    timer_count_offset = SMP_ISOLATION_TIMER_COUNT
+    ipi_rq_offset = SMP_ISOLATION_IPI_RQ
+    timer_rq_offset = SMP_ISOLATION_TIMER_RQ
+    timer_claim_offset = SMP_ISOLATION_TIMER_CLAIM
+    handler_ro_offset = SMP_ISOLATION_HANDLER_RO
+    handler_rs_offset = SMP_ISOLATION_HANDLER_RS
+    halt_offset = SMP_ISOLATION_HALT
     ipi_request = RQ_IPI
     timer_request = RQ_INTERRUPT_CONTROLLER
-    initial_stack = L3_INITIAL_STACK
+    initial_stack = SMP_ISOLATION_INITIAL_STACK
     initial_stack_slot_size = MMIX_VIRT_INITIAL_STACK_SLOT_SIZE
     main_start = SMP_ENTRY
     ipi_base = MMIX_VIRT_MEMMAP[MMIX_VIRT_IPI][0]
@@ -88,7 +88,8 @@ class MMIXL3SMPTest:
         )
 
 def _mailbox(cpu):
-    return L3_MAILBOX_BASE + cpu * L3_MAILBOX_STRIDE
+    return (SMP_ISOLATION_MAILBOX_BASE +
+            cpu * SMP_ISOLATION_MAILBOX_STRIDE)
 
 
 def _ipi_context(cpu, register):
@@ -134,18 +135,18 @@ def _handler(cpu, address):
         insn(GET, R190, 0, SR_Q),
         insn(GET, R191, 0, SR_O),
         insn(GET, R192, 0, SR_S),
-        smp_store(R191, R180, L3_HANDLER_RO),
-        smp_store(R192, R180, L3_HANDLER_RS),
+        smp_store(R191, R180, SMP_ISOLATION_HANDLER_RO),
+        smp_store(R192, R180, SMP_ISOLATION_HANDLER_RS),
         *set_octa(R198, RQ_IPI | RQ_INTERRUPT_CONTROLLER),
         *set_octa(R193, RQ_IPI),
         insn(AND, R194, R190, R193),
     )
     program.emit_branch(BZ, R194, "timer")
     program.emit(
-        smp_store(R190, R180, L3_IPI_RQ),
-        insn(LDOUI, R195, R180, L3_IPI_COUNT),
+        smp_store(R190, R180, SMP_ISOLATION_IPI_RQ),
+        insn(LDOUI, R195, R180, SMP_ISOLATION_IPI_COUNT),
         insn(ADDUI, R195, R195, 1),
-        smp_store(R195, R180, L3_IPI_COUNT),
+        smp_store(R195, R180, SMP_ISOLATION_IPI_COUNT),
         wyde(SETL, R196, MMIX_VIRT_IPI_STATUS_PENDING),
         insn(STOUI, R196, R182, 0),
         insn(ADDU, R198, R254, R254),
@@ -162,11 +163,11 @@ def _handler(cpu, address):
     )
     program.emit_branch(BZ, R196, "resume")
     program.emit(
-        smp_store(R190, R180, L3_TIMER_RQ),
-        smp_store(R196, R180, L3_TIMER_CLAIM),
-        insn(LDOUI, R195, R180, L3_TIMER_COUNT),
+        smp_store(R190, R180, SMP_ISOLATION_TIMER_RQ),
+        smp_store(R196, R180, SMP_ISOLATION_TIMER_CLAIM),
+        insn(LDOUI, R195, R180, SMP_ISOLATION_TIMER_COUNT),
         insn(ADDUI, R195, R195, 1),
-        smp_store(R195, R180, L3_TIMER_COUNT),
+        smp_store(R195, R180, SMP_ISOLATION_TIMER_COUNT),
         smp_store(R254, R183, MMIX_VIRT_TIMER_CONTEXT_CONTROL),
         wyde(SETL, R197, MMIX_VIRT_TIMER_STATUS_PENDING),
         smp_store(R197, R183, MMIX_VIRT_TIMER_CONTEXT_STATUS),
@@ -182,12 +183,12 @@ def _handler(cpu, address):
     return address, program.build()
 
 
-def l3_cpu0_cpu63_interrupt_program():
+def smp_cpu0_cpu63_interrupt_isolation_program():
     program = SMPProgram()
 
     program.emit(
         insn(GET, R32, 0, SR_O),
-        *set_octa(R33, L3_INITIAL_STACK),
+        *set_octa(R33, SMP_ISOLATION_INITIAL_STACK),
         insn(SUBU, R32, R33, R32),
         insn(SRUI, R32, R32, 15),
         wyde(SETL, R254, 0),
@@ -200,12 +201,16 @@ def l3_cpu0_cpu63_interrupt_program():
 
     program.mark("cpu63")
     program.emit(*set_octa(R40, _mailbox(63)))
-    program.emit(*set_octa(R41, MMIX_NEGATIVE_ALIAS_BIT | L3_HANDLER63))
+    program.emit(*set_octa(
+        R41, MMIX_NEGATIVE_ALIAS_BIT | SMP_ISOLATION_HANDLER63
+    ))
     program.emit_branch(BZ, R254, "setup")
 
     program.mark("cpu0")
     program.emit(*set_octa(R40, _mailbox(0)))
-    program.emit(*set_octa(R41, MMIX_NEGATIVE_ALIAS_BIT | L3_HANDLER0))
+    program.emit(*set_octa(
+        R41, MMIX_NEGATIVE_ALIAS_BIT | SMP_ISOLATION_HANDLER0
+    ))
 
     program.mark("setup")
     irq = MMIX_VIRT_TIMER_IRQ_BASE
@@ -228,25 +233,27 @@ def l3_cpu0_cpu63_interrupt_program():
         *set_octa(R44, RQ_IPI | RQ_INTERRUPT_CONTROLLER),
         insn(PUT, SR_K, 0, R44),
         wyde(SETL, R45, 1),
-        smp_store(R45, R40, L3_READY),
+        smp_store(R45, R40, SMP_ISOLATION_READY),
     )
     program.mark("idle")
     program.emit(
-        smp_load(R46, R40, L3_HALT),
+        smp_load(R46, R40, SMP_ISOLATION_HALT),
     )
     program.emit_branch(BZ, R46, "idle")
     program.emit(halt())
 
     main = program.build()
     handlers = (
-        _handler(0, L3_HANDLER0),
-        _handler(63, L3_HANDLER63),
+        _handler(0, SMP_ISOLATION_HANDLER0),
+        _handler(63, SMP_ISOLATION_HANDLER63),
     )
-    return MMIXL3SMPTest(
-        name="l3-cpu0-cpu63-interrupt-isolation",
+    return MMIXSMPInterruptIsolationTest(
+        name="smp-cpu0-cpu63-interrupt-isolation",
         image=smp_elf_image(main, *handlers),
         main_end=SMP_ENTRY + len(main),
     )
 
 
-L3_SMP_TESTS = [l3_cpu0_cpu63_interrupt_program()]
+SMP_INTERRUPT_ISOLATION_TESTS = [
+    smp_cpu0_cpu63_interrupt_isolation_program()
+]
