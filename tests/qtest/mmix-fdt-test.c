@@ -597,6 +597,9 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
                       MMIX_FLASH0_BASE, MMIX_FLASH_BANK_SIZE,
                       MMIX_FLASH1_BASE, MMIX_FLASH_BANK_SIZE);
     assert_u32(fdt, flash, "bank-width", 4);
+    assert_empty(fdt, flash, "big-endian");
+    assert_absent(fdt, flash, "little-endian");
+    assert_absent(fdt, flash, "native-endian");
 
     assert_string(fdt, "/fw-cfg@1000014000000", "compatible",
                   "qemu,fw-cfg-mmio");

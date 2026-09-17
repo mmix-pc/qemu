@@ -749,7 +749,8 @@ static bool mmix_fdt_add_flash_node(void *fdt,
                                errp) &&
            mmix_fdt_set_u64_ranges(fdt, node, "reg", ranges,
                                    G_N_ELEMENTS(ranges), errp) &&
-           mmix_fdt_set_u32(fdt, node, "bank-width", 4, errp);
+           mmix_fdt_set_u32(fdt, node, "bank-width", 4, errp) &&
+           mmix_fdt_set_empty(fdt, node, "big-endian", errp);
 }
 
 static bool mmix_fdt_add_fw_cfg_node(void *fdt,

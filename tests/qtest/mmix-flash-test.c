@@ -23,6 +23,9 @@
 #define CFI_QUERY_Y_OFFSET 0x48
 #define CFI_DEVICE_ID_OFFSET 0x04
 
+#define CFI_COMMAND32(command) \
+    (((uint32_t)(command) << 16) | (uint32_t)(command))
+
 static void mmix_assert_unassigned(QTestState *qts, uint64_t address)
 {
     const uint8_t value = 0x5a;
@@ -99,15 +102,37 @@ static void mmix_program_byte(QTestState *qts, uint64_t address,
     qtest_writeb(qts, address, CFI_READ_ARRAY_COMMAND);
 }
 
-static uint8_t mmix_read_file_byte(const char *filename, uint64_t offset)
+static void mmix_program_word(QTestState *qts, uint64_t address,
+                              uint16_t value)
 {
-    uint8_t value;
+    qtest_writew(qts, address, CFI_PROGRAM_COMMAND);
+    qtest_writew(qts, address, value);
+    qtest_writew(qts, address, CFI_READ_ARRAY_COMMAND);
+}
+
+static void mmix_program_long(QTestState *qts, uint64_t address,
+                              uint32_t value)
+{
+    qtest_writel(qts, address, CFI_COMMAND32(CFI_PROGRAM_COMMAND));
+    qtest_writel(qts, address, value);
+    qtest_writel(qts, address, CFI_COMMAND32(CFI_READ_ARRAY_COMMAND));
+}
+
+static void mmix_read_file(const char *filename, uint64_t offset,
+                           void *buffer, size_t size)
+{
     int fd = g_open(filename, O_RDONLY, 0);
 
     g_assert_cmpint(fd, >=, 0);
-    g_assert_cmpint(pread(fd, &value, sizeof(value), offset), ==,
-                    sizeof(value));
+    g_assert_cmpint(pread(fd, buffer, size, offset), ==, size);
     g_assert_cmpint(close(fd), ==, 0);
+}
+
+static uint8_t mmix_read_file_byte(const char *filename, uint64_t offset)
+{
+    uint8_t value;
+
+    mmix_read_file(filename, offset, &value, sizeof(value));
     return value;
 }
 
@@ -165,20 +190,20 @@ static void test_mmix_flash_boundaries(void)
 
 static void mmix_assert_cfi_geometry(QTestState *qts, uint64_t base)
 {
-    qtest_writeb(qts, base, CFI_QUERY_COMMAND);
+    qtest_writel(qts, base, CFI_COMMAND32(CFI_QUERY_COMMAND));
     g_assert_cmphex(qtest_readl(qts, base + CFI_QUERY_Q_OFFSET), ==,
                     UINT32_C(0x00510051));
     g_assert_cmphex(qtest_readl(qts, base + CFI_QUERY_R_OFFSET), ==,
                     UINT32_C(0x00520052));
     g_assert_cmphex(qtest_readl(qts, base + CFI_QUERY_Y_OFFSET), ==,
                     UINT32_C(0x00590059));
-    qtest_writeb(qts, base, CFI_READ_ARRAY_COMMAND);
+    qtest_writel(qts, base, CFI_COMMAND32(CFI_READ_ARRAY_COMMAND));
 
-    qtest_writeb(qts, base, CFI_DEVICE_ID_COMMAND);
+    qtest_writel(qts, base, CFI_COMMAND32(CFI_DEVICE_ID_COMMAND));
     g_assert_cmphex(qtest_readl(qts, base), ==, UINT32_C(0x00890089));
     g_assert_cmphex(qtest_readl(qts, base + CFI_DEVICE_ID_OFFSET), ==,
                     UINT32_C(0x00180018));
-    qtest_writeb(qts, base, CFI_READ_ARRAY_COMMAND);
+    qtest_writel(qts, base, CFI_COMMAND32(CFI_READ_ARRAY_COMMAND));
 }
 
 static void test_mmix_flash_cfi_geometry(void)
@@ -332,6 +357,10 @@ static void test_mmix_flash_backends(void)
 {
     static const uint8_t firmware[] = { 0x12, 0x34, 0x56, 0x78 };
     static const uint8_t variable[] = { 0xff };
+    static const uint8_t programmed_word[] = { 0x12, 0x34 };
+    static const uint8_t programmed_long[] = { 0x12, 0x34, 0x56, 0x78 };
+    uint8_t actual_word[sizeof(programmed_word)];
+    uint8_t actual_long[sizeof(programmed_long)];
     g_autofree char *firmware_directory = NULL;
     g_autofree char *firmware_filename =
         mmix_create_test_image("firmware.fd", MMIX_FLASH_BANK_SIZE,
@@ -354,11 +383,21 @@ static void test_mmix_flash_backends(void)
     g_assert_cmphex(qtest_readb(qts, MMIX_FLASH0_BASE), ==, firmware[0]);
     mmix_program_byte(qts, MMIX_FLASH1_BASE, 0x5a);
     g_assert_cmphex(qtest_readb(qts, MMIX_FLASH1_BASE), ==, 0x5a);
+    mmix_program_word(qts, MMIX_FLASH1_BASE + 4, 0x1234);
+    g_assert_cmphex(qtest_readw(qts, MMIX_FLASH1_BASE + 4), ==, 0x1234);
+    mmix_program_long(qts, MMIX_FLASH1_BASE + 8, 0x12345678);
+    g_assert_cmphex(qtest_readl(qts, MMIX_FLASH1_BASE + 8), ==, 0x12345678);
     qtest_quit(qts);
 
     g_assert_cmphex(mmix_read_file_byte(firmware_filename, 0), ==,
                     firmware[0]);
     g_assert_cmphex(mmix_read_file_byte(variable_filename, 0), ==, 0x5a);
+    mmix_read_file(variable_filename, 4, actual_word, sizeof(actual_word));
+    g_assert_cmpmem(actual_word, sizeof(actual_word),
+                    programmed_word, sizeof(programmed_word));
+    mmix_read_file(variable_filename, 8, actual_long, sizeof(actual_long));
+    g_assert_cmpmem(actual_long, sizeof(actual_long),
+                    programmed_long, sizeof(programmed_long));
     mmix_remove_test_image(firmware_filename, firmware_directory);
     mmix_remove_test_image(variable_filename, variable_directory);
 }
