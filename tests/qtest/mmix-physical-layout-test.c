@@ -884,7 +884,7 @@ int main(int argc, char **argv)
         },
         {
             0x104, NULL, "virt,elf-startup=hosted", NULL, NULL,
-            "does not support ELF startup profile 'hosted'",
+            "elf-startup applies only to a directly loaded ELF -kernel image",
         },
         {
             0x104, NULL, NULL, "-semihosting-config", "enable=on,arg=x",
