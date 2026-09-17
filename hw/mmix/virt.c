@@ -24,7 +24,6 @@
 #include "hw/misc/virt_ctrl.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/pci-host/gpex.h"
-#include "hw/pci/msi.h"
 #include "hw/pci/pcie_host.h"
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
@@ -200,10 +199,6 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
                       MMIX_VIRT_PCIE_BUS_COUNT * PCIE_MMCFG_SIZE_MIN);
     QEMU_BUILD_BUG_ON(MMIX_VIRT_PCIE_INTX_IRQ_COUNT != PCI_NUM_PINS);
 
-    /*
-     * MSI-capable endpoints may exist, but the machine exposes no MSI target.
-     */
-    msi_nonbroken = true;
     object_property_add_child(OBJECT(vms), "pcie", OBJECT(dev));
     object_property_set_uint(OBJECT(dev), PCI_HOST_ECAM_BASE,
                              MMIX_VIRT_PCIE_ECAM_BASE, &error_fatal);
