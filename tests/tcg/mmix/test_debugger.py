@@ -74,6 +74,12 @@ def _write_register(client, number, value):
     assert client.request(f"P{number:x}={encoded}") == b"OK"
 
 
+def _reject_register_write(client, number, value):
+    encoded = struct.pack(">Q", value).hex()
+
+    assert client.request(f"P{number:x}={encoded}") == b"E14"
+
+
 def _set_packet_register(registers, number, value):
     struct.pack_into(">Q", registers, number * 8, value)
 
@@ -370,7 +376,7 @@ def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
 
         assert initial_rn >> 40 == 0x010000
         assert initial_rn & ((1 << 40) - 1)
-        _write_register(client, rn, initial_rn ^ 1)
+        _reject_register_write(client, rn, initial_rn ^ 1)
         assert _read_register(client, rn) == initial_rn
 
         for index, name in enumerate(MMIX_GDB_DIRECT_SPECIAL_REGS):
@@ -382,14 +388,14 @@ def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
 
         _write_register(client, ra, 0x12345)
         assert _read_register(client, ra) == 0x12345
-        _write_register(client, ra, 1 << 20)
+        _reject_register_write(client, ra, 1 << 20)
         assert _read_register(client, ra) == 0x12345
 
         _write_register(client, 35, 0x3535353535353535)
         _write_register(client, rg, 40)
         assert _read_register(client, rg) == 40
         assert _read_register(client, 35) == 0
-        _write_register(client, rg, 31)
+        _reject_register_write(client, rg, 31)
         assert _read_register(client, rg) == 40
         _write_register(client, rg, 32)
         assert _read_register(client, 35) == 0
@@ -401,7 +407,7 @@ def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
         assert _read_register(client, rl) == 2
         assert _read_register(client, 1) == 0
         _write_register(client, 1, old_r1)
-        _write_register(client, rl, 33)
+        _reject_register_write(client, rl, 33)
         assert _read_register(client, rl) == 2
 
         local_values = (0x1011121314151617, 0x2021222324252627)
@@ -412,16 +418,16 @@ def test_rsp_special_register_writes_preserve_cpu_invariants(qemu, workdir):
         for number, value in enumerate(local_values):
             assert _read_register(client, number) == value
 
-        _write_register(client, ro, initial_ro + 1)
+        _reject_register_write(client, ro, initial_ro + 1)
         assert _read_register(client, ro) == initial_ro + 8
-        _write_register(client, rs, initial_ro + 16)
+        _reject_register_write(client, rs, initial_ro + 16)
         assert _read_register(client, rs) == initial_rs
         _write_register(client, rs, initial_rs + 8)
         assert _read_register(client, rs) == initial_rs + 8
         _write_register(client, rs, initial_rs)
         _write_register(client, ro, initial_ro)
 
-        _write_register(client, rq, 1 << 8)
+        _reject_register_write(client, rq, 1 << 8)
         assert _read_register(client, rq) == 0
         _write_register(client, rq, 1 << 32)
         assert _read_register(client, rq) == 1 << 32
@@ -450,7 +456,8 @@ def test_rsp_pc_write_preserves_instruction_alignment(qemu, workdir):
     with QEMURSPServer(qemu, image, workdir) as server:
         client = server.client
 
-        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_ENTRY + 1)
+        _reject_register_write(client, MMIX_GDB_PC_REG,
+                               DEBUGGER_ENTRY + 1)
         assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY
 
         source = 0x3132333435363738

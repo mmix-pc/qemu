@@ -1225,6 +1225,7 @@ static void handle_remove_bp(GArray *params, void *user_ctx)
 static void handle_set_reg(GArray *params, void *user_ctx)
 {
     int reg_size;
+    int written;
 
     if (params->len != 2) {
         gdb_put_packet("E22");
@@ -1233,8 +1234,13 @@ static void handle_set_reg(GArray *params, void *user_ctx)
 
     reg_size = strlen(gdb_get_cmd_param(params, 1)->data) / 2;
     gdb_hextomem(gdbserver_state.mem_buf, gdb_get_cmd_param(params, 1)->data, reg_size);
-    gdb_write_register(gdbserver_state.g_cpu, gdbserver_state.mem_buf->data,
-                       gdb_get_cmd_param(params, 0)->val_ull);
+    written = gdb_write_register(gdbserver_state.g_cpu,
+                                 gdbserver_state.mem_buf->data,
+                                 gdb_get_cmd_param(params, 0)->val_ull);
+    if (!written) {
+        gdb_put_packet("E14");
+        return;
+    }
     gdb_put_packet("OK");
 }
 
