@@ -65,8 +65,7 @@ static bool mmix_framebuffer_update_display(void *opaque)
     int first = 0;
     int last = 0;
 
-    if (!surface || !surface_bits_per_pixel(surface) ||
-        (!s->invalidate && !s->refresh_pending)) {
+    if (!surface || !surface_bits_per_pixel(surface)) {
         return true;
     }
 

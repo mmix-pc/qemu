@@ -263,6 +263,12 @@ static uint32_t mmix_fdt_intc_phandle(const MMIXFDTConfig *config)
            (config->has_framebuffer ? 1 : 0);
 }
 
+static uint32_t mmix_fdt_framebuffer_control_phandle(
+    const MMIXFDTConfig *config)
+{
+    return mmix_fdt_intc_phandle(config) + 1;
+}
+
 static bool mmix_fdt_add_cpu_nodes(void *fdt,
                                    const MMIXFDTConfig *config,
                                    Error **errp)
@@ -627,7 +633,8 @@ static bool mmix_fdt_add_framebuffer_nodes(void *fdt,
         .end = MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE +
                MMIX_VIRT_FRAMEBUFFER_CONTROL_MMIO_SIZE,
     };
-    uint32_t phandle;
+    uint32_t memory_phandle;
+    uint32_t control_phandle;
     g_autofree char *control_name = NULL;
     g_autofree char *simple_name = NULL;
     int node;
@@ -635,7 +642,8 @@ static bool mmix_fdt_add_framebuffer_nodes(void *fdt,
     if (!config->has_framebuffer) {
         return true;
     }
-    phandle = mmix_fdt_framebuffer_phandle(config);
+    memory_phandle = mmix_fdt_framebuffer_phandle(config);
+    control_phandle = mmix_fdt_framebuffer_control_phandle(config);
     control_name = g_strdup_printf("framebuffer@%" PRIx64,
                                    MMIX_VIRT_FRAMEBUFFER_CONTROL_BASE);
     node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
@@ -644,7 +652,9 @@ static bool mmix_fdt_add_framebuffer_nodes(void *fdt,
         !mmix_fdt_set_string(fdt, node, "compatible",
                              "qemu,mmix-framebuffer", errp) ||
         !mmix_fdt_set_u64_range(fdt, node, "reg", &control, errp) ||
-        !mmix_fdt_set_u32(fdt, node, "memory-region", phandle, errp)) {
+        !mmix_fdt_set_u32(fdt, node, "memory-region", memory_phandle,
+                          errp) ||
+        !mmix_fdt_set_phandle(fdt, node, control_phandle, errp)) {
         return false;
     }
 
@@ -665,7 +675,9 @@ static bool mmix_fdt_add_framebuffer_nodes(void *fdt,
                             MMIX_VIRT_FRAMEBUFFER_STRIDE, errp) &&
            mmix_fdt_set_string(fdt, node, "format", "x8r8g8b8", errp) &&
            mmix_fdt_set_string(fdt, node, "status", "okay", errp) &&
-           mmix_fdt_set_u32(fdt, node, "memory-region", phandle, errp);
+           mmix_fdt_set_u32(fdt, node, "memory-region", memory_phandle,
+                            errp) &&
+           mmix_fdt_set_u32(fdt, node, "display", control_phandle, errp);
 }
 
 static bool mmix_fdt_add_virtio_mmio_nodes(void *fdt,

@@ -393,7 +393,6 @@ static void test_mmix_framebuffer_render(void)
 
     mmix_framebuffer_write_pixel(qts, 10, 20, 0x12, 0x34, 0x56);
     mmix_framebuffer_write_pixel(qts, 1000, 700, 0xab, 0xcd, 0xef);
-    mmix_framebuffer_flush(qts);
     first_path = mmix_framebuffer_screendump(qts, 1);
     first = mmix_ppm_load(first_path);
     mmix_ppm_assert_pixel(&first, 10, 20, 0x12, 0x34, 0x56);

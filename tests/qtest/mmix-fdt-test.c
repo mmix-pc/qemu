@@ -613,6 +613,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
         g_autofree char *simple = g_strdup_printf(
             "/chosen/framebuffer@%" PRIx64, framebuffer);
         uint32_t framebuffer_phandle = get_u32(fdt, memory, "phandle");
+        uint32_t control_phandle;
 
         assert_string(fdt, memory, "compatible",
                       "qemu,mmix-framebuffer-memory");
@@ -621,6 +622,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
         assert_string(fdt, control, "compatible", "qemu,mmix-framebuffer");
         assert_range(fdt, control, MMIX_FRAMEBUFFER_CONTROL_BASE, 0x1000);
         assert_u32(fdt, control, "memory-region", framebuffer_phandle);
+        control_phandle = get_u32(fdt, control, "phandle");
         assert_string(fdt, simple, "compatible", "simple-framebuffer");
         assert_range(fdt, simple, framebuffer, MMIX_FRAMEBUFFER_SIZE);
         assert_u32(fdt, simple, "width", MMIX_FRAMEBUFFER_WIDTH);
@@ -629,6 +631,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
         assert_string(fdt, simple, "format", "x8r8g8b8");
         assert_string(fdt, simple, "status", "okay");
         assert_u32(fdt, simple, "memory-region", framebuffer_phandle);
+        assert_u32(fdt, simple, "display", control_phandle);
     } else {
         g_assert_cmpint(fdt_path_offset(fdt, control), ==,
                         -FDT_ERR_NOTFOUND);
