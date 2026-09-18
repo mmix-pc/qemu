@@ -269,6 +269,12 @@ static uint32_t mmix_fdt_framebuffer_control_phandle(
     return mmix_fdt_intc_phandle(config) + 1;
 }
 
+static uint32_t mmix_fdt_msi_phandle(const MMIXFDTConfig *config)
+{
+    return mmix_fdt_intc_phandle(config) + 1 +
+           (config->has_framebuffer ? 1 : 0);
+}
+
 static bool mmix_fdt_add_cpu_nodes(void *fdt,
                                    const MMIXFDTConfig *config,
                                    Error **errp)
@@ -482,12 +488,42 @@ static bool mmix_fdt_add_timer_node(void *fdt,
                             MMIX_VIRT_TIMER_CONTEXT_STRIDE, errp);
 }
 
+static bool mmix_fdt_add_msi_node(void *fdt,
+                                  const MMIXFDTConfig *config,
+                                  Error **errp)
+{
+    const MMIXPhysRange range = {
+        .start = MMIX_VIRT_PCIE_MSI_BASE,
+        .end = MMIX_VIRT_PCIE_MSI_BASE + MMIX_VIRT_PCIE_MSI_SIZE,
+    };
+    g_autofree char *name = g_strdup_printf(
+        "msi-controller@%" PRIx64, MMIX_VIRT_PCIE_MSI_BASE);
+    int node = mmix_fdt_add_node(fdt, fdt_path_offset(fdt, "/soc"),
+                                 name, errp);
+
+    return node >= 0 &&
+           mmix_fdt_set_string(fdt, node, "compatible",
+                               "qemu,mmix-msi", errp) &&
+           mmix_fdt_set_empty(fdt, node, "msi-controller", errp) &&
+           mmix_fdt_set_u32(fdt, node, "#msi-cells", 0, errp) &&
+           mmix_fdt_set_u64_range(fdt, node, "reg", &range, errp) &&
+           mmix_fdt_set_u32(fdt, node, "interrupt-parent",
+                            mmix_fdt_intc_phandle(config), errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,interrupt-source-base",
+                            MMIX_VIRT_PCIE_MSI_IRQ_BASE, errp) &&
+           mmix_fdt_set_u32(fdt, node, "qemu,vector-count",
+                            MMIX_VIRT_PCIE_MSI_IRQ_COUNT, errp) &&
+           mmix_fdt_set_phandle(fdt, node,
+                                mmix_fdt_msi_phandle(config), errp);
+}
+
 static bool mmix_fdt_add_interrupt_topology(void *fdt,
                                             const MMIXFDTConfig *config,
                                             Error **errp)
 {
     /* Reverse address order preserves ascending /soc node order. */
-    return mmix_fdt_add_intc_node(fdt, config, errp) &&
+    return mmix_fdt_add_msi_node(fdt, config, errp) &&
+           mmix_fdt_add_intc_node(fdt, config, errp) &&
            mmix_fdt_add_ipi_node(fdt, config, errp) &&
            mmix_fdt_add_timer_node(fdt, config, errp);
 }
@@ -858,6 +894,8 @@ static bool mmix_fdt_add_pcie_node(void *fdt,
                                   G_N_ELEMENTS(bus_range), errp) &&
            mmix_fdt_set_u64_range(fdt, node, "reg", &ecam, errp) &&
            mmix_fdt_set_empty(fdt, node, "dma-coherent", errp) &&
+           mmix_fdt_set_u32(fdt, node, "msi-parent",
+                            mmix_fdt_msi_phandle(config), errp) &&
            mmix_fdt_set_u32_array(fdt, node, "ranges", ranges,
                                   G_N_ELEMENTS(ranges), errp) &&
            mmix_fdt_set_u32_array(fdt, node, "interrupt-map-mask",

@@ -180,7 +180,8 @@ static void assert_compatible_count(const void *fdt,
     g_assert_cmpuint(count, ==, expected);
 }
 
-static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
+static void assert_pcie_host(const void *fdt, uint32_t intc_phandle,
+                             uint32_t msi_phandle)
 {
     const char *path = "/pcie@1000100000000";
     const MMIXPhysRange ecam = {
@@ -218,6 +219,7 @@ static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
                      G_N_ELEMENTS(bus_range));
     assert_range(fdt, path, &ecam);
     assert_empty(fdt, path, "dma-coherent");
+    assert_u32(fdt, path, "msi-parent", msi_phandle);
     assert_u32_array(fdt, path, "ranges", ranges, G_N_ELEMENTS(ranges));
     assert_u32_array(fdt, path, "interrupt-map-mask", mask,
                      G_N_ELEMENTS(mask));
@@ -241,7 +243,6 @@ static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
                              (slot + pin) % PCI_NUM_PINS);
         }
     }
-    assert_absent(fdt, path, "msi-parent");
     assert_absent(fdt, path, "dma-ranges");
     assert_absent(fdt, path, "iommu-map");
     assert_compatible_count(fdt, "pci-host-ecam-generic", 1);
@@ -259,6 +260,7 @@ static void assert_pcie_properties_equal(const void *left,
         "bus-range",
         "reg",
         "dma-coherent",
+        "msi-parent",
         "ranges",
         "interrupt-map-mask",
         "interrupt-map",
@@ -356,6 +358,7 @@ static void assert_interrupt_topology(const void *fdt,
                                       bool has_framebuffer)
 {
     const char *intc_path = "/soc/interrupt-controller@1000030000000";
+    const char *msi_path = "/soc/msi-controller@1000038000000";
     const char *ipi_path = "/soc/ipi@1000024000000";
     const char *timer_path = "/soc/timer@1000020000000";
     const MMIXPhysRange intc_ranges[] = {
@@ -391,9 +394,14 @@ static void assert_interrupt_topology(const void *fdt,
                    cpu_count * MMIX_VIRT_TIMER_CONTEXT_STRIDE,
         },
     };
+    const MMIXPhysRange msi_range = {
+        .start = MMIX_VIRT_PCIE_MSI_BASE,
+        .end = MMIX_VIRT_PCIE_MSI_BASE + MMIX_VIRT_PCIE_MSI_SIZE,
+    };
     g_autofree uint32_t *interrupts = g_new(uint32_t, cpu_count);
     g_autofree uint32_t *affinity = g_new(uint32_t, cpu_count);
     uint32_t intc_phandle = 1 + 2 * cpu_count + has_framebuffer;
+    uint32_t msi_phandle = intc_phandle + 1 + has_framebuffer;
     unsigned int i;
 
     assert_string(fdt, intc_path, "compatible", "qemu,mmix-intc");
@@ -409,6 +417,20 @@ static void assert_interrupt_topology(const void *fdt,
     assert_u32(fdt, intc_path, "linux,phandle", intc_phandle);
     g_assert_cmpint(fdt_node_offset_by_phandle(fdt, intc_phandle), ==,
                     node_offset(fdt, intc_path));
+
+    assert_string(fdt, msi_path, "compatible", "qemu,mmix-msi");
+    assert_empty(fdt, msi_path, "msi-controller");
+    assert_u32(fdt, msi_path, "#msi-cells", 0);
+    assert_range(fdt, msi_path, &msi_range);
+    assert_u32(fdt, msi_path, "interrupt-parent", intc_phandle);
+    assert_u32(fdt, msi_path, "qemu,interrupt-source-base",
+               MMIX_VIRT_PCIE_MSI_IRQ_BASE);
+    assert_u32(fdt, msi_path, "qemu,vector-count",
+               MMIX_VIRT_PCIE_MSI_IRQ_COUNT);
+    assert_u32(fdt, msi_path, "phandle", msi_phandle);
+    assert_u32(fdt, msi_path, "linux,phandle", msi_phandle);
+    g_assert_cmpint(fdt_node_offset_by_phandle(fdt, msi_phandle), ==,
+                    node_offset(fdt, msi_path));
 
     assert_string(fdt, ipi_path, "compatible", "qemu,mmix-ipi");
     assert_ranges(fdt, ipi_path, ipi_ranges, G_N_ELEMENTS(ipi_ranges));
@@ -479,6 +501,7 @@ static void assert_active_devices(const void *fdt,
         MMIX_VIRT_VIRTIO_MMIO_SLOT_CAPACITY - 1,
     };
     uint32_t intc_phandle = 1 + 2 * cpu_count + (framebuffer != NULL);
+    uint32_t msi_phandle = intc_phandle + 1 + (framebuffer != NULL);
     int node = fdt_first_subnode(fdt, node_offset(fdt, "/soc"));
     unsigned int child_count = 0;
     unsigned int virtio_slot = 0;
@@ -563,10 +586,10 @@ static void assert_active_devices(const void *fdt,
     g_assert_cmpint(node, ==, -FDT_ERR_NOTFOUND);
     g_assert_cmpuint(virtio_slot, ==, MMIX_VIRT_VIRTIO_MMIO_COUNT);
     g_assert_cmpuint(child_count, ==,
-                     1 + 3 + 3 + MMIX_VIRT_VIRTIO_MMIO_COUNT +
+                     1 + 4 + 3 + MMIX_VIRT_VIRTIO_MMIO_COUNT +
                      (framebuffer != NULL));
     assert_node_absent(fdt, "/flash@1000000000000");
-    assert_pcie_host(fdt, intc_phandle);
+    assert_pcie_host(fdt, intc_phandle, msi_phandle);
 
     for (i = 0; i < G_N_ELEMENTS(reserved_slots); i++) {
         uint64_t base = MMIX_VIRT_VIRTIO_MMIO_BASE +
@@ -682,7 +705,7 @@ static void test_firmware_visible_devices(void)
                   "qemu,fw-cfg-mmio");
     assert_range(fdt, "/fw-cfg@1000014000000", &fw_cfg);
     assert_empty(fdt, "/fw-cfg@1000014000000", "dma-coherent");
-    assert_pcie_host(fdt, 3);
+    assert_pcie_host(fdt, 3, 4);
 }
 
 static void test_pcie_direct_firmware_equivalence(void)
@@ -906,6 +929,12 @@ static void test_invalid_serialized_fdt(void)
     g_autofree void *truncated_reg = mutable_fdt(blob);
     g_autofree void *overlap = mutable_fdt(blob);
     g_autofree void *invalid_pcie_map = mutable_fdt(blob);
+    g_autofree void *invalid_msi_parent = mutable_fdt(blob);
+    g_autofree void *overlapping_msi = mutable_fdt(blob);
+    fdt64_t msi_reg[] = {
+        cpu_to_fdt64(MMIX_VIRT_INTC_BASE),
+        cpu_to_fdt64(MMIX_VIRT_PCIE_MSI_SIZE),
+    };
     fdt32_t value;
     int node;
 
@@ -946,6 +975,19 @@ static void test_invalid_serialized_fdt(void)
                         sizeof(value)), ==, 0);
     assert_invalid_fdt(invalid_pcie_map,
                        "PCI interrupt-map is invalid");
+
+    node = node_offset(invalid_msi_parent, "/pcie@1000100000000");
+    value = cpu_to_fdt32(3);
+    g_assert_cmpint(fdt_setprop(invalid_msi_parent, node, "msi-parent",
+                               &value, sizeof(value)), ==, 0);
+    assert_invalid_fdt(invalid_msi_parent, "PCI MSI parent is invalid");
+
+    node = node_offset(overlapping_msi,
+                       "/soc/msi-controller@1000038000000");
+    g_assert_cmpint(fdt_setprop(overlapping_msi, node, "reg", msi_reg,
+                               sizeof(msi_reg)), ==, 0);
+    assert_invalid_fdt(overlapping_msi,
+                       "MSI controller range is invalid");
 }
 
 static void test_oversized_serialized_fdt(void)

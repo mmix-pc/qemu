@@ -13,6 +13,15 @@
 #include "physical-layout.h"
 #include "virt.h"
 
+static char *mmix_fdt_addressed_path(const char *parent, const char *name,
+                                     uint64_t address)
+{
+    const char *separator = strcmp(parent, "/") ? "/" : "";
+
+    return g_strdup_printf("%s%s%s@%" PRIx64, parent, separator, name,
+                           address);
+}
+
 static bool mmix_fdt_validate_cell(const void *fdt, const char *path,
                                    const char *name, uint32_t expected,
                                    Error **errp)
@@ -244,6 +253,7 @@ static bool mmix_fdt_validate_nodes(const void *fdt, GHashTable *phandles,
         { "qemu,cpu", true },
         { "memory-region", true },
         { "interrupt-parent", true },
+        { "msi-parent", true },
         { "interrupt-affinity", false },
     };
     int depth = 0;
@@ -271,13 +281,82 @@ static bool mmix_fdt_validate_nodes(const void *fdt, GHashTable *phandles,
     return true;
 }
 
+static bool mmix_fdt_validate_msi(const void *fdt,
+                                  GHashTable *phandles, Error **errp)
+{
+    g_autofree char *path = mmix_fdt_addressed_path(
+        "/soc", "msi-controller", MMIX_VIRT_PCIE_MSI_BASE);
+    g_autofree char *intc_path = mmix_fdt_addressed_path(
+        "/soc", "interrupt-controller", MMIX_VIRT_INTC_BASE);
+    const fdt64_t *reg;
+    const fdt32_t *property;
+    uint32_t phandle;
+    int intc_node = fdt_path_offset(fdt, intc_path);
+    int length;
+    int node = fdt_path_offset(fdt, path);
+
+    if (node < 0) {
+        error_setg(errp, "MMIX FDT is missing MSI controller node");
+        return false;
+    }
+    if (fdt_node_check_compatible(fdt, node, "qemu,mmix-msi") != 0) {
+        error_setg(errp, "MMIX FDT MSI controller compatible is invalid");
+        return false;
+    }
+    reg = fdt_getprop(fdt, node, "reg", &length);
+    if (!reg || length != 2 * sizeof(*reg) ||
+        fdt64_to_cpu(reg[0]) != MMIX_VIRT_PCIE_MSI_BASE ||
+        fdt64_to_cpu(reg[1]) != MMIX_VIRT_PCIE_MSI_SIZE) {
+        error_setg(errp, "MMIX FDT MSI controller range is invalid");
+        return false;
+    }
+    property = fdt_getprop(fdt, node, "msi-controller", &length);
+    if (!property || length != 0) {
+        error_setg(errp, "MMIX FDT MSI controller marker is invalid");
+        return false;
+    }
+    if (!mmix_fdt_validate_cell(fdt, path, "#msi-cells", 0, errp) ||
+        !mmix_fdt_validate_cell(fdt, path, "qemu,interrupt-source-base",
+                                MMIX_VIRT_PCIE_MSI_IRQ_BASE, errp) ||
+        !mmix_fdt_validate_cell(fdt, path, "qemu,vector-count",
+                                MMIX_VIRT_PCIE_MSI_IRQ_COUNT, errp)) {
+        return false;
+    }
+    property = fdt_getprop(fdt, node, "interrupt-parent", &length);
+    if (!property || length != sizeof(*property) || intc_node < 0 ||
+        fdt_node_offset_by_phandle(fdt, fdt32_to_cpu(*property)) !=
+        intc_node) {
+        error_setg(errp, "MMIX FDT MSI interrupt parent is invalid");
+        return false;
+    }
+    property = fdt_getprop(fdt, node, "phandle", &length);
+    if (!property || length != sizeof(*property)) {
+        error_setg(errp, "MMIX FDT MSI controller phandle is invalid");
+        return false;
+    }
+    phandle = fdt32_to_cpu(*property);
+    if (!g_hash_table_contains(phandles, GUINT_TO_POINTER(phandle)) ||
+        fdt_node_offset_by_phandle(fdt, phandle) != node) {
+        error_setg(errp, "MMIX FDT MSI controller phandle is invalid");
+        return false;
+    }
+    return true;
+}
+
 static bool mmix_fdt_validate_pcie(const void *fdt,
                                    GHashTable *phandles, Error **errp)
 {
-    const char *path = "/pcie@1000100000000";
+    g_autofree char *path = mmix_fdt_addressed_path(
+        "/", "pcie", MMIX_VIRT_PCIE_ECAM_BASE);
+    g_autofree char *msi_path = mmix_fdt_addressed_path(
+        "/soc", "msi-controller", MMIX_VIRT_PCIE_MSI_BASE);
+    g_autofree char *intc_path = mmix_fdt_addressed_path(
+        "/soc", "interrupt-controller", MMIX_VIRT_INTC_BASE);
     const fdt32_t *values;
     uint32_t intc_phandle;
+    uint32_t msi_phandle;
     int intc_node;
+    int msi_node;
     int length;
     int node = fdt_path_offset(fdt, path);
     unsigned int slot;
@@ -299,6 +378,19 @@ static bool mmix_fdt_validate_pcie(const void *fdt,
         return false;
     }
 
+    values = fdt_getprop(fdt, node, "msi-parent", &length);
+    msi_node = fdt_path_offset(fdt, msi_path);
+    if (!values || length != sizeof(*values) || msi_node < 0) {
+        error_setg(errp, "MMIX FDT PCI MSI parent is invalid");
+        return false;
+    }
+    msi_phandle = fdt32_to_cpu(*values);
+    if (!g_hash_table_contains(phandles, GUINT_TO_POINTER(msi_phandle)) ||
+        fdt_node_offset_by_phandle(fdt, msi_phandle) != msi_node) {
+        error_setg(errp, "MMIX FDT PCI MSI parent is invalid");
+        return false;
+    }
+
     values = fdt_getprop(fdt, node, "interrupt-map-mask", &length);
     if (!values || length != 4 * sizeof(*values) ||
         fdt32_to_cpu(values[0]) != (PCI_DEVFN(31, 0) << 8) ||
@@ -315,8 +407,7 @@ static bool mmix_fdt_validate_pcie(const void *fdt,
         return false;
     }
     intc_phandle = fdt32_to_cpu(values[4]);
-    intc_node = fdt_path_offset(
-        fdt, "/soc/interrupt-controller@1000030000000");
+    intc_node = fdt_path_offset(fdt, intc_path);
     if (!g_hash_table_contains(phandles, GUINT_TO_POINTER(intc_phandle)) ||
         fdt_node_offset_by_phandle(fdt, intc_phandle) != intc_node) {
         error_setg(errp, "MMIX FDT PCI interrupt-map parent is invalid");
@@ -437,6 +528,8 @@ bool mmix_fdt_validate(const void *fdt, size_t size, Error **errp)
 {
     g_autoptr(GHashTable) phandles =
         g_hash_table_new(g_direct_hash, g_direct_equal);
+    g_autofree char *intc_path = mmix_fdt_addressed_path(
+        "/soc", "interrupt-controller", MMIX_VIRT_INTC_BASE);
     uint32_t totalsize;
     int ret;
 
@@ -479,10 +572,10 @@ bool mmix_fdt_validate(const void *fdt, size_t size, Error **errp)
                                 errp) ||
         !mmix_fdt_validate_cell(fdt, "/soc", "#address-cells", 2, errp) ||
         !mmix_fdt_validate_cell(fdt, "/soc", "#size-cells", 2, errp) ||
-        !mmix_fdt_validate_cell(
-            fdt, "/soc/interrupt-controller@1000030000000",
-            "#interrupt-cells", 1, errp) ||
+        !mmix_fdt_validate_cell(fdt, intc_path, "#interrupt-cells", 1,
+                                errp) ||
         !mmix_fdt_collect_phandles(fdt, phandles, errp) ||
+        !mmix_fdt_validate_msi(fdt, phandles, errp) ||
         !mmix_fdt_validate_pcie(fdt, phandles, errp) ||
         !mmix_fdt_validate_nodes(fdt, phandles, errp) ||
         !mmix_fdt_validate_reservations(fdt, errp)) {

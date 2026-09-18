@@ -31,6 +31,8 @@ enum {
     MMIX_VIRTIO_IRQ_BASE = 2048,
     MMIX_VIRTIO_COUNT = 32,
     MMIX_PCIE_INTX_IRQ_BASE = 6144,
+    MMIX_PCIE_MSI_IRQ_BASE = 6148,
+    MMIX_PCIE_MSI_VECTOR_COUNT = 1020,
     MMIX_PCIE_SLOT_COUNT = 32,
     MMIX_PCIE_PIN_COUNT = 4,
 };
@@ -50,6 +52,8 @@ enum {
 #define MMIX_IPI_CONTEXT_BASE UINT64_C(0x0001000024010000)
 #define MMIX_INTC_BASE UINT64_C(0x0001000030000000)
 #define MMIX_INTC_CONTEXT_BASE UINT64_C(0x0001000034000000)
+#define MMIX_MSI_BASE UINT64_C(0x0001000038000000)
+#define MMIX_MSI_SIZE UINT64_C(0x10000)
 #define MMIX_VIRTIO_BASE UINT64_C(0x0001000040000000)
 #define MMIX_PCIE_ECAM_BASE UINT64_C(0x0001000100000000)
 #define MMIX_PCIE_MMIO32_BASE UINT64_C(0x0001000200000000)
@@ -218,7 +222,8 @@ static void assert_u32_array(const void *fdt, const char *path,
     }
 }
 
-static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
+static void assert_pcie_host(const void *fdt, uint32_t intc_phandle,
+                             uint32_t msi_phandle)
 {
     const char *path = "/pcie@1000100000000";
     const uint32_t bus_range[] = { 0, 255 };
@@ -249,6 +254,7 @@ static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
                      G_N_ELEMENTS(bus_range));
     assert_range(fdt, path, MMIX_PCIE_ECAM_BASE, 0x10000000);
     assert_empty(fdt, path, "dma-coherent");
+    assert_u32(fdt, path, "msi-parent", msi_phandle);
     assert_u32_array(fdt, path, "ranges", ranges, G_N_ELEMENTS(ranges));
     assert_u32_array(fdt, path, "interrupt-map-mask", mask,
                      G_N_ELEMENTS(mask));
@@ -270,10 +276,31 @@ static void assert_pcie_host(const void *fdt, uint32_t intc_phandle)
                              (slot + pin) % MMIX_PCIE_PIN_COUNT);
         }
     }
-    assert_absent(fdt, path, "msi-parent");
     assert_absent(fdt, path, "dma-ranges");
     assert_absent(fdt, path, "iommu-map");
     assert_compatible_count(fdt, "pci-host-ecam-generic", 1);
+}
+
+static uint32_t assert_msi_controller(const void *fdt,
+                                      uint32_t intc_phandle)
+{
+    const char *path = "/soc/msi-controller@1000038000000";
+    uint32_t phandle = get_u32(fdt, path, "phandle");
+
+    assert_string(fdt, path, "compatible", "qemu,mmix-msi");
+    assert_empty(fdt, path, "msi-controller");
+    assert_u32(fdt, path, "#msi-cells", 0);
+    assert_range(fdt, path, MMIX_MSI_BASE, MMIX_MSI_SIZE);
+    assert_u32(fdt, path, "interrupt-parent", intc_phandle);
+    assert_u32(fdt, path, "qemu,interrupt-source-base",
+               MMIX_PCIE_MSI_IRQ_BASE);
+    assert_u32(fdt, path, "qemu,vector-count",
+               MMIX_PCIE_MSI_VECTOR_COUNT);
+    assert_u32(fdt, path, "linux,phandle", phandle);
+    g_assert_cmpint(fdt_node_offset_by_phandle(fdt, phandle), ==,
+                    node_offset(fdt, path));
+    assert_compatible_count(fdt, "qemu,mmix-msi", 1);
+    return phandle;
 }
 
 static uint64_t hmp_register_value(const char *registers, const char *name)
@@ -537,7 +564,9 @@ static void assert_virtio_node_order(const void *fdt)
 }
 
 static void assert_active_devices(QTestState *qts, const void *fdt,
-                                  uint32_t intc_phandle, bool has_graphics)
+                                  uint32_t intc_phandle,
+                                  uint32_t msi_phandle,
+                                  bool has_graphics)
 {
     static const char *const power_compatible[] = {
         "qemu,mmix-virt-syscon",
@@ -659,7 +688,7 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
     g_assert_cmpint(fdt_path_offset(fdt,
                                    "/soc/virtio_mmio@1000040200000"), ==,
                     -FDT_ERR_NOTFOUND);
-    assert_pcie_host(fdt, intc_phandle);
+    assert_pcie_host(fdt, intc_phandle, msi_phandle);
     assert_virtio_node_order(fdt);
 }
 
@@ -731,6 +760,7 @@ static void test_direct_boot_fdt(gconstpointer opaque)
     uint64_t fdt_address;
     size_t fdt_size;
     uint32_t intc_phandle;
+    uint32_t msi_phandle;
     QTestState *qts;
 
     g_assert_no_error(error);
@@ -753,8 +783,10 @@ static void test_direct_boot_fdt(gconstpointer opaque)
     assert_cpu_topology(qts, fdt, test->cpu_count);
     intc_phandle = get_u32(
         fdt, "/soc/interrupt-controller@1000030000000", "phandle");
+    msi_phandle = assert_msi_controller(fdt, intc_phandle);
     assert_interrupt_topology(qts, fdt, test->cpu_count, intc_phandle);
-    assert_active_devices(qts, fdt, intc_phandle, test->has_graphics);
+    assert_active_devices(qts, fdt, intc_phandle, msi_phandle,
+                          test->has_graphics);
     assert_reservations(qts, fdt, fdt_address, fdt_size,
                         test->has_initrd);
     qtest_quit(qts);
