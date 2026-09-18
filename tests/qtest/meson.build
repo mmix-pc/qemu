@@ -326,6 +326,8 @@ qtests_mmix = [
   'mmix-virtio-mmio-test',
   'mmix-watchdog-test',
 ] + \
+  (config_all_devices.has_key('CONFIG_VIRTIO_GPU') ?
+   ['mmix-virtio-gpu-test'] : []) + \
   (config_all_devices.has_key('CONFIG_EDU') and
    config_all_devices.has_key('CONFIG_E1000_PCI') and
    config_all_devices.has_key('CONFIG_VIRTIO_RNG') ?
