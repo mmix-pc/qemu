@@ -3,8 +3,8 @@ MMIX ``virt`` firmware
 
 This directory contains the source for ``mmix-virt.bin``, the minimal boot
 firmware for QEMU's MMIX ``virt`` machine.  Firmware version 0.1.0 implements
-only reset entry, an early UART diagnostic, and a deterministic panic stop.
-Platform discovery and payload loading are added in later revisions.
+reset entry, validated ``fw_cfg`` and FDT discovery, early UART diagnostics,
+and a deterministic panic stop.  Payload loading is added in later revisions.
 
 The source is distributed under GPL-2.0-or-later.  The complete license text
 is in the QEMU repository's top-level ``COPYING`` file.

@@ -4,16 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-typedef unsigned char uint8_t;
-typedef unsigned int uint32_t;
-typedef unsigned long long uint64_t;
-
-_Static_assert(sizeof(uint8_t) == 1, "unexpected MMIX byte size");
-_Static_assert(sizeof(uint32_t) == 4, "unexpected MMIX tetra size");
-_Static_assert(sizeof(uint64_t) == 8, "unexpected MMIX octa size");
-
-#define UINT64_C(value) value##ULL
-#define MMIX_DIRECT_ALIAS(address) (UINT64_C(0x8000000000000000) | (address))
+#include "firmware.h"
 
 #define MMIX_UART_BASE MMIX_DIRECT_ALIAS(UINT64_C(0x0001000010000000))
 #define MMIX_UART_THR 0
@@ -72,6 +63,17 @@ static __attribute__((noreturn)) void firmware_panic(void)
 
 __attribute__((noreturn)) void mmix_firmware_main(void)
 {
-    uart_puts("MMIX firmware: boot services unavailable\n");
+    FirmwareBootInputs inputs;
+    const char *error;
+
+    if (!firmware_discover_boot_inputs(&inputs, &error)) {
+        uart_puts("MMIX firmware: ");
+        uart_puts(error);
+        uart_putc('\n');
+    } else if (!inputs.kernel.present) {
+        uart_puts("MMIX firmware: no kernel payload\n");
+    } else {
+        uart_puts("MMIX firmware: platform inputs ready\n");
+    }
     firmware_panic();
 }

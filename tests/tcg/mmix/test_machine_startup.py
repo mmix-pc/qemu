@@ -178,18 +178,58 @@ def test_firmware_fixture_is_reproducible():
     )
 
 
-def test_in_tree_firmware_reports_unavailable_boot_services(qemu):
-    result = subprocess.run(
+def _run_in_tree_firmware(qemu, *args):
+    return subprocess.run(
         [qemu, "-machine", "virt", "-smp", "64", "-bios",
          MMIX_VIRT_FIRMWARE, "-display", "none", "-monitor", "none",
-         "-serial", "stdio", "-no-reboot"],
+         "-serial", "stdio", "-no-reboot", *args],
         capture_output=True,
         check=False,
         timeout=10,
     )
 
+
+def test_in_tree_firmware_discovers_platform_without_kernel(qemu):
+    result = _run_in_tree_firmware(qemu)
+
     assert result.returncode == 0
-    assert result.stdout == b"MMIX firmware: boot services unavailable\n"
+    assert result.stdout == b"MMIX firmware: no kernel payload\n"
+
+
+def test_in_tree_firmware_discovers_boot_inputs(qemu):
+    payload = FIRMWARE_DATA / "mmix-virt-kernel.bin"
+    result = _run_in_tree_firmware(
+        qemu,
+        "-kernel", payload,
+        "-initrd", payload,
+        "-append", "console=ttyS0 discovery-test",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"MMIX firmware: platform inputs ready\n"
+
+
+@pytest.mark.parametrize(
+    "name,fw_cfg_name,contents,diagnostic",
+    (
+        ("empty-kernel", "opt/mmix/kernel", b"",
+         b"MMIX firmware: invalid kernel size\n"),
+        ("unterminated-command-line", "opt/mmix/cmdline", b"bad",
+         b"MMIX firmware: unterminated command line\n"),
+    ),
+)
+def test_in_tree_firmware_rejects_invalid_optional_input(
+    qemu, workdir, name, fw_cfg_name, contents, diagnostic
+):
+    path = workdir / f"firmware-{name}.bin"
+
+    path.write_bytes(contents)
+    result = _run_in_tree_firmware(
+        qemu, "-fw_cfg", f"name={fw_cfg_name},file={path}"
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == diagnostic
 
 
 @pytest.mark.boot_integration
