@@ -21,6 +21,7 @@
 #define MMIX_PCIE_MMIO32_ALLOC_SIZE UINT64_C(0x00000000ffff0000)
 #define MMIX_PCIE_MSI_BUS_BASE UINT64_C(0x00000000ffff0000)
 #define MMIX_PCIE_MSI_SIZE UINT64_C(0x0000000000010000)
+#define MMIX_PCIE_MSI_BASE UINT64_C(0x0001000038000000)
 #define MMIX_PCIE_MMIO64_BASE UINT64_C(0x0001010000000000)
 #define MMIX_PCIE_MMIO64_SIZE UINT64_C(0x0000100000000000)
 #define MMIX_PCIE_MMIO64_BUS_BASE UINT64_C(0x0000010000000000)
@@ -122,6 +123,16 @@ static void mmix_pcie_writel(QTestState *qts, uint64_t address,
     qtest_memwrite(qts, address, bytes, sizeof(bytes));
 }
 
+static void mmix_pcie_inject_msi(QTestState *qts, unsigned int source)
+{
+    uint8_t bytes[sizeof(uint32_t)];
+
+    g_assert_cmpuint(source, >=, MMIX_PCIE_MSI_IRQ_BASE);
+    g_assert_cmpuint(source, <, MMIX_PCIE_MSI_IRQ_END);
+    stl_le_p(bytes, source - MMIX_PCIE_MSI_IRQ_BASE);
+    qtest_memwrite(qts, MMIX_PCIE_MSI_BASE, bytes, sizeof(bytes));
+}
+
 static uint64_t mmix_intc_word_reg(uint64_t base, unsigned int source)
 {
     return base + (source / 64) * sizeof(uint64_t);
@@ -164,6 +175,15 @@ static void mmix_intc_enable_source(QTestState *qts, unsigned int cpu,
 
     mmix_intc_write_enable(qts, cpu, source,
                            value | mmix_intc_source_bit(source));
+}
+
+static void mmix_intc_disable_source(QTestState *qts, unsigned int cpu,
+                                     unsigned int source)
+{
+    uint64_t value = mmix_intc_enable(qts, cpu, source);
+
+    mmix_intc_write_enable(qts, cpu, source,
+                           value & ~mmix_intc_source_bit(source));
 }
 
 static uint64_t mmix_intc_claim(QTestState *qts, unsigned int cpu)
@@ -930,6 +950,101 @@ static void test_mmix_pcie_msix_intx_fallback(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_pcie_msi_smp_routing(void)
+{
+    static const char devices[] =
+        "-device edu,bus=pcie.0,addr=1.0 "
+        "-device e1000e,bus=pcie.0,addr=2.0";
+    const uint64_t edu_config = mmix_pcie_ecam_address(0, 1, 0, 0);
+    const unsigned int msi_source = MMIX_PCIE_MSI_IRQ_BASE + 50;
+    const unsigned int msix_source = MMIX_PCIE_MSI_IRQ_BASE + 51;
+    QTestState *qts = mmix_pcie_irq_start(2, devices);
+    unsigned int capability = mmix_pcie_find_capability(
+        qts, edu_config, PCI_CAP_ID_MSI);
+    uint64_t edu_bar = mmix_edu_configure(qts, 1, MMIX_EDU_BAR_SIZE);
+    MMIXE1000EMSIX e1000e = mmix_e1000e_msix_configure(
+        qts, 2, 0x01000000, 0x01200000);
+
+    mmix_pcie_writew(qts, edu_config + PCI_COMMAND,
+                     PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    mmix_pcie_program_msi(qts, edu_config, capability,
+                          MMIX_PCIE_MSI_BUS_BASE,
+                          msi_source - MMIX_PCIE_MSI_IRQ_BASE, 1);
+
+    mmix_intc_enable_source(qts, 0, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+    mmix_intc_complete(qts, 0, msi_source);
+
+    mmix_intc_disable_source(qts, 0, msi_source);
+    mmix_intc_enable_source(qts, 1, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+    mmix_intc_complete(qts, 1, msi_source);
+
+    mmix_intc_enable_source(qts, 0, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, msi_source);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, 0);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+    mmix_intc_complete(qts, 1, msi_source);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, msi_source);
+    mmix_intc_complete(qts, 0, msi_source);
+
+    mmix_e1000e_msix_program_vector(
+        qts, &e1000e, 0, MMIX_PCIE_MSI_BUS_BASE,
+        msix_source - MMIX_PCIE_MSI_IRQ_BASE, false);
+    mmix_e1000e_msix_program_vector(
+        qts, &e1000e, 1, MMIX_PCIE_MSI_BUS_BASE,
+        msix_source - MMIX_PCIE_MSI_IRQ_BASE, false);
+    mmix_e1000e_msix_program_vector(
+        qts, &e1000e, 2, MMIX_PCIE_MSI_BUS_BASE,
+        msix_source - MMIX_PCIE_MSI_IRQ_BASE, false);
+    mmix_e1000e_route_vectors(qts, &e1000e);
+    mmix_e1000e_msix_set_enabled(qts, &e1000e, true, false);
+    mmix_intc_enable_source(qts, 0, msix_source);
+    mmix_e1000e_trigger(qts, &e1000e, E1000_ICR_TXQ0);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, msix_source);
+    mmix_pcie_readl(qts, e1000e.registers + E1000_ICR);
+    mmix_intc_complete(qts, 0, msix_source);
+
+    mmix_intc_disable_source(qts, 0, msix_source);
+    mmix_intc_enable_source(qts, 1, msix_source);
+    mmix_e1000e_trigger(qts, &e1000e, E1000_ICR_OTHER);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, msix_source);
+    mmix_pcie_readl(qts, e1000e.registers + E1000_ICR);
+    mmix_intc_complete(qts, 1, msix_source);
+
+    mmix_intc_enable_source(qts, 0, msix_source);
+    mmix_e1000e_trigger(qts, &e1000e, E1000_ICR_RXQ0);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_true(qtest_get_irq(qts, 1));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, msix_source);
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, 0);
+    mmix_pcie_readl(qts, e1000e.registers + E1000_ICR);
+    mmix_intc_complete(qts, 0, msix_source);
+
+    qtest_quit(qts);
+}
+
 static void test_mmix_pcie_ecam_boundaries(void)
 {
     QTestState *qts = qtest_init("-machine virt");
@@ -1268,6 +1383,87 @@ static void test_mmix_pcie_reset_state(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_pcie_msi_reset_state(void)
+{
+    static const char devices[] =
+        "-device edu,bus=pcie.0,addr=1.0 "
+        "-device e1000e,bus=pcie.0,addr=2.0";
+    const uint64_t root = mmix_pcie_ecam_address(0, 0, 0, 0);
+    const uint64_t edu_config = mmix_pcie_ecam_address(0, 1, 0, 0);
+    const unsigned int msi_source = MMIX_PCIE_MSI_IRQ_BASE + 80;
+    const unsigned int msix_source = MMIX_PCIE_MSI_IRQ_BASE + 81;
+    const uint64_t msi_bit = mmix_intc_source_bit(msi_source);
+    const uint64_t msix_bit = mmix_intc_source_bit(msix_source);
+    QTestState *qts = mmix_pcie_irq_start(2, devices);
+    unsigned int msi = mmix_pcie_find_capability(
+        qts, edu_config, PCI_CAP_ID_MSI);
+    uint64_t edu_bar = mmix_edu_configure(qts, 1, MMIX_EDU_BAR_SIZE);
+    MMIXE1000EMSIX e1000e = mmix_e1000e_msix_configure(
+        qts, 2, 0x01000000, 0x01200000);
+
+    mmix_pcie_writew(qts, edu_config + PCI_COMMAND,
+                     PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    mmix_pcie_program_msi(qts, edu_config, msi,
+                          MMIX_PCIE_MSI_BUS_BASE,
+                          msi_source - MMIX_PCIE_MSI_IRQ_BASE, 1);
+    mmix_intc_enable_source(qts, 1, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    g_assert_cmpuint(mmix_intc_claim(qts, 1), ==, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+
+    mmix_e1000e_msix_program_vector(
+        qts, &e1000e, 0, MMIX_PCIE_MSI_BUS_BASE,
+        msix_source - MMIX_PCIE_MSI_IRQ_BASE, true);
+    mmix_e1000e_route_vectors(qts, &e1000e);
+    mmix_e1000e_msix_set_enabled(qts, &e1000e, true, false);
+    mmix_e1000e_trigger(qts, &e1000e, E1000_ICR_RXQ0);
+    g_assert_cmphex(mmix_e1000e_msix_pba(qts, &e1000e), ==, 1);
+
+    qtest_system_reset(qts);
+
+    g_assert_cmphex(mmix_pcie_readl(qts, root), ==,
+                    PCI_DEVICE_ID_REDHAT_PCIE_HOST << 16 |
+                    PCI_VENDOR_ID_REDHAT);
+    g_assert_cmpuint(mmix_pcie_find_capability(
+                         qts, edu_config, PCI_CAP_ID_MSI), ==, msi);
+    g_assert_cmphex(mmix_pcie_readw(qts, edu_config + msi +
+                                    PCI_MSI_FLAGS) &
+                    PCI_MSI_FLAGS_ENABLE, ==, 0);
+    g_assert_cmphex(mmix_pcie_readl(qts, edu_config + PCI_BASE_ADDRESS_0) &
+                    PCI_BASE_ADDRESS_MEM_MASK, ==, 0);
+    g_assert_cmphex(mmix_intc_enable(qts, 1, msi_source) & msi_bit, ==, 0);
+    g_assert_cmphex(mmix_intc_pending(qts, msi_source) & msi_bit, ==, 0);
+    g_assert_cmphex(mmix_intc_pending(qts, msix_source) & msix_bit, ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+    g_assert_false(qtest_get_irq(qts, 1));
+
+    e1000e = mmix_e1000e_msix_configure(
+        qts, 2, 0x01000000, 0x01200000);
+    g_assert_cmphex(mmix_pcie_readw(qts, e1000e.config +
+                                    e1000e.capability + PCI_MSIX_FLAGS) &
+                    (PCI_MSIX_FLAGS_ENABLE | PCI_MSIX_FLAGS_MASKALL), ==, 0);
+    g_assert_cmphex(mmix_e1000e_msix_pba(qts, &e1000e), ==, 0);
+    g_assert_cmphex(mmix_pcie_readl(qts, e1000e.table +
+                                    PCI_MSIX_ENTRY_VECTOR_CTRL), ==,
+                    PCI_MSIX_ENTRY_CTRL_MASKBIT);
+
+    edu_bar = mmix_edu_configure(qts, 1, MMIX_EDU_BAR_SIZE);
+    mmix_pcie_writew(qts, edu_config + PCI_COMMAND,
+                     PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+    mmix_pcie_program_msi(qts, edu_config, msi,
+                          MMIX_PCIE_MSI_BUS_BASE,
+                          msi_source - MMIX_PCIE_MSI_IRQ_BASE, 1);
+    mmix_intc_enable_source(qts, 0, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, true);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, msi_source);
+    mmix_edu_set_irq(qts, edu_bar, 1, false);
+    mmix_intc_complete(qts, 0, msi_source);
+
+    qtest_quit(qts);
+}
+
 static void test_mmix_pcie_empty_migration(void)
 {
     g_autoptr(GError) error = NULL;
@@ -1365,6 +1561,128 @@ static void test_mmix_pcie_populated_migration(void)
     mmix_intc_complete(to, 0, source);
     g_assert_cmphex(mmix_intc_pending(to, source) & bit, ==, 0);
     g_assert_false(qtest_get_irq(to, 0));
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
+static void test_mmix_pcie_msi_migration(void)
+{
+    static const char args[] =
+        "-machine virt -smp 2 "
+        "-device e1000e,bus=pcie.0,addr=1.0 "
+        "-device e1000e,bus=pcie.0,addr=2.0";
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir = g_dir_make_tmp("mmix-pcie-msi-XXXXXX",
+                                             &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    const unsigned int claimed_source = MMIX_PCIE_MSI_IRQ_BASE + 70;
+    const unsigned int pending_source = MMIX_PCIE_MSI_IRQ_BASE + 71;
+    const unsigned int masked_source = MMIX_PCIE_MSI_IRQ_BASE + 72;
+    const uint64_t claimed_bit = mmix_intc_source_bit(claimed_source);
+    const uint64_t pending_bit = mmix_intc_source_bit(pending_source);
+    const uint64_t masked_bit = mmix_intc_source_bit(masked_source);
+    QTestState *from;
+    QTestState *to;
+    MMIXE1000EMSIX msi_dev;
+    MMIXE1000EMSIX msix_dev;
+    unsigned int msi;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    incoming = g_strdup_printf("%s -incoming %s", args, uri);
+    from = qtest_init(args);
+    to = qtest_init(incoming);
+    qtest_irq_intercept_out_named(from, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+    qtest_irq_intercept_out_named(to, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+
+    msi_dev = mmix_e1000e_msix_configure(
+        from, 1, 0x01000000, 0x01200000);
+    msi = mmix_pcie_find_capability(from, msi_dev.config, PCI_CAP_ID_MSI);
+    mmix_pcie_program_msi(from, msi_dev.config, msi,
+                          MMIX_PCIE_MSI_BUS_BASE,
+                          claimed_source - MMIX_PCIE_MSI_IRQ_BASE, 1);
+    mmix_intc_enable_source(from, 0, claimed_source);
+    mmix_e1000e_trigger(from, &msi_dev, E1000_ICR_RXQ0);
+    g_assert_cmpuint(mmix_intc_claim(from, 0), ==, claimed_source);
+    mmix_pcie_readl(from, msi_dev.registers + E1000_ICR);
+    mmix_pcie_inject_msi(from, claimed_source);
+    g_assert_cmphex(mmix_intc_pending(from, claimed_source) & claimed_bit,
+                    ==, 0);
+
+    msix_dev = mmix_e1000e_msix_configure(
+        from, 2, 0x01400000, 0x01600000);
+    mmix_e1000e_msix_program_vector(
+        from, &msix_dev, 0, MMIX_PCIE_MSI_BUS_BASE,
+        pending_source - MMIX_PCIE_MSI_IRQ_BASE, false);
+    mmix_e1000e_msix_program_vector(
+        from, &msix_dev, 1, MMIX_PCIE_MSI_BUS_BASE,
+        masked_source - MMIX_PCIE_MSI_IRQ_BASE, true);
+    mmix_e1000e_route_vectors(from, &msix_dev);
+    mmix_e1000e_msix_set_enabled(from, &msix_dev, true, false);
+    mmix_e1000e_trigger(from, &msix_dev, E1000_ICR_RXQ0);
+    mmix_e1000e_trigger(from, &msix_dev, E1000_ICR_TXQ0);
+    g_assert_cmphex(mmix_intc_pending(from, pending_source) & pending_bit,
+                    ==, pending_bit);
+    g_assert_cmphex(mmix_intc_pending(from, masked_source) & masked_bit,
+                    ==, 0);
+    g_assert_cmphex(mmix_e1000e_msix_pba(from, &msix_dev) & (1U << 1), ==,
+                    1U << 1);
+
+    mmix_qtest_migrate(from, to, uri);
+
+    g_assert_cmphex(mmix_pcie_readl(to, msi_dev.config +
+                                    PCI_BASE_ADDRESS_0) &
+                    PCI_BASE_ADDRESS_MEM_MASK, ==, 0x01000000);
+    g_assert_cmphex(mmix_pcie_readw(to, msi_dev.config + msi +
+                                    PCI_MSI_FLAGS) &
+                    PCI_MSI_FLAGS_ENABLE, !=, 0);
+    g_assert_cmphex(mmix_pcie_readl(to, msi_dev.config + msi +
+                                    PCI_MSI_ADDRESS_LO), ==,
+                    MMIX_PCIE_MSI_BUS_BASE);
+    g_assert_cmphex(mmix_pcie_readw(to, msi_dev.config + msi +
+                                    PCI_MSI_DATA_64), ==,
+                    claimed_source - MMIX_PCIE_MSI_IRQ_BASE);
+    g_assert_cmphex(mmix_pcie_readw(to, msix_dev.config +
+                                    msix_dev.capability + PCI_MSIX_FLAGS) &
+                    PCI_MSIX_FLAGS_ENABLE, !=, 0);
+    g_assert_cmphex(mmix_pcie_readl(to, msix_dev.table +
+                                    PCI_MSIX_ENTRY_DATA), ==,
+                    pending_source - MMIX_PCIE_MSI_IRQ_BASE);
+    g_assert_cmphex(mmix_pcie_readl(
+                        to, msix_dev.table + PCI_MSIX_ENTRY_SIZE +
+                        PCI_MSIX_ENTRY_VECTOR_CTRL), ==,
+                    PCI_MSIX_ENTRY_CTRL_MASKBIT);
+    g_assert_cmphex(mmix_e1000e_msix_pba(to, &msix_dev) & (1U << 1), ==,
+                    1U << 1);
+    g_assert_cmphex(mmix_intc_pending(to, pending_source) & pending_bit,
+                    ==, pending_bit);
+
+    mmix_intc_complete(to, 0, claimed_source);
+    g_assert_cmphex(mmix_intc_pending(to, claimed_source) & claimed_bit,
+                    ==, claimed_bit);
+    g_assert_cmpuint(mmix_intc_claim(to, 0), ==, claimed_source);
+    mmix_intc_complete(to, 0, claimed_source);
+
+    mmix_intc_enable_source(to, 1, pending_source);
+    g_assert_cmpuint(mmix_intc_claim(to, 1), ==, pending_source);
+    mmix_intc_complete(to, 1, pending_source);
+
+    mmix_intc_enable_source(to, 1, masked_source);
+    mmix_pcie_writel(to,
+                     msix_dev.table + PCI_MSIX_ENTRY_SIZE +
+                     PCI_MSIX_ENTRY_VECTOR_CTRL, 0);
+    g_assert_cmphex(mmix_e1000e_msix_pba(to, &msix_dev) & (1U << 1), ==, 0);
+    g_assert_cmpuint(mmix_intc_claim(to, 1), ==, masked_source);
+    mmix_intc_complete(to, 1, masked_source);
 
     qtest_quit(from);
     qtest_quit(to);
@@ -1487,6 +1805,8 @@ int main(int argc, char **argv)
                    test_mmix_pcie_msix_independent_endpoints);
     qtest_add_func("/mmix/pcie/msix/intx-fallback",
                    test_mmix_pcie_msix_intx_fallback);
+    qtest_add_func("/mmix/pcie/msi/smp-routing",
+                   test_mmix_pcie_msi_smp_routing);
     qtest_add_func("/mmix/pcie/memory-mappings",
                    test_mmix_pcie_memory_mappings);
     qtest_add_func("/mmix/pcie/msi-aperture-reserved",
@@ -1511,10 +1831,14 @@ int main(int argc, char **argv)
                    test_mmix_pcie_dma_msi_doorbell_boundaries);
     qtest_add_func("/mmix/pcie/reset-state",
                    test_mmix_pcie_reset_state);
+    qtest_add_func("/mmix/pcie/msi/reset-state",
+                   test_mmix_pcie_msi_reset_state);
     qtest_add_func("/mmix/pcie/migration/empty",
                    test_mmix_pcie_empty_migration);
     qtest_add_func("/mmix/pcie/migration/populated",
                    test_mmix_pcie_populated_migration);
+    qtest_add_func("/mmix/pcie/migration/msi",
+                   test_mmix_pcie_msi_migration);
     qtest_add_func("/mmix/pcie/intx-swizzle",
                    test_mmix_pcie_intx_swizzle);
     qtest_add_func("/mmix/pcie/shared-intx",
