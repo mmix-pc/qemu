@@ -1,6 +1,9 @@
 /*
  * QTest testcase for MMIX virtio-mmio machine wiring.
  *
+ * The machine leaves every transport empty by default. Explicitly requested
+ * devices attach to the lowest available slot in command-line order.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
@@ -92,6 +95,8 @@ static void mmix_assert_transport_owner(QTestState *qts, unsigned int slot,
                                              "link<virtio-blk-device>"));
         g_assert_null(mmix_qom_child_by_type(qts, bus,
                                              "link<virtio-rng-device>"));
+        g_assert_null(mmix_qom_child_by_type(qts, bus,
+                                             "link<virtio-gpu-device>"));
     }
 }
 
@@ -232,14 +237,17 @@ static void test_mmix_virtio_slots_and_boundaries(void)
     unsigned int slot;
     unsigned int i;
 
+    for (slot = 0; slot < MMIX_VIRTIO_ACTIVE_SLOTS; slot++) {
+        g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(slot) +
+                                    QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+    }
+
     for (i = 0; i < ARRAY_SIZE(active); i++) {
         uint64_t base = mmix_virtio_slot(active[i]);
 
         g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_MAGIC_VALUE), ==,
                         0x74726976);
         g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_VERSION), ==, 1);
-        g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_DEVICE_ID), ==,
-                        0);
         g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_VENDOR_ID), ==,
                         0x554d4551);
     }
@@ -309,6 +317,30 @@ static void test_mmix_virtio_attachment_block_rng(void)
 static void test_mmix_virtio_attachment_rng_block(void)
 {
     mmix_test_virtio_attachment_order(true);
+}
+
+static void test_mmix_virtio_gpu_realization(void)
+{
+    QTestState *qts;
+
+    if (!qtest_has_device("virtio-gpu-device")) {
+        g_test_skip("virtio-gpu-device is optional in tailored builds");
+        return;
+    }
+
+    /* A requested GPU is additive and takes the lowest available slot. */
+    qts = qtest_init("-machine virt -device virtio-gpu-device,id=gpu0 "
+                     "-display none");
+
+    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(0) +
+                                QVIRTIO_MMIO_DEVICE_ID), ==,
+                    VIRTIO_ID_GPU);
+    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(1) +
+                                QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+    mmix_assert_transport_owner(qts, 0, "virtio-gpu-device");
+    mmix_assert_transport_owner(qts, 1, NULL);
+
+    qtest_quit(qts);
 }
 
 static void test_mmix_virtio_transport_exhaustion(void)
@@ -551,6 +583,8 @@ int main(int argc, char **argv)
                    test_mmix_virtio_attachment_block_rng);
     qtest_add_func("/mmix/virtio-mmio/attachment-order/rng-block",
                    test_mmix_virtio_attachment_rng_block);
+    qtest_add_func("/mmix/virtio-mmio/gpu/realization",
+                   test_mmix_virtio_gpu_realization);
     qtest_add_func("/mmix/virtio-mmio/transport-exhaustion",
                    test_mmix_virtio_transport_exhaustion);
     qtest_add_func("/mmix/virtio-mmio/reset-state",

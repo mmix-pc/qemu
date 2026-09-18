@@ -10,6 +10,8 @@
 #include "qemu/bswap.h"
 #include "qemu/units.h"
 #include "qobject/qdict.h"
+#include "standard-headers/linux/virtio_ids.h"
+#include "standard-headers/linux/virtio_mmio.h"
 #include <libfdt.h>
 
 #ifndef EM_MMIX
@@ -70,8 +72,11 @@ typedef struct MMIXFDTCase {
     uint64_t ram_size;
     unsigned int cpu_count;
     const char *command_line;
+    const char *extra_args;
+    unsigned int first_virtio_device_id;
     bool has_initrd;
     bool has_graphics;
+    bool requires_virtio_gpu;
 } MMIXFDTCase;
 
 static int node_offset(const void *fdt, const char *path)
@@ -566,7 +571,8 @@ static void assert_virtio_node_order(const void *fdt)
 static void assert_active_devices(QTestState *qts, const void *fdt,
                                   uint32_t intc_phandle,
                                   uint32_t msi_phandle,
-                                  bool has_graphics)
+                                  bool has_graphics,
+                                  unsigned int first_virtio_device_id)
 {
     static const char *const power_compatible[] = {
         "qemu,mmix-virt-syscon",
@@ -684,7 +690,10 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
         assert_u32(fdt, path, "interrupts", MMIX_VIRTIO_IRQ_BASE + slot);
         assert_u32(fdt, path, "interrupt-parent", intc_phandle);
         g_assert_cmphex(qtest_readl(qts, base), ==, 0x74726976);
+        g_assert_cmphex(qtest_readl(qts, base + VIRTIO_MMIO_DEVICE_ID), ==,
+                        slot == 0 ? first_virtio_device_id : 0);
     }
+    assert_compatible_count(fdt, "virtio,mmio", MMIX_VIRTIO_COUNT);
     g_assert_cmpint(fdt_path_offset(fdt,
                                    "/soc/virtio_mmio@1000040200000"), ==,
                     -FDT_ERR_NOTFOUND);
@@ -752,7 +761,7 @@ static void test_direct_boot_fdt(gconstpointer opaque)
 {
     const MMIXFDTCase *test = opaque;
     g_autoptr(GError) error = NULL;
-    g_autofree char *directory = g_dir_make_tmp("mmix-fdt-XXXXXX", &error);
+    g_autofree char *directory = NULL;
     g_autofree char *kernel = NULL;
     g_autofree char *initrd = NULL;
     g_autofree char *args = NULL;
@@ -763,6 +772,13 @@ static void test_direct_boot_fdt(gconstpointer opaque)
     uint32_t msi_phandle;
     QTestState *qts;
 
+    if (test->requires_virtio_gpu &&
+        !qtest_has_device("virtio-gpu-device")) {
+        g_test_skip("virtio-gpu-device is optional in tailored builds");
+        return;
+    }
+
+    directory = g_dir_make_tmp("mmix-fdt-XXXXXX", &error);
     g_assert_no_error(error);
     g_assert_nonnull(directory);
     kernel = create_linux_elf(directory);
@@ -771,10 +787,10 @@ static void test_direct_boot_fdt(gconstpointer opaque)
     }
     args = g_strdup_printf(
         "-machine virt,elf-startup=platform%s -m %s -smp %u "
-        "-kernel %s -append '%s'%s%s",
+        "-kernel %s -append '%s'%s%s%s",
         test->has_graphics ? "" : ",graphics=off",
         test->memory, test->cpu_count, kernel, test->command_line,
-        initrd ? " -initrd " : "", initrd ?: "");
+        initrd ? " -initrd " : "", initrd ?: "", test->extra_args ?: "");
     qts = qtest_init(args);
     fdt = read_guest_fdt(qts, &fdt_address, &fdt_size);
 
@@ -786,7 +802,8 @@ static void test_direct_boot_fdt(gconstpointer opaque)
     msi_phandle = assert_msi_controller(fdt, intc_phandle);
     assert_interrupt_topology(qts, fdt, test->cpu_count, intc_phandle);
     assert_active_devices(qts, fdt, intc_phandle, msi_phandle,
-                          test->has_graphics);
+                          test->has_graphics,
+                          test->first_virtio_device_id);
     assert_reservations(qts, fdt, fdt_address, fdt_size,
                         test->has_initrd);
     qtest_quit(qts);
@@ -832,6 +849,17 @@ int main(int argc, char **argv)
             .ram_size = 512 * MiB,
             .cpu_count = 1,
             .command_line = "console=ttyS0",
+        },
+        {
+            .name = "virtio-gpu",
+            .memory = "512M",
+            .ram_size = 512 * MiB,
+            .cpu_count = 1,
+            .command_line = "console=ttyS0",
+            .extra_args = " -device virtio-gpu-device -display none",
+            .first_virtio_device_id = VIRTIO_ID_GPU,
+            .has_graphics = true,
+            .requires_virtio_gpu = true,
         },
     };
     unsigned int i;
