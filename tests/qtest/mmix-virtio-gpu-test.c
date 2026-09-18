@@ -125,14 +125,10 @@ static uint32_t mmix_virtio_gpu_config_readl(MMIXVirtioGPU *gpu,
     return be32_to_cpu(qvirtio_config_readl(&gpu->device.vdev, offset));
 }
 
-static void mmix_virtio_gpu_start(MMIXVirtioGPU *gpu)
+static void mmix_virtio_gpu_initialize(MMIXVirtioGPU *gpu)
 {
     uint64_t features;
 
-    gpu->qts = qtest_init("-machine virt,graphics=off "
-                          "-device virtio-gpu-device -display none");
-    qtest_irq_intercept_out_named(gpu->qts, MMIX_INTC_QOM_PATH,
-                                  MMIX_INTC_OUTPUT_IRQ);
     qvirtio_mmio_init_device(&gpu->device, gpu->qts, MMIX_VIRTIO_BASE,
                              MMIX_VIRTIO_PAGE_SIZE);
     g_assert_cmpuint(gpu->device.vdev.device_type, ==, VIRTIO_ID_GPU);
@@ -157,12 +153,21 @@ static void mmix_virtio_gpu_start(MMIXVirtioGPU *gpu)
                          gpu, offsetof(struct virtio_gpu_config,
                                        num_capsets)), ==, 0);
 
-    alloc_init(&gpu->allocator, ALLOC_NO_FLAGS, 0x00100000, 0x02000000,
-               MMIX_VIRTIO_PAGE_SIZE);
     gpu->control = qvirtqueue_setup(&gpu->device.vdev, &gpu->allocator, 0);
     gpu->cursor = qvirtqueue_setup(&gpu->device.vdev, &gpu->allocator, 1);
     qvirtio_set_driver_ok(&gpu->device.vdev);
     mmix_intc_enable_source(gpu->qts, MMIX_VIRTIO_IRQ_BASE);
+}
+
+static void mmix_virtio_gpu_start(MMIXVirtioGPU *gpu)
+{
+    gpu->qts = qtest_init("-machine virt,graphics=off "
+                          "-device virtio-gpu-device -display none");
+    qtest_irq_intercept_out_named(gpu->qts, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+    alloc_init(&gpu->allocator, ALLOC_NO_FLAGS, 0x00100000, 0x02000000,
+               MMIX_VIRTIO_PAGE_SIZE);
+    mmix_virtio_gpu_initialize(gpu);
 }
 
 static void mmix_virtio_gpu_stop(MMIXVirtioGPU *gpu)
@@ -216,16 +221,25 @@ static void mmix_virtio_gpu_control(MMIXVirtioGPU *gpu,
     guest_free(&gpu->allocator, request_addr);
 }
 
+static uint64_t mmix_virtio_gpu_submit_cursor(
+    MMIXVirtioGPU *gpu, const struct virtio_gpu_update_cursor *cmd,
+    uint32_t *head)
+{
+    uint64_t command_addr = guest_alloc(&gpu->allocator, sizeof(*cmd));
+
+    qtest_memwrite(gpu->qts, command_addr, cmd, sizeof(*cmd));
+    *head = qvirtqueue_add(gpu->qts, gpu->cursor, command_addr, sizeof(*cmd),
+                           false, false);
+    qvirtqueue_kick(gpu->qts, &gpu->device.vdev, gpu->cursor, *head);
+    return command_addr;
+}
+
 static void mmix_virtio_gpu_cursor(MMIXVirtioGPU *gpu,
                                    const struct virtio_gpu_update_cursor *cmd)
 {
-    uint64_t command_addr = guest_alloc(&gpu->allocator, sizeof(*cmd));
     uint32_t head;
+    uint64_t command_addr = mmix_virtio_gpu_submit_cursor(gpu, cmd, &head);
 
-    qtest_memwrite(gpu->qts, command_addr, cmd, sizeof(*cmd));
-    head = qvirtqueue_add(gpu->qts, gpu->cursor, command_addr, sizeof(*cmd),
-                          false, false);
-    qvirtqueue_kick(gpu->qts, &gpu->device.vdev, gpu->cursor, head);
     mmix_virtio_gpu_wait_irq(gpu);
     mmix_virtio_gpu_wait_used(gpu, gpu->cursor, head);
     mmix_virtio_gpu_finish_irq(gpu);
@@ -345,6 +359,124 @@ static char *mmix_virtio_gpu_screendump(MMIXVirtioGPU *gpu)
         "{'execute':'screendump','arguments':{'filename':%s,'format':'ppm'}}",
         path);
     return path;
+}
+
+static void mmix_virtio_gpu_create_scanout(MMIXVirtioGPU *gpu,
+                                           uint64_t backing_addr)
+{
+    struct virtio_gpu_resource_create_2d create = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_CREATE_2D),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+        .format = cpu_to_le32(VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM),
+        .width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .height = cpu_to_le32(MMIX_GPU_HEIGHT),
+    };
+    struct {
+        struct virtio_gpu_resource_attach_backing command;
+        struct virtio_gpu_mem_entry entry;
+    } attach = {
+        .command.hdr.type =
+            cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING),
+        .command.resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+        .command.nr_entries = cpu_to_le32(1),
+        .entry.addr = cpu_to_le64(backing_addr),
+        .entry.length = cpu_to_le32(MMIX_GPU_BACKING_SIZE),
+    };
+    struct virtio_gpu_transfer_to_host_2d transfer = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D),
+        .r.width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .r.height = cpu_to_le32(MMIX_GPU_HEIGHT),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+    struct virtio_gpu_set_scanout scanout = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_SET_SCANOUT),
+        .r.width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .r.height = cpu_to_le32(MMIX_GPU_HEIGHT),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+    struct virtio_gpu_resource_flush flush = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_FLUSH),
+        .r.width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .r.height = cpu_to_le32(MMIX_GPU_HEIGHT),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+    struct virtio_gpu_update_cursor cursor = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_UPDATE_CURSOR),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+
+    mmix_virtio_gpu_control(gpu, &create, sizeof(create),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &attach, sizeof(attach),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &transfer, sizeof(transfer),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &scanout, sizeof(scanout),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &flush, sizeof(flush),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_cursor(gpu, &cursor);
+}
+
+static void mmix_virtio_gpu_transfer_and_flush(MMIXVirtioGPU *gpu)
+{
+    struct virtio_gpu_transfer_to_host_2d transfer = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D),
+        .r.width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .r.height = cpu_to_le32(MMIX_GPU_HEIGHT),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+    struct virtio_gpu_resource_flush flush = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_FLUSH),
+        .r.width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .r.height = cpu_to_le32(MMIX_GPU_HEIGHT),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+
+    mmix_virtio_gpu_control(gpu, &transfer, sizeof(transfer),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &flush, sizeof(flush),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+}
+
+static void mmix_virtio_gpu_release_scanout(MMIXVirtioGPU *gpu)
+{
+    struct virtio_gpu_update_cursor cursor = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_UPDATE_CURSOR),
+    };
+    struct virtio_gpu_set_scanout scanout = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_SET_SCANOUT),
+    };
+    struct virtio_gpu_resource_detach_backing detach = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+    struct virtio_gpu_resource_unref unref = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_UNREF),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+
+    mmix_virtio_gpu_cursor(gpu, &cursor);
+    mmix_virtio_gpu_control(gpu, &scanout, sizeof(scanout),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &detach, sizeof(detach),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(gpu, &unref, sizeof(unref),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+}
+
+static void mmix_virtio_gpu_assert_pixel(MMIXVirtioGPU *gpu,
+                                         unsigned int x, unsigned int y,
+                                         uint8_t r, uint8_t g, uint8_t b)
+{
+    g_autofree char *path = mmix_virtio_gpu_screendump(gpu);
+    MMIXPPMImage image = mmix_ppm_load(path);
+
+    g_assert_cmpuint(image.width, ==, MMIX_GPU_WIDTH);
+    g_assert_cmpuint(image.height, ==, MMIX_GPU_HEIGHT);
+    mmix_ppm_assert_pixel(&image, x, y, r, g, b);
+    g_free(image.data);
+    g_assert_cmpint(g_unlink(path), ==, 0);
 }
 
 static void test_mmix_virtio_gpu_base_protocol(void)
@@ -555,6 +687,208 @@ static void test_mmix_virtio_gpu_2d_resource(void)
     mmix_virtio_gpu_stop(&gpu);
 }
 
+static void test_mmix_virtio_gpu_reset(void)
+{
+    struct virtio_gpu_update_cursor cursor = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_MOVE_CURSOR),
+        .pos.x = cpu_to_le32(23),
+        .pos.y = cpu_to_le32(29),
+    };
+    struct virtio_gpu_resource_create_2d create = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_CREATE_2D),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+        .format = cpu_to_le32(VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM),
+        .width = cpu_to_le32(MMIX_GPU_WIDTH),
+        .height = cpu_to_le32(MMIX_GPU_HEIGHT),
+    };
+    struct virtio_gpu_resource_unref unref = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_UNREF),
+        .resource_id = cpu_to_le32(MMIX_GPU_RESOURCE_ID),
+    };
+    g_autofree uint8_t *pixels = g_malloc0(MMIX_GPU_BACKING_SIZE);
+    MMIXVirtioGPU gpu = { 0 };
+    uint64_t command_addr;
+    uint64_t backing_addr;
+    uint32_t head;
+
+    mmix_virtio_gpu_start(&gpu);
+    backing_addr = guest_alloc(&gpu.allocator, MMIX_GPU_BACKING_SIZE);
+    qtest_memwrite(gpu.qts, backing_addr, pixels, MMIX_GPU_BACKING_SIZE);
+    mmix_virtio_gpu_create_scanout(&gpu, backing_addr);
+    command_addr = mmix_virtio_gpu_submit_cursor(&gpu, &cursor, &head);
+    mmix_virtio_gpu_wait_irq(&gpu);
+
+    qtest_system_reset(gpu.qts);
+    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                               QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_GPU);
+    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                               QVIRTIO_MMIO_DEVICE_STATUS), ==, 0);
+    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                               QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
+    g_assert_cmphex(mmix_intc_pending(gpu.qts, MMIX_VIRTIO_IRQ_BASE) &
+                    mmix_intc_source_bit(MMIX_VIRTIO_IRQ_BASE), ==, 0);
+
+    guest_free(&gpu.allocator, command_addr);
+    guest_free(&gpu.allocator, backing_addr);
+    qvirtqueue_cleanup(gpu.device.vdev.bus, gpu.cursor, &gpu.allocator);
+    qvirtqueue_cleanup(gpu.device.vdev.bus, gpu.control, &gpu.allocator);
+    mmix_virtio_gpu_initialize(&gpu);
+    mmix_virtio_gpu_control(&gpu, &create, sizeof(create),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_control(&gpu, &unref, sizeof(unref),
+                            VIRTIO_GPU_RESP_OK_NODATA);
+    mmix_virtio_gpu_stop(&gpu);
+}
+
+static void mmix_virtio_gpu_adopt_migration(MMIXVirtioGPU *destination,
+                                             MMIXVirtioGPU *source,
+                                             QTestState *qts)
+{
+    destination->qts = qts;
+    destination->device = source->device;
+    destination->device.qts = qts;
+    alloc_init(&destination->allocator, ALLOC_NO_FLAGS,
+               source->allocator.start, source->allocator.end,
+               source->allocator.page_size);
+    migrate_allocator(&source->allocator, &destination->allocator);
+    destination->control = source->control;
+    destination->cursor = source->cursor;
+    destination->control->vdev = &destination->device.vdev;
+    destination->cursor->vdev = &destination->device.vdev;
+    source->control = NULL;
+    source->cursor = NULL;
+}
+
+static void test_mmix_virtio_gpu_migration(void)
+{
+    static const char *args =
+        "-machine virt,graphics=off "
+        "-device virtio-gpu-device -display none";
+    struct virtio_gpu_update_cursor cursor = {
+        .hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_MOVE_CURSOR),
+        .pos.x = cpu_to_le32(31),
+        .pos.y = cpu_to_le32(37),
+    };
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-virtio-gpu-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    g_autofree uint8_t *pixels = g_malloc0(MMIX_GPU_BACKING_SIZE);
+    MMIXVirtioGPU source = { 0 };
+    MMIXVirtioGPU destination = { 0 };
+    uint64_t command_addr;
+    uint64_t backing_addr;
+    uint32_t head;
+    size_t pixel = (21 * MMIX_GPU_WIDTH + 19) * 4;
+    QTestState *to;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    incoming = g_strdup_printf("%s -incoming %s", args, uri);
+
+    source.qts = qtest_init(args);
+    qtest_irq_intercept_out_named(source.qts, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+    alloc_init(&source.allocator, ALLOC_NO_FLAGS, 0x00100000, 0x02000000,
+               MMIX_VIRTIO_PAGE_SIZE);
+    mmix_virtio_gpu_initialize(&source);
+    to = qtest_init(incoming);
+    qtest_irq_intercept_out_named(to, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+
+    pixels[pixel] = 0x33;
+    pixels[pixel + 1] = 0x22;
+    pixels[pixel + 2] = 0x11;
+    backing_addr = guest_alloc(&source.allocator, MMIX_GPU_BACKING_SIZE);
+    qtest_memwrite(source.qts, backing_addr, pixels, MMIX_GPU_BACKING_SIZE);
+    mmix_virtio_gpu_create_scanout(&source, backing_addr);
+    command_addr = mmix_virtio_gpu_submit_cursor(&source, &cursor, &head);
+    mmix_virtio_gpu_wait_irq(&source);
+
+    qtest_qmp_assert_success(
+        source.qts,
+        "{'execute':'migrate','arguments':{'uri':%s}}", uri);
+    qtest_qmp_eventwait(source.qts, "STOP");
+    qtest_qmp_eventwait(to, "RESUME");
+    mmix_virtio_gpu_adopt_migration(&destination, &source, to);
+
+    g_assert_cmphex(qtest_readl(to, MMIX_VIRTIO_BASE +
+                               QVIRTIO_MMIO_DEVICE_STATUS), !=, 0);
+    mmix_virtio_gpu_wait_used(&destination, destination.cursor, head);
+    mmix_virtio_gpu_finish_irq(&destination);
+    guest_free(&destination.allocator, command_addr);
+    if (mmix_qmp_has_command(to, "screendump")) {
+        mmix_virtio_gpu_assert_pixel(&destination, 19, 21,
+                                     0x11, 0x22, 0x33);
+    }
+
+    pixels[pixel] = 0xcc;
+    pixels[pixel + 1] = 0xbb;
+    pixels[pixel + 2] = 0xaa;
+    qtest_memwrite(to, backing_addr, pixels, MMIX_GPU_BACKING_SIZE);
+    mmix_virtio_gpu_transfer_and_flush(&destination);
+    cursor.pos.x = cpu_to_le32(41);
+    cursor.pos.y = cpu_to_le32(43);
+    mmix_virtio_gpu_cursor(&destination, &cursor);
+    if (mmix_qmp_has_command(to, "screendump")) {
+        mmix_virtio_gpu_assert_pixel(&destination, 19, 21,
+                                     0xaa, 0xbb, 0xcc);
+    }
+
+    mmix_virtio_gpu_release_scanout(&destination);
+    guest_free(&destination.allocator, backing_addr);
+    mmix_virtio_gpu_stop(&destination);
+    alloc_destroy(&source.allocator);
+    qtest_quit(source.qts);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
+static void test_mmix_virtio_gpu_migration_incompatible(void)
+{
+    static const char *source_args =
+        "-machine virt,graphics=off "
+        "-device virtio-gpu-device -display none";
+    static const char *destination_args =
+        "-machine virt,graphics=off "
+        "-device virtio-gpu-device,max_outputs=2 -display none";
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-virtio-gpu-fail-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    QTestState *from;
+    QTestState *to;
+    gint64 deadline;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    incoming = g_strdup_printf("%s -incoming %s", destination_args, uri);
+    from = qtest_init(source_args);
+    to = qtest_init(incoming);
+    qtest_set_expected_status(to, 1);
+
+    qtest_qmp_assert_success(
+        from, "{'execute':'migrate','arguments':{'uri':%s}}", uri);
+    deadline = g_get_monotonic_time() + MMIX_VIRTIO_TIMEOUT_US;
+    while (qtest_probe_child(to)) {
+        g_assert_cmpint(g_get_monotonic_time(), <, deadline);
+        g_usleep(1000);
+    }
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -563,5 +897,11 @@ int main(int argc, char **argv)
                    test_mmix_virtio_gpu_base_protocol);
     qtest_add_func("/mmix/virtio-gpu/2d-resource",
                    test_mmix_virtio_gpu_2d_resource);
+    qtest_add_func("/mmix/virtio-gpu/reset",
+                   test_mmix_virtio_gpu_reset);
+    qtest_add_func("/mmix/virtio-gpu/migration",
+                   test_mmix_virtio_gpu_migration);
+    qtest_add_func("/mmix/virtio-gpu/migration-incompatible",
+                   test_mmix_virtio_gpu_migration_incompatible);
     return g_test_run();
 }
