@@ -25,7 +25,6 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/units.h"
-#include "hw/core/qdev-properties.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
 #include "qemu/timer.h"
@@ -76,7 +75,6 @@ struct EduState {
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
-    bool msi;
 };
 
 static bool edu_msi_enabled(EduState *edu)
@@ -379,7 +377,7 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
 
     pci_config_set_interrupt_pin(pci_conf, 1);
 
-    if (edu->msi && msi_init(pdev, 0, 1, true, false, errp)) {
+    if (msi_init(pdev, 0, 1, true, false, errp)) {
         return;
     }
 
@@ -421,10 +419,6 @@ static void edu_instance_init(Object *obj)
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
 }
 
-static const Property edu_properties[] = {
-    DEFINE_PROP_BOOL("msi", EduState, msi, true),
-};
-
 static void edu_class_init(ObjectClass *class, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(class);
@@ -437,7 +431,6 @@ static void edu_class_init(ObjectClass *class, const void *data)
     k->revision = 0x10;
     k->class_id = PCI_CLASS_OTHERS;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
-    device_class_set_props(dc, edu_properties);
 }
 
 static const TypeInfo edu_types[] = {

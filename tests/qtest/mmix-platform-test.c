@@ -713,7 +713,7 @@ static const char mmix_populated_devices[] =
     "-watchdog-action none "
     "-object rng-builtin,id=rng0 "
     "-device virtio-rng-device,id=vrng,rng=rng0 "
-    "-device edu,bus=pcie.0,addr=1.0,msi=off,"
+    "-device edu,bus=pcie.0,addr=1.0,"
     "dma_mask=0xffffffffffffffff "
     "-device e1000,bus=pcie.0,addr=2.0";
 

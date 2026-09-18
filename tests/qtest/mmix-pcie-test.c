@@ -386,6 +386,7 @@ static void mmix_assert_edu_config(QTestState *qts, unsigned int slot,
                                    bool multifunction)
 {
     uint64_t config = mmix_pcie_ecam_address(0, slot, function, 0);
+    unsigned int msi;
 
     g_assert_cmphex(mmix_pcie_readl(qts, config), ==,
                     0x11e8 << 16 | PCI_VENDOR_ID_QEMU);
@@ -396,8 +397,10 @@ static void mmix_assert_edu_config(QTestState *qts, unsigned int slot,
                     (multifunction ? PCI_HEADER_TYPE_MULTI_FUNCTION : 0));
     g_assert_cmpuint(mmix_pcie_readb(qts, config + PCI_INTERRUPT_PIN), ==,
                      1);
-    g_assert_cmpuint(mmix_pcie_find_capability(qts, config, PCI_CAP_ID_MSI),
-                     ==, 0);
+    msi = mmix_pcie_find_capability(qts, config, PCI_CAP_ID_MSI);
+    g_assert_cmpuint(msi, !=, 0);
+    g_assert_cmphex(mmix_pcie_readw(qts, config + msi + PCI_MSI_FLAGS) &
+                    PCI_MSI_FLAGS_ENABLE, ==, 0);
 }
 
 static void mmix_edu_set_irq(QTestState *qts, uint64_t bar,
@@ -461,7 +464,7 @@ static QTestState *mmix_edu_dma_start(const char *memory,
 {
     QTestState *qts = qtest_initf(
         "-machine virt -m %s "
-        "-device edu,bus=pcie.0,addr=1.0,msi=off,"
+        "-device edu,bus=pcie.0,addr=1.0,"
         "dma_mask=0x%" PRIx64,
         memory, dma_mask);
     uint64_t config = mmix_pcie_ecam_address(0, 1, 0, 0);
@@ -949,14 +952,14 @@ static void test_mmix_pcie_ecam_boundaries(void)
 static void test_mmix_pcie_device_enumeration(void)
 {
     static const char *const device_orders[] = {
-        "-device edu,bus=pcie.0,addr=5.0,msi=off "
-        "-device edu,bus=pcie.0,addr=2.0,multifunction=on,msi=off "
-        "-device edu,bus=pcie.0,addr=2.1,msi=off "
+        "-device edu,bus=pcie.0,addr=5.0 "
+        "-device edu,bus=pcie.0,addr=2.0,multifunction=on "
+        "-device edu,bus=pcie.0,addr=2.1 "
         "-device pci-testdev,bus=pcie.0,addr=7.0,membar=1M",
         "-device pci-testdev,bus=pcie.0,addr=7.0,membar=1M "
-        "-device edu,bus=pcie.0,addr=2.0,multifunction=on,msi=off "
-        "-device edu,bus=pcie.0,addr=2.1,msi=off "
-        "-device edu,bus=pcie.0,addr=5.0,msi=off",
+        "-device edu,bus=pcie.0,addr=2.0,multifunction=on "
+        "-device edu,bus=pcie.0,addr=2.1 "
+        "-device edu,bus=pcie.0,addr=5.0",
     };
     unsigned int i;
 
@@ -990,7 +993,7 @@ static void test_mmix_pcie_device_enumeration(void)
 static void test_mmix_pcie_bar_access(void)
 {
     static const char devices[] =
-        "-device edu,bus=pcie.0,addr=1.0,msi=off "
+        "-device edu,bus=pcie.0,addr=1.0 "
         "-device pci-testdev,bus=pcie.0,addr=6.0,membar=1M,"
         "membar-backed=on "
         "-device pci-testdev,bus=pcie.0,addr=7.0,membar=1M,"
@@ -1058,7 +1061,7 @@ static void test_mmix_pcie_bridge_device(void)
 {
     static const char devices[] =
         "-device pcie-pci-bridge,id=bridge,bus=pcie.0,addr=4.0,msi=off "
-        "-device edu,bus=bridge,addr=1.0,msi=off";
+        "-device edu,bus=bridge,addr=1.0";
     const uint64_t bridge = mmix_pcie_ecam_address(0, 4, 0, 0);
     const uint64_t pci_address = 0x04000000;
     const unsigned int source = MMIX_PCIE_INTX_IRQ_BASE + 1;
@@ -1372,10 +1375,10 @@ static void test_mmix_pcie_populated_migration(void)
 static void test_mmix_pcie_intx_swizzle(void)
 {
     static const char devices[] =
-        "-device edu,bus=pcie.0,addr=1.0,msi=off "
-        "-device edu,bus=pcie.0,addr=2.0,msi=off "
-        "-device edu,bus=pcie.0,addr=3.0,msi=off "
-        "-device edu,bus=pcie.0,addr=4.0,msi=off";
+        "-device edu,bus=pcie.0,addr=1.0 "
+        "-device edu,bus=pcie.0,addr=2.0 "
+        "-device edu,bus=pcie.0,addr=3.0 "
+        "-device edu,bus=pcie.0,addr=4.0";
     QTestState *qts = mmix_pcie_irq_start(1, devices);
     unsigned int slot;
 
@@ -1397,8 +1400,8 @@ static void test_mmix_pcie_intx_swizzle(void)
 static void test_mmix_pcie_shared_intx(void)
 {
     static const char devices[] =
-        "-device edu,bus=pcie.0,addr=1.0,msi=off "
-        "-device edu,bus=pcie.0,addr=5.0,msi=off";
+        "-device edu,bus=pcie.0,addr=1.0 "
+        "-device edu,bus=pcie.0,addr=5.0";
     const unsigned int source = MMIX_PCIE_INTX_IRQ_BASE + 1;
     const uint64_t bit = mmix_intc_source_bit(source);
     QTestState *qts = mmix_pcie_irq_start(2, devices);
