@@ -160,7 +160,7 @@ static void mmix_dump_firmware_fdt(const char *dtb, const char *bios,
 
 static void test_mmix_fw_cfg_standard_entries(void)
 {
-    QTestState *qts = qtest_init("-machine virt -smp 2");
+    QTestState *qts = qtest_init("-machine virt -bios none -smp 2");
     g_autofree MMIXFWCfgDirectory *directory = NULL;
     uint8_t signature[FW_CFG_SIG_SIZE];
     uint8_t id;
@@ -251,7 +251,7 @@ static uint32_t mmix_fw_cfg_dma_read(QTestState *qts, uint16_t selector,
 static void test_mmix_fw_cfg_dma(void)
 {
     static const uint8_t expected[] = { 'Q', 'E', 'M', 'U' };
-    QTestState *qts = qtest_init("-machine virt -m 128M");
+    QTestState *qts = qtest_init("-machine virt -bios none -m 128M");
     uint8_t actual[sizeof(expected)];
     uint64_t ram_end = 128 * MiB;
 
@@ -297,7 +297,7 @@ static void test_mmix_fw_cfg_dma_above_4g(void)
     static const uint8_t expected[] = { 'Q', 'E', 'M', 'U' };
     const uint64_t descriptor = UINT64_C(0x100001000);
     const uint64_t destination = UINT64_C(0x100002000);
-    QTestState *qts = qtest_init("-machine virt -m 8G");
+    QTestState *qts = qtest_init("-machine virt -bios none -m 8G");
     uint8_t actual[sizeof(expected)];
 
     g_assert_cmphex(mmix_fw_cfg_dma_read(qts, FW_CFG_SIGNATURE, descriptor,
@@ -320,7 +320,7 @@ static void test_mmix_fw_cfg_direct_boot_has_no_firmware_files(void)
 
     g_assert_no_error(error);
     kernel = mmix_write_file(directory, "direct.bin", image, 0x104);
-    qts = qtest_initf("-machine virt -kernel %s", kernel);
+    qts = qtest_initf("-machine virt -bios none -kernel %s", kernel);
     files = mmix_fw_cfg_read_directory(qts);
     mmix_fw_cfg_assert_directory(files);
     mmix_fw_cfg_assert_firmware_files_absent(files);

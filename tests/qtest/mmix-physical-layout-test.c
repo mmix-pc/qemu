@@ -414,6 +414,7 @@ static void test_mmix_kernel_classification(gconstpointer opaque)
     const char *argv[] = {
         qtest_qemu_binary(NULL),
         "-machine", "virt",
+        "-bios", "none",
         "-kernel", NULL,
         "-display", "none",
         "-monitor", "none",
@@ -429,7 +430,7 @@ static void test_mmix_kernel_classification(gconstpointer opaque)
     g_assert_true(g_file_set_contents(filename, (const char *)test->data,
                                       test->size, &error));
     g_assert_no_error(error);
-    argv[4] = filename;
+    argv[6] = filename;
 
     g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
                                G_SPAWN_STDOUT_TO_DEV_NULL,
@@ -476,7 +477,7 @@ static void test_mmix_raw_minimum_and_reset(void)
                                       sizeof(image), &error));
     g_assert_no_error(error);
 
-    qts = qtest_initf("-machine virt -kernel %s", filename);
+    qts = qtest_initf("-machine virt -bios none -kernel %s", filename);
     qtest_memread(qts, 0, actual, sizeof(actual));
     g_assert_cmpmem(actual, sizeof(actual), image, sizeof(image));
     registers = qtest_hmp(qts, "info registers");
@@ -515,6 +516,7 @@ static void test_mmix_raw_rejected(gconstpointer opaque)
         "-display", "none",
         "-monitor", "none",
         "-serial", "none",
+        "-bios", "none",
     };
     int wait_status;
 
@@ -523,8 +525,8 @@ static void test_mmix_raw_rejected(gconstpointer opaque)
     filename = mmix_create_sparse_raw(directory, test->image_size);
     argv[6] = filename;
     if (test->option) {
-        argv[13] = test->option;
-        argv[14] = !strcmp(test->value, "$IMAGE") ? filename : test->value;
+        argv[15] = test->option;
+        argv[16] = !strcmp(test->value, "$IMAGE") ? filename : test->value;
     }
 
     g_assert_true(g_spawn_sync(NULL, (char **)argv, NULL,
@@ -625,7 +627,8 @@ static void test_mmix_bare_elf_load_and_reset(void)
     g_assert_no_error(error);
     g_assert_nonnull(directory);
     filename = mmix_create_bare_elf(directory, ram_size);
-    qts = qtest_initf("-machine virt -m 8G -kernel %s", filename);
+    qts = qtest_initf("-machine virt -bios none -m 8G -kernel %s",
+                      filename);
 
     qtest_memread(qts, code_address, actual, sizeof(actual));
     g_assert_cmpmem(actual, sizeof(actual),
@@ -670,8 +673,8 @@ static void test_mmix_retired_bootinfo_absent(void)
     g_assert_no_error(error);
     g_assert_nonnull(directory);
     filename = mmix_create_bare_elf(directory, ram_size);
-    qts = qtest_initf("-machine virt,elf-startup=platform -m 8G "
-                      "-kernel %s", filename);
+    qts = qtest_initf("-machine virt,elf-startup=platform -bios none "
+                      "-m 8G -kernel %s", filename);
 
     qtest_memread(qts, MMIX_RETIRED_BOOTINFO_BASE, bootinfo_magic,
                   sizeof(bootinfo_magic));
@@ -758,7 +761,7 @@ static void test_mmix_hosted_arguments_reset(void)
     g_assert_nonnull(directory);
     filename = mmix_create_hosted_elf(directory);
     qts = qtest_initf(
-        "-machine virt,elf-startup=hosted "
+        "-machine virt,elf-startup=hosted -bios none "
         "-semihosting-config enable=on,arg=prog,arg=one -kernel %s",
         filename);
 

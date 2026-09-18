@@ -786,7 +786,7 @@ static void test_direct_boot_fdt(gconstpointer opaque)
         initrd = create_initrd(directory);
     }
     args = g_strdup_printf(
-        "-machine virt,elf-startup=platform%s -m %s -smp %u "
+        "-machine virt,elf-startup=platform%s -bios none -m %s -smp %u "
         "-kernel %s -append '%s'%s%s%s",
         test->has_graphics ? "" : ",graphics=off",
         test->memory, test->cpu_count, kernel, test->command_line,

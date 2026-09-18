@@ -672,6 +672,9 @@ static void test_mmix_platform_boot_mode(gconstpointer opaque)
 
     g_string_append_printf(args, "-machine %s -m %s -smp %u",
                            machine, test->memory, test->cpus);
+    if (test->mode != MMIX_PLATFORM_FIRMWARE) {
+        g_string_append(args, " -bios none");
+    }
     if (test->mode != MMIX_PLATFORM_NO_IMAGE) {
         directory = g_dir_make_tmp("mmix-platform-mode-XXXXXX", &error);
         g_assert_no_error(error);

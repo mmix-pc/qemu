@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import pathlib
+import shutil
 import struct
 import subprocess
 import sys
@@ -189,11 +190,74 @@ def _run_in_tree_firmware(qemu, *args):
     )
 
 
+def _installed_qemu(qemu, workdir, name, *, install_firmware):
+    root = workdir / name
+    executable = root / "bin" / "qemu-system-mmix"
+    data = root / "share" / "qemu"
+    firmware = data / "mmix-virt.bin"
+
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    data.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(qemu, executable)
+    if install_firmware:
+        shutil.copy2(MMIX_VIRT_FIRMWARE, firmware)
+    elif firmware.exists():
+        firmware.unlink()
+    return executable
+
+
 def test_in_tree_firmware_discovers_platform_without_kernel(qemu):
     result = _run_in_tree_firmware(qemu)
 
     assert result.returncode == 0
     assert result.stdout == b"MMIX firmware: no kernel payload\n"
+
+
+def test_latest_machine_selects_in_tree_default_firmware(qemu):
+    result = subprocess.run(
+        [qemu, "-machine", "virt", "-display", "none", "-monitor", "none",
+         "-serial", "stdio", "-no-reboot"],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"MMIX firmware: no kernel payload\n"
+
+
+def test_installed_machine_selects_installed_default_firmware(qemu, workdir):
+    installed_qemu = _installed_qemu(
+        qemu, workdir, "installed-default", install_firmware=True
+    )
+    result = subprocess.run(
+        [installed_qemu, "-machine", "virt", "-display", "none",
+         "-monitor", "none", "-serial", "stdio", "-no-reboot"],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"MMIX firmware: no kernel payload\n"
+
+
+def test_installed_machine_reports_missing_default_firmware(qemu, workdir):
+    installed_qemu = _installed_qemu(
+        qemu, workdir, "installed-missing", install_firmware=False
+    )
+    result = subprocess.run(
+        [installed_qemu, "-machine", "virt", "-display", "none",
+         "-monitor", "none", "-serial", "none"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "could not find MMIX firmware image 'mmix-virt.bin'" in \
+        result.stderr
 
 
 @pytest.mark.parametrize(
@@ -302,6 +366,32 @@ def test_in_tree_firmware_loads_and_enters_next_stage(
     )
 
 
+@pytest.mark.boot_integration
+def test_default_firmware_loads_and_enters_next_stage(qemu, workdir):
+    physical_address = 0x00200000
+    virtual_address = physical_address | (1 << 63)
+    loaded_kernel = (FIRMWARE_DATA / "mmix-virt-kernel.bin").read_bytes()
+    kernel = workdir / "default-firmware-kernel.elf"
+
+    kernel.write_bytes(elf64_image(
+        physical_address,
+        loaded_kernel,
+        entry=virtual_address,
+        virtual_address=virtual_address,
+    ))
+    run_firmware_handoff_test(
+        qemu,
+        workdir,
+        None,
+        kernel,
+        cpu_count=2,
+        memory="512M",
+        command_line="console=ttyS0 default firmware",
+        loaded_kernel=loaded_kernel,
+        production=True,
+    )
+
+
 @pytest.mark.parametrize("cpu_count", (1, 2))
 def test_firmware_without_kernel_retains_control(qemu, workdir, cpu_count):
     run_firmware_no_kernel_test(
@@ -316,6 +406,7 @@ def test_firmware_without_kernel_retains_control(qemu, workdir, cpu_count):
         ("bios-payloads", {"bios": True, "payloads": True}),
         ("legacy-pflash0", {"pflash0": True}),
         ("legacy-pflash-banks", {"pflash0": True, "pflash1": True}),
+        ("default-pflash1", {"pflash1": True}),
     ),
 )
 def test_firmware_preflight_accepts_valid_inputs(qemu, workdir, name, options):
@@ -388,11 +479,6 @@ def test_firmware_preflight_rejects_elf_startup(
             {"bios": True, "pflash0": True},
             "executable firmware cannot be supplied by both -bios and "
             "pflash0",
-        ),
-        (
-            "pflash1-only",
-            {"pflash1": True},
-            "pflash1 requires executable firmware from -bios or pflash0",
         ),
         (
             "bios-none-pflash1",
@@ -518,9 +604,9 @@ def test_firmware_dtb_matches_other_boot_modes(qemu, workdir):
     blobs = []
 
     for name, machine, args in (
-        ("erased", "virt", ()),
+        ("erased", "virt", ("-bios", "none")),
         ("direct", "virt,elf-startup=platform",
-         ("-kernel", str(kernel))),
+         ("-bios", "none", "-kernel", str(kernel))),
         ("firmware", "virt", ("-bios", str(bios))),
     ):
         dtb = workdir / f"canonical-{name}.dtb"

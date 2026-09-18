@@ -524,6 +524,7 @@ def run_no_image_mttcg_test(qemu):
         "-accel", "tcg,thread=multi",
         "-display", "none",
         "-serial", "none",
+        "-bios", "none",
         "-S",
         "-qmp", "stdio",
     ]
@@ -974,7 +975,6 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         "-smp", str(cpu_count),
         "-m", memory,
         "-accel", "tcg,thread=multi",
-        "-bios", str(firmware),
         "-kernel", str(kernel),
         "-display", "none",
         "-monitor", "none",
@@ -984,6 +984,8 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         "-qtest", f"unix:{qtest_path}",
         "-qtest-log", "/dev/null",
     ]
+    if firmware is not None:
+        args.extend(("-bios", str(firmware)))
     if initrd:
         initrd_path.write_bytes(b"MMIX firmware initrd fixture\n")
         args.extend(("-initrd", str(initrd_path)))
@@ -1013,7 +1015,9 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         _qmp_command(process, "cont")
 
         deadline = time.monotonic() + 10
-        while _qtest_readq(qtest, success_address) != success_value:
+        while (_qtest_readq(qtest, success_address) != success_value or
+               any(_qtest_readq(qtest, record_address + cpu * 32) != cpu
+                   for cpu in range(1, cpu_count))):
             if process.poll() is not None:
                 raise AssertionError("QEMU exited before firmware handoff")
             if time.monotonic() >= deadline:

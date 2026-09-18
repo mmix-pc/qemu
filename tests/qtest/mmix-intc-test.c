@@ -498,7 +498,7 @@ static void test_mmix_intc_cpu_limit(void)
     g_assert_no_error(error);
     g_assert_cmpint(wait_status, !=, 0);
     g_assert_nonnull(strstr(stderr_text,
-                           "max CPUs supported by machine 'virt' is 64"));
+                           "max CPUs supported by machine 'virt-11.2' is 64"));
 }
 
 static void test_mmix_intc_reset(void)

@@ -168,7 +168,7 @@ static void mmix_assert_qemu_rejected(const char *const *extra_args,
 
 static void test_mmix_flash_boundaries(void)
 {
-    QTestState *qts = qtest_init("-machine virt");
+    QTestState *qts = qtest_init("-machine virt -bios none");
     g_autofree char *mtree = qtest_hmp(qts, "info mtree -f");
 
     mmix_assert_mapping(mtree, MMIX_FLASH0_BASE, "mmix.flash0");
@@ -208,7 +208,7 @@ static void mmix_assert_cfi_geometry(QTestState *qts, uint64_t base)
 
 static void test_mmix_flash_cfi_geometry(void)
 {
-    QTestState *qts = qtest_init("-machine virt");
+    QTestState *qts = qtest_init("-machine virt -bios none");
 
     mmix_assert_cfi_geometry(qts, MMIX_FLASH0_BASE);
     mmix_assert_cfi_geometry(qts, MMIX_FLASH1_BASE);
@@ -217,7 +217,7 @@ static void test_mmix_flash_cfi_geometry(void)
 
 static void test_mmix_flash_erased_without_image(void)
 {
-    QTestState *qts = qtest_init("-machine virt");
+    QTestState *qts = qtest_init("-machine virt -bios none");
 
     mmix_assert_erased_banks(qts);
     mmix_program_byte(qts, MMIX_FLASH0_BASE, 0x5a);
@@ -233,7 +233,8 @@ static void test_mmix_flash_erased_during_raw_boot(void)
     g_autofree char *directory = NULL;
     g_autofree char *filename =
         mmix_write_test_image("kernel.bin", image, sizeof(image), &directory);
-    QTestState *qts = qtest_initf("-machine virt -kernel %s", filename);
+    QTestState *qts = qtest_initf(
+        "-machine virt -bios none -kernel %s", filename);
 
     mmix_assert_erased_banks(qts);
     qtest_quit(qts);
@@ -254,7 +255,8 @@ static void test_mmix_flash_erased_during_hosted_mmo_boot(void)
     g_autofree char *directory = NULL;
     g_autofree char *filename =
         mmix_write_test_image("kernel.mmo", image, sizeof(image), &directory);
-    QTestState *qts = qtest_initf("-machine virt -kernel %s", filename);
+    QTestState *qts = qtest_initf(
+        "-machine virt -bios none -kernel %s", filename);
 
     mmix_assert_erased_banks(qts);
     qtest_quit(qts);

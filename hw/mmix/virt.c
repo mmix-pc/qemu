@@ -56,7 +56,8 @@
 #include "timer.h"
 #include "virt.h"
 
-#define TYPE_MMIX_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
+#define TYPE_MMIX_VIRT_MACHINE MACHINE_TYPE_NAME("mmix-virt")
+#define MMIX_VIRT_DEFAULT_FIRMWARE "mmix-virt.bin"
 
 typedef enum MMIXELFStartup {
     MMIX_ELF_STARTUP_PLATFORM,
@@ -78,10 +79,16 @@ enum {
     MMIX_PLATFORM_COMMAND_LINE_MAX = 4095,
 };
 
-OBJECT_DECLARE_SIMPLE_TYPE(MMIXVirtMachineState, MMIX_VIRT_MACHINE)
+OBJECT_DECLARE_TYPE(MMIXVirtMachineState, MMIXVirtMachineClass,
+                    MMIX_VIRT_MACHINE)
 
 typedef bool (*MMIXCreateDefaultMemdev)(MachineState *machine,
                                         const char *path, Error **errp);
+
+struct MMIXVirtMachineClass {
+    MachineClass parent_class;
+    const char *default_firmware;
+};
 
 struct MMIXVirtMachineState {
     MachineState parent_obj;
@@ -375,7 +382,8 @@ static bool mmix_virt_load_bios(MMIXVirtMachineState *vms,
     gsize size;
 
     if (!filename) {
-        error_setg(errp, "could not find MMIX firmware image '%s'", name);
+        error_setg(errp, "could not find MMIX firmware image '%s' in the "
+                   "QEMU firmware search path", name);
         return false;
     }
     if (!g_file_get_contents(filename, &contents, &size, &gerror)) {
@@ -521,8 +529,11 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
                                           Error **errp)
 {
     MachineState *machine = MACHINE(vms);
-    bool has_bios = machine->firmware &&
-                    strcmp(machine->firmware, "none");
+    MMIXVirtMachineClass *vmc = MMIX_VIRT_MACHINE_GET_CLASS(vms);
+    bool bios_disabled = machine->firmware &&
+                         !strcmp(machine->firmware, "none");
+    bool has_explicit_bios = machine->firmware && !bios_disabled;
+    const char *bios_name = NULL;
     BlockBackend *pflash[MMIX_VIRT_FLASH_BANK_COUNT];
     bool firmware;
     unsigned int i;
@@ -533,13 +544,18 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
         }
         vms->pflash_backend[i] = pflash[i];
     }
-    if (has_bios && pflash[0]) {
+    if (has_explicit_bios && pflash[0]) {
         error_setg(errp, "MMIX executable firmware cannot be supplied by "
                    "both -bios and pflash0");
         return false;
     }
 
-    firmware = has_bios || pflash[0];
+    if (has_explicit_bios) {
+        bios_name = machine->firmware;
+    } else if (!bios_disabled && !pflash[0]) {
+        bios_name = vmc->default_firmware;
+    }
+    firmware = bios_name || pflash[0];
     if (pflash[1] && !firmware) {
         error_setg(errp, "MMIX pflash1 requires executable firmware from "
                    "-bios or pflash0");
@@ -556,7 +572,7 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
             return false;
         }
     }
-    if (has_bios && !mmix_virt_load_bios(vms, machine->firmware, errp)) {
+    if (bios_name && !mmix_virt_load_bios(vms, bios_name, errp)) {
         return false;
     }
     if (firmware && machine->kernel_filename) {
@@ -1946,7 +1962,9 @@ static void mmix_virt_instance_finalize(Object *obj)
 static const TypeInfo mmix_virt_machine_typeinfo = {
     .name = TYPE_MMIX_VIRT_MACHINE,
     .parent = TYPE_MACHINE,
+    .abstract = true,
     .class_init = mmix_virt_class_init,
+    .class_size = sizeof(MMIXVirtMachineClass),
     .instance_size = sizeof(MMIXVirtMachineState),
     .instance_init = mmix_virt_instance_init,
     .instance_finalize = mmix_virt_instance_finalize,
@@ -1958,3 +1976,42 @@ static void mmix_virt_machine_init_register_types(void)
 }
 
 type_init(mmix_virt_machine_init_register_types)
+
+#define DEFINE_MMIX_VIRT_MACHINE_IMPL(latest, ...) \
+    static void MACHINE_VER_SYM(class_init, virt, __VA_ARGS__)( \
+        ObjectClass *oc, const void *data) \
+    { \
+        MachineClass *mc = MACHINE_CLASS(oc); \
+        MACHINE_VER_SYM(options, virt, __VA_ARGS__)(mc); \
+        mc->desc = "QEMU " MACHINE_VER_STR(__VA_ARGS__) \
+                   " MMIX Virtual Machine"; \
+        MACHINE_VER_DEPRECATION(__VA_ARGS__); \
+        if (latest) { \
+            mc->alias = "virt"; \
+            mc->is_default = true; \
+        } \
+    } \
+    static const TypeInfo MACHINE_VER_SYM(info, virt, __VA_ARGS__) = \
+    { \
+        .name = MACHINE_VER_TYPE_NAME("virt", __VA_ARGS__), \
+        .parent = TYPE_MMIX_VIRT_MACHINE, \
+        .class_init = MACHINE_VER_SYM(class_init, virt, __VA_ARGS__), \
+    }; \
+    static void MACHINE_VER_SYM(register, virt, __VA_ARGS__)(void) \
+    { \
+        MACHINE_VER_DELETION(__VA_ARGS__); \
+        type_register_static(&MACHINE_VER_SYM(info, virt, __VA_ARGS__)); \
+    } \
+    type_init(MACHINE_VER_SYM(register, virt, __VA_ARGS__));
+
+#define DEFINE_MMIX_VIRT_MACHINE_AS_LATEST(major, minor) \
+    DEFINE_MMIX_VIRT_MACHINE_IMPL(true, major, minor)
+
+static void virt_machine_11_2_options(MachineClass *mc)
+{
+    MMIXVirtMachineClass *vmc =
+        MMIX_VIRT_MACHINE_CLASS(OBJECT_CLASS(mc));
+
+    vmc->default_firmware = MMIX_VIRT_DEFAULT_FIRMWARE;
+}
+DEFINE_MMIX_VIRT_MACHINE_AS_LATEST(11, 2)
