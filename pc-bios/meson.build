@@ -75,6 +75,7 @@ blobs = [
   'hppa-firmware64.img',
   'opensbi-riscv32-generic-fw_dynamic.bin',
   'opensbi-riscv64-generic-fw_dynamic.bin',
+  'mmix-virt.bin',
   'npcm7xx_bootrom.bin',
   'npcm8xx_bootrom.bin',
   'vof.bin',

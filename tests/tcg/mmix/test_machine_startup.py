@@ -24,6 +24,8 @@ from lib.mmix_asm import halt
 MMO_PREAMBLE = bytes((0x98, 0x09, 0x01, 0x01))
 FLASH_SIZE = 64 * 1024 * 1024
 FIRMWARE_DATA = pathlib.Path(__file__).parent / "data" / "firmware"
+MMIX_VIRT_FIRMWARE = pathlib.Path(__file__).parents[3] / "pc-bios" / \
+    "mmix-virt.bin"
 
 
 def _pflash_drive(path, unit):
@@ -174,6 +176,20 @@ def test_firmware_fixture_is_reproducible():
         check=True,
         timeout=10,
     )
+
+
+def test_in_tree_firmware_reports_unavailable_boot_services(qemu):
+    result = subprocess.run(
+        [qemu, "-machine", "virt", "-smp", "64", "-bios",
+         MMIX_VIRT_FIRMWARE, "-display", "none", "-monitor", "none",
+         "-serial", "stdio", "-no-reboot"],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == b"MMIX firmware: boot services unavailable\n"
 
 
 @pytest.mark.boot_integration

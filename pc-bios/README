@@ -83,6 +83,10 @@
   source code also contains code reused from other projects described here:
   https://github.com/riscv/opensbi/blob/master/ThirdPartyNotices.md.
 
+- mmix-virt.bin is the minimal boot firmware for QEMU's MMIX virt machine.
+  Its GPL-2.0-or-later source and reproducible maintainer build are in the
+  pc-bios/mmix-virt directory.
+
 - npcm{7xx,8xx}_bootrom.bin is a simplified, free (Apache 2.0) boot ROM for
   Nuvoton NPCM7xx/8xx BMC devices. It currently implements the bare minimum to
   load, parse, initialize and run boot images stored in SPI flash, but may grow
