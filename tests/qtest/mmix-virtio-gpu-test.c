@@ -17,6 +17,8 @@
 #include "standard-headers/linux/virtio_ring.h"
 
 #define MMIX_VIRTIO_BASE              UINT64_C(0x0001000040000000)
+#define MMIX_VIRTIO_SIZE              UINT64_C(0x1000)
+#define MMIX_VIRTIO_COUNT             32
 #define MMIX_VIRTIO_PAGE_SIZE         4096
 #define MMIX_VIRTIO_IRQ_BASE          2048
 #define MMIX_VIRTIO_TIMEOUT_US        (30 * G_USEC_PER_SEC)
@@ -889,6 +891,62 @@ static void test_mmix_virtio_gpu_migration_incompatible(void)
     g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
 }
 
+static bool mmix_machine_has_child(QTestState *qts, const char *name)
+{
+    g_autoptr(QDict) response = qtest_qmp(
+        qts, "{'execute':'qom-list','arguments':{'path':'/machine'}}");
+    QList *properties = qdict_get_qlist(response, "return");
+    const QListEntry *entry;
+
+    QLIST_FOREACH_ENTRY(properties, entry) {
+        QDict *property = qobject_to(QDict, qlist_entry_obj(entry));
+
+        if (g_str_equal(qdict_get_str(property, "name"), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void mmix_assert_display_configuration(const char *args,
+                                              bool has_framebuffer,
+                                              bool has_gpu)
+{
+    QTestState *qts = qtest_init(args);
+    g_autofree char *mtree = qtest_hmp(qts, "info mtree -f");
+    unsigned int i;
+
+    g_assert_cmpint(mmix_machine_has_child(qts, "framebuffer"), ==,
+                    has_framebuffer);
+    g_assert_cmpint(strstr(mtree, "mmix-framebuffer") != NULL, ==,
+                    has_framebuffer);
+    g_assert_cmpuint(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                QVIRTIO_MMIO_DEVICE_ID), ==,
+                     has_gpu ? VIRTIO_ID_GPU : 0);
+    if (!has_gpu) {
+        for (i = 0; i < MMIX_VIRTIO_COUNT; i++) {
+            g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
+                                       i * MMIX_VIRTIO_SIZE +
+                                       QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+        }
+    }
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_virtio_gpu_display_configurations(void)
+{
+    mmix_assert_display_configuration(
+        "-machine virt -device virtio-gpu-device -display none", true, true);
+    mmix_assert_display_configuration(
+        "-machine virt,graphics=off "
+        "-device virtio-gpu-device -display none", false, true);
+    mmix_assert_display_configuration(
+        "-machine virt -nographic -device virtio-gpu-device", false, true);
+    mmix_assert_display_configuration(
+        "-machine virt -display none", true, false);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -903,5 +961,7 @@ int main(int argc, char **argv)
                    test_mmix_virtio_gpu_migration);
     qtest_add_func("/mmix/virtio-gpu/migration-incompatible",
                    test_mmix_virtio_gpu_migration_incompatible);
+    qtest_add_func("/mmix/virtio-gpu/display-configurations",
+                   test_mmix_virtio_gpu_display_configurations);
     return g_test_run();
 }
