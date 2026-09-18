@@ -290,19 +290,32 @@ static void mmix_qtest_migrate(QTestState *from, QTestState *to,
     qtest_qmp_eventwait(to, "RESUME");
 }
 
-static QTestState *mmix_edu_dma_start(const char *memory, uint64_t *bar)
+static QTestState *mmix_edu_dma_start(const char *memory,
+                                      uint64_t dma_mask, uint64_t *bar)
 {
     QTestState *qts = qtest_initf(
         "-machine virt -m %s "
         "-device edu,bus=pcie.0,addr=1.0,msi=off,"
-        "dma_mask=0xffffffffffffffff",
-        memory);
+        "dma_mask=0x%" PRIx64,
+        memory, dma_mask);
     uint64_t config = mmix_pcie_ecam_address(0, 1, 0, 0);
 
     *bar = mmix_edu_configure(qts, 1, MMIX_EDU_BAR_SIZE);
     mmix_pcie_writew(qts, config + PCI_COMMAND,
                      PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
     return qts;
+}
+
+static void mmix_edu_dma_write(QTestState *qts, uint64_t bar,
+                               uint64_t destination,
+                               const void *data, size_t size)
+{
+    const uint64_t source = 0x00010000;
+
+    qtest_memwrite(qts, source, data, size);
+    mmix_edu_dma_run(qts, bar, source, MMIX_EDU_DMA_BUFFER, size, 0);
+    mmix_edu_dma_run(qts, bar, MMIX_EDU_DMA_BUFFER, destination, size,
+                     MMIX_EDU_DMA_TO_PCI);
 }
 
 static uint64_t mmix_e1000_configure(QTestState *qts, unsigned int bus,
@@ -631,7 +644,7 @@ static void test_mmix_pcie_dma_below_4g(void)
     const uint64_t source_address = 0x00010000;
     const uint64_t destination_address = 0x00020000;
     uint64_t bar;
-    QTestState *qts = mmix_edu_dma_start("512M", &bar);
+    QTestState *qts = mmix_edu_dma_start("512M", UINT64_MAX, &bar);
     unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(source); i++) {
@@ -653,7 +666,7 @@ static void test_mmix_pcie_dma_above_4g(void)
     const uint64_t source_address = UINT64_C(0x0000000140000000);
     const uint64_t destination_address = UINT64_C(0x0000000140010000);
     uint64_t bar;
-    QTestState *qts = mmix_edu_dma_start("8G", &bar);
+    QTestState *qts = mmix_edu_dma_start("8G", UINT64_MAX, &bar);
     unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(source); i++) {
@@ -680,7 +693,7 @@ static void test_mmix_pcie_dma_invalid_targets(void)
     const uint64_t sentinel2 = UINT64_C(0x8877665544332211);
     const uint8_t uart_sentinel = 0x5a;
     uint64_t bar;
-    QTestState *qts = mmix_edu_dma_start("512M", &bar);
+    QTestState *qts = mmix_edu_dma_start("512M", UINT64_MAX, &bar);
     unsigned int i;
 
     for (i = 0; i < ARRAY_SIZE(source); i++) {
@@ -700,6 +713,66 @@ static void test_mmix_pcie_dma_invalid_targets(void)
     g_assert_cmphex(qtest_readq(qts, low_probe2), ==, sentinel2);
     g_assert_cmphex(qtest_readb(qts, MMIX_UART_SCRATCH), ==, uart_sentinel);
     mmix_assert_unassigned(qts, outside_ram);
+    qtest_quit(qts);
+}
+
+static void test_mmix_pcie_dma_msi_doorbell_widths(void)
+{
+    static const uint64_t dma_masks[] = { UINT32_MAX, UINT64_MAX };
+    unsigned int i;
+
+    for (i = 0; i < ARRAY_SIZE(dma_masks); i++) {
+        const unsigned int vector = i;
+        const unsigned int source = MMIX_PCIE_MSI_IRQ_BASE + vector;
+        uint64_t bit = mmix_intc_source_bit(source);
+        uint8_t data[sizeof(uint32_t)];
+        uint64_t bar;
+        QTestState *qts = mmix_edu_dma_start(
+            "512M", dma_masks[i], &bar);
+
+        qtest_irq_intercept_out_named(qts, MMIX_INTC_QOM_PATH,
+                                      MMIX_INTC_OUTPUT_IRQ);
+        mmix_intc_write_enable(qts, 0, source, bit);
+        stl_le_p(data, vector);
+        mmix_edu_dma_write(qts, bar, MMIX_PCIE_MSI_BUS_BASE,
+                           data, sizeof(data));
+        g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, bit);
+        g_assert_true(qtest_get_irq(qts, 0));
+        g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, source);
+        mmix_intc_complete(qts, 0, source);
+        g_assert_false(qtest_get_irq(qts, 0));
+        qtest_quit(qts);
+    }
+}
+
+static void test_mmix_pcie_dma_msi_doorbell_boundaries(void)
+{
+    const uint64_t before = MMIX_PCIE_MSI_BUS_BASE - sizeof(uint32_t);
+    const uint64_t reserved = MMIX_PCIE_MSI_BUS_BASE + sizeof(uint32_t);
+    const uint64_t after = MMIX_PCIE_MSI_BUS_BASE + MMIX_PCIE_MSI_SIZE;
+    const uint32_t initial = UINT32_C(0x11223344);
+    const uint32_t replacement = UINT32_C(0xa5b6c7d8);
+    uint8_t data[sizeof(replacement)];
+    uint64_t bar;
+    QTestState *qts = mmix_edu_dma_start("8G", UINT64_MAX, &bar);
+
+    mmix_pcie_writel(qts, before, initial);
+    mmix_pcie_writel(qts, MMIX_PCIE_MSI_BUS_BASE, initial);
+    mmix_pcie_writel(qts, reserved, initial);
+    mmix_pcie_writel(qts, after, initial);
+    stl_le_p(data, replacement);
+
+    mmix_edu_dma_write(qts, bar, before, data, sizeof(data));
+    g_assert_cmphex(mmix_pcie_readl(qts, before), ==, replacement);
+
+    mmix_edu_dma_write(qts, bar, reserved, data, sizeof(data));
+    g_assert_cmphex(mmix_pcie_readl(qts, reserved), ==, initial);
+
+    mmix_edu_dma_write(qts, bar, after, data, sizeof(data));
+    g_assert_cmphex(mmix_pcie_readl(qts, after), ==, replacement);
+    g_assert_cmphex(mmix_pcie_readl(qts, MMIX_PCIE_MSI_BUS_BASE), ==,
+                    initial);
+
     qtest_quit(qts);
 }
 
@@ -961,6 +1034,10 @@ int main(int argc, char **argv)
                    test_mmix_pcie_dma_above_4g);
     qtest_add_func("/mmix/pcie/dma/invalid-targets",
                    test_mmix_pcie_dma_invalid_targets);
+    qtest_add_func("/mmix/pcie/dma/msi-doorbell-widths",
+                   test_mmix_pcie_dma_msi_doorbell_widths);
+    qtest_add_func("/mmix/pcie/dma/msi-doorbell-boundaries",
+                   test_mmix_pcie_dma_msi_doorbell_boundaries);
     qtest_add_func("/mmix/pcie/reset-state",
                    test_mmix_pcie_reset_state);
     qtest_add_func("/mmix/pcie/migration/empty",

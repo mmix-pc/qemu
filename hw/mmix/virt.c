@@ -115,6 +115,7 @@ struct MMIXVirtMachineState {
     MemoryRegion pcie_mmio64;
     MemoryRegion pcie_dma_root;
     MemoryRegion pcie_dma_ram;
+    MemoryRegion pcie_dma_msi;
     AddressSpace pcie_dma_as;
     bool pcie_dma_initialized;
 };
@@ -187,7 +188,8 @@ static const PCIIOMMUOps mmix_virt_pcie_dma_ops = {
 };
 
 static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
-                                       DeviceState *intc)
+                                       DeviceState *intc,
+                                       DeviceState *msi_receiver)
 {
     MachineState *machine = MACHINE(vms);
     DeviceState *dev = qdev_new(TYPE_GPEX_HOST);
@@ -281,6 +283,13 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
                              machine->ram_size);
     memory_region_add_subregion(&vms->pcie_dma_root, 0,
                                 &vms->pcie_dma_ram);
+    memory_region_init_alias(
+        &vms->pcie_dma_msi, OBJECT(vms), "mmix-pcie-dma-msi",
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(msi_receiver), 0), 0,
+        MMIX_VIRT_PCIE_MSI_SIZE);
+    memory_region_add_subregion_overlap(&vms->pcie_dma_root,
+                                        MMIX_VIRT_PCIE_MSI_BUS_BASE,
+                                        &vms->pcie_dma_msi, 1);
     address_space_init(&vms->pcie_dma_as, &vms->pcie_dma_root,
                        "mmix-pcie-dma");
     vms->pcie_dma_initialized = true;
@@ -1769,7 +1778,7 @@ static void mmix_virt_init(MachineState *machine)
                                            MMIX_VIRT_TIMER_IRQ_BASE + i));
     }
 
-    mmix_virt_create_pcie_host(vms, intc);
+    mmix_virt_create_pcie_host(vms, intc, msi_receiver);
 
     /*
      * Realization prepends each bus to QEMU's default-bus search order.
@@ -1909,6 +1918,8 @@ static void mmix_virt_instance_finalize(Object *obj)
 
     if (vms->pcie_dma_initialized) {
         address_space_destroy(&vms->pcie_dma_as);
+        memory_region_del_subregion(&vms->pcie_dma_root,
+                                    &vms->pcie_dma_msi);
         memory_region_del_subregion(&vms->pcie_dma_root,
                                     &vms->pcie_dma_ram);
     }
