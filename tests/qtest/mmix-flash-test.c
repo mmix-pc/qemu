@@ -13,6 +13,7 @@
 #define MMIX_FLASH_BANK_SIZE UINT64_C(0x04000000)
 #define MMIX_FLASH_RESERVED_BASE UINT64_C(0x0001000008000000)
 #define MMIX_FLASH_APERTURE_END UINT64_C(0x0001000010000000)
+#define MMIX_DEFAULT_FIRMWARE_SHARED_BASE UINT64_C(0x8000)
 
 #define CFI_QUERY_COMMAND 0x98
 #define CFI_READ_ARRAY_COMMAND 0xff
@@ -292,6 +293,154 @@ static void test_mmix_flash_bios_image(void)
     mmix_remove_test_image(filename, directory);
 }
 
+static void test_mmix_default_firmware_reset(void)
+{
+    uint8_t firmware[16];
+    uint8_t actual[sizeof(firmware)];
+    QTestState *qts = qtest_init("-machine virt -smp 2");
+
+    qtest_memread(qts, MMIX_FLASH0_BASE, firmware, sizeof(firmware));
+    qtest_writeq(qts, MMIX_DEFAULT_FIRMWARE_SHARED_BASE, 2);
+    qtest_writeq(qts, MMIX_DEFAULT_FIRMWARE_SHARED_BASE + 8,
+                 UINT64_C(0x1122334455667788));
+
+    qtest_system_reset(qts);
+
+    g_assert_cmphex(qtest_readq(qts, MMIX_DEFAULT_FIRMWARE_SHARED_BASE), ==,
+                    0);
+    g_assert_cmphex(qtest_readq(qts,
+                               MMIX_DEFAULT_FIRMWARE_SHARED_BASE + 8), ==,
+                    0);
+    qtest_memread(qts, MMIX_FLASH0_BASE, actual, sizeof(actual));
+    g_assert_cmpmem(actual, sizeof(actual), firmware, sizeof(firmware));
+    qtest_quit(qts);
+}
+
+static void mmix_migrate(QTestState *from, QTestState *to, const char *uri)
+{
+    qtest_qmp_assert_success(
+        from, "{'execute':'migrate','arguments':{'uri':%s}}", uri);
+    qtest_qmp_eventwait(from, "STOP");
+    qtest_qmp_eventwait(to, "RESUME");
+}
+
+static void test_mmix_firmware_migration_identity(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-firmware-migration-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    g_autofree char *firmware = NULL;
+    QTestState *from;
+    QTestState *to;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    firmware = g_canonicalize_filename("pc-bios/mmix-virt.bin", NULL);
+    incoming = g_strdup_printf(
+        "-machine virt-11.2 -bios %s -smp 2 -incoming %s", firmware, uri);
+    from = qtest_init("-machine virt -smp 2");
+    to = qtest_init(incoming);
+
+    mmix_migrate(from, to, uri);
+    g_assert_cmphex(qtest_readl(to, MMIX_FLASH0_BASE), ==,
+                    qtest_readl(from, MMIX_FLASH0_BASE));
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
+static void test_mmix_firmware_migration_rejects_mismatch(void)
+{
+    enum { MIGRATION_TIMEOUT_US = 5 * G_USEC_PER_SEC };
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-firmware-mismatch-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    g_autofree char *firmware = NULL;
+    g_autofree char *contents = NULL;
+    gsize size;
+    QTestState *from;
+    QTestState *to;
+    gint64 deadline;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    firmware = g_build_filename(tmpdir, "different.bin", NULL);
+    g_assert_true(g_file_get_contents("pc-bios/mmix-virt.bin", &contents,
+                                      &size, &error));
+    g_assert_no_error(error);
+    g_assert_cmpuint(size, >=, 4);
+    contents[size - 1] ^= 1;
+    g_assert_true(g_file_set_contents(firmware, contents, size, &error));
+    g_assert_no_error(error);
+    incoming = g_strdup_printf(
+        "-machine virt-11.2 -bios %s -smp 2 -incoming %s", firmware, uri);
+    from = qtest_init("-machine virt -smp 2");
+    to = qtest_init(incoming);
+    qtest_set_expected_status(to, 1);
+
+    qtest_qmp_assert_success(
+        from, "{'execute':'migrate','arguments':{'uri':%s}}", uri);
+    deadline = g_get_monotonic_time() + MIGRATION_TIMEOUT_US;
+    while (qtest_probe_child(to)) {
+        g_assert_cmpint(g_get_monotonic_time(), <, deadline);
+        g_usleep(1000);
+    }
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_unlink(firmware);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
+static void test_mmix_firmware_migration_rejects_boot_mode(void)
+{
+    enum { MIGRATION_TIMEOUT_US = 5 * G_USEC_PER_SEC };
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir =
+        g_dir_make_tmp("mmix-firmware-boot-mode-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    g_autofree char *incoming = NULL;
+    QTestState *from;
+    QTestState *to;
+    gint64 deadline;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+    incoming = g_strdup_printf("-machine virt -smp 2 -incoming %s", uri);
+    from = qtest_init("-machine virt -bios none -smp 2");
+    to = qtest_init(incoming);
+    qtest_set_expected_status(to, 1);
+
+    qtest_qmp_assert_success(
+        from, "{'execute':'migrate','arguments':{'uri':%s}}", uri);
+    deadline = g_get_monotonic_time() + MIGRATION_TIMEOUT_US;
+    while (qtest_probe_child(to)) {
+        g_assert_cmpint(g_get_monotonic_time(), <, deadline);
+        g_usleep(1000);
+    }
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
 static void test_mmix_flash_bios_size_boundaries(void)
 {
     static const uint8_t minimum[] = { 0x00, 0x01, 0x02, 0x03 };
@@ -479,6 +628,14 @@ int main(int argc, char **argv)
     qtest_add_func("/mmix/flash/hosted-mmo-boot",
                    test_mmix_flash_erased_during_hosted_mmo_boot);
     qtest_add_func("/mmix/flash/bios/image", test_mmix_flash_bios_image);
+    qtest_add_func("/mmix/flash/default/reset",
+                   test_mmix_default_firmware_reset);
+    qtest_add_func("/mmix/flash/migration/identity",
+                   test_mmix_firmware_migration_identity);
+    qtest_add_func("/mmix/flash/migration/mismatch",
+                   test_mmix_firmware_migration_rejects_mismatch);
+    qtest_add_func("/mmix/flash/migration/boot-mode",
+                   test_mmix_firmware_migration_rejects_boot_mode);
     qtest_add_func("/mmix/flash/bios/size-boundaries",
                    test_mmix_flash_bios_size_boundaries);
     qtest_add_func("/mmix/flash/bios/size-rejected",

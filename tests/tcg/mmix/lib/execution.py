@@ -955,7 +955,7 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
 def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
                               cpu_count, memory, initrd=False,
                               command_line=None, loaded_kernel=None,
-                              production=False):
+                              production=False, snapshot=False):
     fdt_address = 0x00100000
     kernel_address = 0x00200000
     record_address = 0x00300000
@@ -965,8 +965,10 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
     serial = workdir / f"firmware-handoff-{cpu_count}-{memory}.serial"
     qtest_path = workdir / f"firmware-handoff-{cpu_count}-{memory}.sock"
     initrd_path = workdir / f"firmware-handoff-{cpu_count}-{memory}.initrd"
+    snapshot_path = workdir / \
+        f"firmware-handoff-{cpu_count}-{memory}.qcow2"
 
-    for path in (serial, qtest_path, initrd_path):
+    for path in (serial, qtest_path, initrd_path, snapshot_path):
         if path.exists():
             path.unlink()
     args = [
@@ -991,6 +993,15 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         args.extend(("-initrd", str(initrd_path)))
     if command_line is not None:
         args.extend(("-append", command_line))
+    if snapshot:
+        qemu_img = qemu.with_name("qemu-img")
+
+        subprocess.run(
+            (qemu_img, "create", "-q", "-f", "qcow2", snapshot_path, "1M"),
+            check=True,
+            timeout=10,
+        )
+        args.extend(("-drive", f"file={snapshot_path},format=qcow2,if=none"))
 
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(qtest_path))
@@ -1120,6 +1131,32 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         assert len(set(stacks)) == cpu_count
         assert serial.read_bytes() == b"MMIX firmware handoff\n"
 
+        if snapshot:
+            result = _qmp_command(
+                process,
+                "human-monitor-command",
+                {"command-line": "savevm firmware-handoff"},
+            )
+            assert not result, result
+            _qtest_writeq(qtest, release_address, 0)
+            _qtest_writeq(qtest, success_address, 0)
+            for cpu, stack in enumerate(stacks):
+                _qtest_writeq(qtest, record_address + cpu * 32,
+                              (1 << 64) - 1)
+                _qtest_writeq(qtest, stack, (1 << 64) - 1)
+            result = _qmp_command(
+                process,
+                "human-monitor-command",
+                {"command-line": "loadvm firmware-handoff"},
+            )
+            assert not result, result
+            assert _qtest_readq(qtest, release_address) == 2
+            assert _qtest_readq(qtest, success_address) == success_value
+            for cpu, stack in enumerate(stacks):
+                assert _qtest_readq(qtest,
+                                    record_address + cpu * 32) == cpu
+                assert _qtest_readq(qtest, stack) != (1 << 64) - 1
+
         _qmp_command(process, "quit")
         process.communicate(timeout=5)
     except BaseException:
@@ -1132,7 +1169,7 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         if connection is not None:
             connection.close()
         listener.close()
-        for path in (qtest_path, initrd_path):
+        for path in (qtest_path, initrd_path, snapshot_path):
             if path.exists():
                 path.unlink()
 

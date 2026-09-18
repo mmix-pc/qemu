@@ -29,6 +29,7 @@
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
 #include "hw/watchdog/sbsa_gwdt.h"
+#include "migration/vmstate.h"
 #include "semihosting/semihost.h"
 #include "system/block-backend-global-state.h"
 #include "system/block-backend-io.h"
@@ -77,6 +78,7 @@ typedef struct MMIXFWCfgFile {
 
 enum {
     MMIX_PLATFORM_COMMAND_LINE_MAX = 4095,
+    MMIX_FIRMWARE_DIGEST_SIZE = 32,
 };
 
 OBJECT_DECLARE_TYPE(MMIXVirtMachineState, MMIXVirtMachineClass,
@@ -102,6 +104,9 @@ struct MMIXVirtMachineState {
     uint64_t argument_argv;
     uint64_t argument_count;
     MMIXBootMode boot_mode;
+    uint32_t migration_boot_mode;
+    uint8_t firmware_digest[MMIX_FIRMWARE_DIGEST_SIZE];
+    uint8_t migration_firmware_digest[MMIX_FIRMWARE_DIGEST_SIZE];
     char *pflash_backend_name[MMIX_VIRT_FLASH_BANK_COUNT];
     BlockBackend *pflash_backend[MMIX_VIRT_FLASH_BANK_COUNT];
     GBytes *bios_data;
@@ -110,6 +115,8 @@ struct MMIXVirtMachineState {
     GBytes *firmware_cmdline_data;
     MMIXELFStartup elf_startup;
     bool elf_startup_explicit;
+    bool default_firmware;
+    bool firmware_vmstate_registered;
     MMIXMMOPlan *mmo_plan;
     MMIXMMOHostedPlan *mmo_hosted_plan;
     MMIXSparseMemory *mmo_memory;
@@ -129,6 +136,58 @@ struct MMIXVirtMachineState {
 };
 
 static MMIXCreateDefaultMemdev mmix_parent_create_default_memdev;
+
+static int mmix_virt_firmware_post_load(void *opaque, int version_id)
+{
+    MMIXVirtMachineState *vms = opaque;
+
+    if (vms->migration_boot_mode != vms->boot_mode) {
+        error_report("MMIX migration boot mode differs from the destination");
+        return -EINVAL;
+    }
+    if (memcmp(vms->migration_firmware_digest, vms->firmware_digest,
+               sizeof(vms->firmware_digest))) {
+        error_report("MMIX executable firmware differs from the destination");
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_mmix_virt_firmware = {
+    .name = "mmix-virt/firmware",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = mmix_virt_firmware_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(migration_boot_mode, MMIXVirtMachineState),
+        VMSTATE_UINT8_ARRAY(migration_firmware_digest,
+                            MMIXVirtMachineState,
+                            MMIX_FIRMWARE_DIGEST_SIZE),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
+static void mmix_virt_register_firmware_vmstate(MMIXVirtMachineState *vms)
+{
+    GChecksum *checksum;
+    MemoryRegion *memory;
+    gsize digest_size = sizeof(vms->firmware_digest);
+
+    vms->migration_boot_mode = vms->boot_mode;
+    if (vms->boot_mode == MMIX_BOOT_MODE_FIRMWARE) {
+        memory = pflash_cfi01_get_memory(vms->flash[0]);
+        checksum = g_checksum_new(G_CHECKSUM_SHA256);
+        g_checksum_update(checksum, memory_region_get_ram_ptr(memory),
+                          memory_region_size(memory));
+        g_checksum_get_digest(checksum, vms->firmware_digest, &digest_size);
+        g_checksum_free(checksum);
+        g_assert(digest_size == sizeof(vms->firmware_digest));
+    }
+    memcpy(vms->migration_firmware_digest, vms->firmware_digest,
+           sizeof(vms->firmware_digest));
+    vmstate_register(NULL, 0, &vmstate_mmix_virt_firmware, vms);
+    vms->firmware_vmstate_registered = true;
+}
 
 static PFlashCFI01 *mmix_virt_create_flash(MMIXVirtMachineState *vms,
                                            unsigned int bank,
@@ -550,10 +609,12 @@ static bool mmix_virt_preflight_boot_mode(MMIXVirtMachineState *vms,
         return false;
     }
 
+    vms->default_firmware = false;
     if (has_explicit_bios) {
         bios_name = machine->firmware;
     } else if (!bios_disabled && !pflash[0]) {
         bios_name = vmc->default_firmware;
+        vms->default_firmware = bios_name != NULL;
     }
     firmware = bios_name || pflash[0];
     if (pflash[1] && !firmware) {
@@ -1334,6 +1395,14 @@ static void mmix_virt_reset(MachineState *machine, ResetType type)
         return;
     }
 
+    if (vms->default_firmware) {
+        MemTxResult result = address_space_set(
+            &address_space_memory, MMIX_VIRT_DEFAULT_FIRMWARE_SHARED_BASE, 0,
+            MMIX_VIRT_DEFAULT_FIRMWARE_SHARED_SIZE, MEMTXATTRS_UNSPECIFIED);
+
+        g_assert(result == MEMTX_OK);
+    }
+
     if (platform_info &&
         !mmix_boot_payload_commit_address_space(
             vms->boot_payload, &address_space_memory, machine->ram_size,
@@ -1697,6 +1766,7 @@ static void mmix_virt_init(MachineState *machine)
             vms, i, vms->pflash_backend[i], i == 0 ? vms->bios_data : NULL);
     }
     g_clear_pointer(&vms->bios_data, g_bytes_unref);
+    mmix_virt_register_firmware_vmstate(vms);
 
     mmix_virt_create_fw_cfg(vms);
 
@@ -1936,6 +2006,9 @@ static void mmix_virt_instance_finalize(Object *obj)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(obj);
 
+    if (vms->firmware_vmstate_registered) {
+        vmstate_unregister(NULL, &vmstate_mmix_virt_firmware, vms);
+    }
     if (vms->pcie_dma_initialized) {
         address_space_destroy(&vms->pcie_dma_as);
         memory_region_del_subregion(&vms->pcie_dma_root,

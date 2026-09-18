@@ -242,6 +242,38 @@ def test_installed_machine_selects_installed_default_firmware(qemu, workdir):
     assert result.stdout == b"MMIX firmware: no kernel payload\n"
 
 
+@pytest.mark.boot_integration
+@pytest.mark.parametrize("cpu_count", (1, 2))
+def test_installed_default_firmware_enters_next_stage(
+    qemu, workdir, cpu_count
+):
+    installed_qemu = _installed_qemu(
+        qemu, workdir, f"installed-handoff-{cpu_count}", install_firmware=True
+    )
+    physical_address = 0x00200000
+    virtual_address = physical_address | (1 << 63)
+    loaded_kernel = (FIRMWARE_DATA / "mmix-virt-kernel.bin").read_bytes()
+    kernel = workdir / f"installed-default-firmware-{cpu_count}.elf"
+
+    kernel.write_bytes(elf64_image(
+        physical_address,
+        loaded_kernel,
+        entry=virtual_address,
+        virtual_address=virtual_address,
+    ))
+    run_firmware_handoff_test(
+        installed_qemu,
+        workdir,
+        None,
+        kernel,
+        cpu_count=cpu_count,
+        memory="512M",
+        command_line="console=ttyS0 installed default firmware",
+        loaded_kernel=loaded_kernel,
+        production=True,
+    )
+
+
 def test_installed_machine_reports_missing_default_firmware(qemu, workdir):
     installed_qemu = _installed_qemu(
         qemu, workdir, "installed-missing", install_firmware=False
@@ -389,6 +421,7 @@ def test_default_firmware_loads_and_enters_next_stage(qemu, workdir):
         command_line="console=ttyS0 default firmware",
         loaded_kernel=loaded_kernel,
         production=True,
+        snapshot=True,
     )
 
 
