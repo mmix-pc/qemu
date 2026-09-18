@@ -64,6 +64,7 @@ static __attribute__((noreturn)) void firmware_panic(void)
 __attribute__((noreturn)) void mmix_firmware_main(void)
 {
     FirmwareBootInputs inputs;
+    FirmwareBootPlan plan = { 0 };
     const char *error;
 
     if (!firmware_discover_boot_inputs(&inputs, &error)) {
@@ -72,12 +73,13 @@ __attribute__((noreturn)) void mmix_firmware_main(void)
         uart_putc('\n');
     } else if (!inputs.kernel.present) {
         uart_puts("MMIX firmware: no kernel payload\n");
-    } else if (!firmware_load_elf(&inputs, &error)) {
+    } else if (!firmware_prepare_boot(&inputs, &plan, &error)) {
         uart_puts("MMIX firmware: ");
         uart_puts(error);
         uart_putc('\n');
     } else {
-        uart_puts("MMIX firmware: kernel loaded\n");
+        firmware_commit_boot_data(&inputs, &plan);
+        firmware_release_cpus(&inputs, &plan);
     }
     firmware_panic();
 }

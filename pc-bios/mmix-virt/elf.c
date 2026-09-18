@@ -299,15 +299,64 @@ static void commit_segment(const FirmwareFile *file,
     }
 }
 
-bool firmware_load_elf(FirmwareBootInputs *inputs, const char **error)
+bool firmware_preflight_elf(FirmwareBootInputs *inputs, const char **error)
 {
     ELFImage image = { 0 };
-    uint8_t program_header[ELF_PROGRAM_HEADER_SIZE];
-    uint16_t i;
 
     if (!inputs->kernel.present || !preflight_elf(inputs, &image, error)) {
         return false;
     }
+    inputs->kernel_entry = image.entry;
+    return true;
+}
+
+bool firmware_elf_ownership_overlap(const FirmwareBootInputs *inputs,
+                                    uint64_t base, uint64_t size,
+                                    uint64_t *collision_base)
+{
+    ELFImage image = { 0 };
+    uint8_t program_header[ELF_PROGRAM_HEADER_SIZE];
+    uint64_t end = base + size;
+    uint16_t i;
+    const char *error;
+
+    if (!preflight_elf(inputs, &image, &error)) {
+        return true;
+    }
+    for (i = 0; i < image.entry_count; i++) {
+        ELFSegment segment;
+        uint64_t segment_base;
+        uint64_t segment_end;
+
+        read_program_header(inputs, &image, i, program_header);
+        if (data_be32(program_header) != PT_LOAD) {
+            continue;
+        }
+        decode_segment(program_header, &segment);
+        if (segment.memory_size == 0) {
+            continue;
+        }
+        segment_base = segment.physical_address & ~(MMIX_RAM_ALIGNMENT - 1);
+        segment_end = (segment.physical_address + segment.memory_size +
+                       MMIX_RAM_ALIGNMENT - 1) & ~(MMIX_RAM_ALIGNMENT - 1);
+        if (base < segment_end && segment_base < end) {
+            if (collision_base != 0) {
+                *collision_base = segment_base;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void firmware_commit_elf(const FirmwareBootInputs *inputs)
+{
+    ELFImage image = { 0 };
+    uint8_t program_header[ELF_PROGRAM_HEADER_SIZE];
+    uint16_t i;
+    const char *error;
+
+    preflight_elf(inputs, &image, &error);
     for (i = 0; i < image.entry_count; i++) {
         ELFSegment segment;
 
@@ -320,6 +369,13 @@ bool firmware_load_elf(FirmwareBootInputs *inputs, const char **error)
             commit_segment(&inputs->kernel, &segment);
         }
     }
-    inputs->kernel_entry = image.entry;
+}
+
+bool firmware_load_elf(FirmwareBootInputs *inputs, const char **error)
+{
+    if (!firmware_preflight_elf(inputs, error)) {
+        return false;
+    }
+    firmware_commit_elf(inputs);
     return true;
 }

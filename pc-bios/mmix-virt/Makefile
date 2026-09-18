@@ -12,7 +12,7 @@ TARGET = $(BUILD_DIR)/mmix-virt.bin
 ELF = $(BUILD_DIR)/mmix-virt.elf
 OBJECTS = $(BUILD_DIR)/start.o $(BUILD_DIR)/main.o \
 	$(BUILD_DIR)/fw-cfg.o $(BUILD_DIR)/fdt.o $(BUILD_DIR)/elf.o \
-	$(BUILD_DIR)/runtime.o
+	$(BUILD_DIR)/boot.o $(BUILD_DIR)/runtime.o
 CHECKED_IN_IMAGE = ../mmix-virt.bin
 DISCOVERY_TEST = $(BUILD_DIR)/test-discovery
 ELF_TEST = $(BUILD_DIR)/test-elf

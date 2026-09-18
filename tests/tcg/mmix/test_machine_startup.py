@@ -196,29 +196,6 @@ def test_in_tree_firmware_discovers_platform_without_kernel(qemu):
     assert result.stdout == b"MMIX firmware: no kernel payload\n"
 
 
-def test_in_tree_firmware_loads_linux_elf(qemu, workdir):
-    physical_address = 0x100000
-    virtual_address = physical_address | (1 << 63)
-    payload = workdir / "firmware-linux.elf"
-
-    payload.write_bytes(elf64_image(
-        physical_address,
-        insn(JMP, 0, 0, 0),
-        mem_size=8,
-        entry=virtual_address,
-        virtual_address=virtual_address,
-    ))
-    result = _run_in_tree_firmware(
-        qemu,
-        "-kernel", payload,
-        "-initrd", payload,
-        "-append", "console=ttyS0 discovery-test",
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == b"MMIX firmware: kernel loaded\n"
-
-
 @pytest.mark.parametrize(
     "name,fw_cfg_name,contents,diagnostic",
     (
@@ -244,6 +221,26 @@ def test_in_tree_firmware_rejects_invalid_optional_input(
     assert result.stdout == diagnostic
 
 
+def test_in_tree_firmware_rejects_kernel_overlapping_shared_state(
+    qemu, workdir
+):
+    physical_address = 0x8000
+    kernel = workdir / "firmware-shared-overlap.elf"
+
+    kernel.write_bytes(elf64_image(
+        physical_address,
+        insn(JMP, 0, 0, 0),
+        entry=physical_address | (1 << 63),
+        virtual_address=physical_address | (1 << 63),
+    ))
+    result = _run_in_tree_firmware(qemu, "-kernel", kernel)
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        b"MMIX firmware: firmware shared state has no valid RAM range\n"
+    )
+
+
 @pytest.mark.boot_integration
 @pytest.mark.parametrize(
     "cpu_count,memory,initrd,command_line",
@@ -265,6 +262,43 @@ def test_firmware_loads_and_enters_next_stage(
         memory=memory,
         initrd=initrd,
         command_line=command_line,
+    )
+
+
+@pytest.mark.boot_integration
+@pytest.mark.parametrize(
+    "cpu_count,memory,initrd,command_line",
+    (
+        (1, "128M", False, None),
+        (2, "512M", True, "console=ttyS0 firmware production"),
+        (64, "512M", False, None),
+    ),
+)
+def test_in_tree_firmware_loads_and_enters_next_stage(
+    qemu, workdir, cpu_count, memory, initrd, command_line
+):
+    physical_address = 0x00200000
+    virtual_address = physical_address | (1 << 63)
+    loaded_kernel = (FIRMWARE_DATA / "mmix-virt-kernel.bin").read_bytes()
+    kernel = workdir / f"in-tree-firmware-{cpu_count}.elf"
+
+    kernel.write_bytes(elf64_image(
+        physical_address,
+        loaded_kernel,
+        entry=virtual_address,
+        virtual_address=virtual_address,
+    ))
+    run_firmware_handoff_test(
+        qemu,
+        workdir,
+        MMIX_VIRT_FIRMWARE,
+        kernel,
+        cpu_count=cpu_count,
+        memory=memory,
+        initrd=initrd,
+        command_line=command_line,
+        loaded_kernel=loaded_kernel,
+        production=True,
     )
 
 

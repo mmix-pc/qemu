@@ -953,7 +953,8 @@ def run_firmware_reset_and_snapshot_test(qemu, workdir, firmware):
 
 def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
                               cpu_count, memory, initrd=False,
-                              command_line=None):
+                              command_line=None, loaded_kernel=None,
+                              production=False):
     fdt_address = 0x00100000
     kernel_address = 0x00200000
     record_address = 0x00300000
@@ -1016,7 +1017,18 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
             if process.poll() is not None:
                 raise AssertionError("QEMU exited before firmware handoff")
             if time.monotonic() >= deadline:
-                raise AssertionError("timed out waiting for firmware handoff")
+                shared = _qtest_read(qtest, release_address, 32)
+                pending_fdt = int.from_bytes(shared[16:24], "big")
+                fdt_prefix = _qtest_read(qtest, pending_fdt, 16)
+                record = _qtest_read(qtest, record_address, 32)
+                result = _qtest_readq(qtest, success_address)
+                output = serial.read_bytes() if serial.exists() else b""
+                raise AssertionError(
+                    "timed out waiting for firmware handoff: "
+                    f"shared={shared.hex()} fdt={fdt_prefix.hex()} "
+                    f"record={record.hex()} result={result:#x} "
+                    f"serial={output!r}"
+                )
             time.sleep(0.01)
         _qmp_command(process, "stop")
 
@@ -1046,10 +1058,52 @@ def run_firmware_handoff_test(qemu, workdir, firmware, kernel, *,
         select_fw_cfg(fdt_selector)
         fdt = read_fw_cfg(fdt_size)
 
-        assert _qtest_read(qtest, fdt_address, fdt_size) == fdt
-        assert _qtest_read(qtest, kernel_address,
-                           kernel.stat().st_size) == kernel.read_bytes()
-        assert _qtest_readq(qtest, release_address) == fdt_address
+        if production:
+            assert _qtest_readq(qtest, release_address) == 2
+            fdt_address = _qtest_readq(qtest, release_address + 16)
+            fdt_size = struct.unpack(
+                ">I", _qtest_read(qtest, fdt_address + 4, 4)
+            )[0]
+            fdt = _qtest_read(qtest, fdt_address, fdt_size)
+            expected_bootargs = (command_line or "").encode() + b"\0"
+            assert _fdt_property(fdt, "/chosen", "bootargs") == \
+                expected_bootargs
+            assert _qtest_read(qtest, kernel_address,
+                               len(loaded_kernel)) == loaded_kernel
+            reservation_offset = struct.unpack_from(">I", fdt, 16)[0]
+            reservations = []
+            while True:
+                reservation = struct.unpack_from(
+                    ">QQ", fdt, reservation_offset
+                )
+                reservation_offset += 16
+                if reservation == (0, 0):
+                    break
+                reservations.append(reservation)
+            assert (release_address, 0x2000) in reservations
+            assert (fdt_address, fdt_size) in reservations
+            if initrd:
+                initrd_start = struct.unpack(
+                    ">Q", _fdt_property(
+                        fdt, "/chosen", "linux,initrd-start"
+                    )
+                )[0]
+                initrd_end = struct.unpack(
+                    ">Q", _fdt_property(
+                        fdt, "/chosen", "linux,initrd-end"
+                    )
+                )[0]
+                initrd_contents = initrd_path.read_bytes()
+                assert initrd_end - initrd_start == len(initrd_contents)
+                assert _qtest_read(
+                    qtest, initrd_start, len(initrd_contents)
+                ) == initrd_contents
+                assert (initrd_start, len(initrd_contents)) in reservations
+        else:
+            assert _qtest_read(qtest, fdt_address, fdt_size) == fdt
+            assert _qtest_read(qtest, kernel_address,
+                               kernel.stat().st_size) == kernel.read_bytes()
+            assert _qtest_readq(qtest, release_address) == fdt_address
         stacks = []
         for cpu in range(cpu_count):
             record = record_address + cpu * 32

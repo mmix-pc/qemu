@@ -225,37 +225,38 @@ def kernel_image():
     p = Program()
     zero = 250
     p.emit(
-        *set_octa(32, RECORD_ADDRESS),
-        insn(SLUI, 33, 0, 5),
-        insn(ADDU, 32, 32, 33),
-        insn(STOUI, 0, 32, 0),
-        insn(STOUI, 1, 32, 8),
-        insn(GET, 34, 0, SR_L),
-        insn(STOUI, 34, 32, 16),
-        insn(GET, 35, 0, SR_O),
-        insn(STOUI, 35, 32, 24),
-        insn(LDTUI, 36, 1, 0),
-        *set_octa(37, FDT_MAGIC),
-        insn(CMPU, 38, 36, 37),
+        wyde(SETL, zero, 0),
+        *set_octa(231, RECORD_ADDRESS),
+        insn(SLUI, 232, 0, 5),
+        insn(ADDU, 231, 231, 232),
+        insn(STOUI, 0, 231, 0),
+        insn(STOUI, 1, 231, 8),
+        insn(GET, 233, 0, SR_L),
+        insn(STOUI, 233, 231, 16),
+        insn(GET, 234, 0, SR_O),
+        insn(STOUI, 234, 231, 24),
+        insn(LDTUI, 235, 1, 0),
+        *set_octa(236, FDT_MAGIC),
+        insn(CMPU, 237, 235, 236),
     )
-    p.branch(BNZ, 38, "failure")
-    p.emit(insn(CMPUI, 38, 34, 2))
-    p.branch(BNZ, 38, "failure")
+    p.branch(BNZ, 237, "failure")
+    p.emit(insn(CMPUI, 237, 233, 2))
+    p.branch(BNZ, 237, "failure")
     p.branch(BNZ, 0, "idle")
-    p.emit(*set_octa(39, UART_ALIAS))
+    p.emit(*set_octa(238, UART_ALIAS))
     for index, byte in enumerate(b"MMIX firmware handoff\n"):
         p.mark(f"uart_{index}")
-        p.emit(insn(LDBUI, 40, 39, UART_LSR),
-               insn(ANDI, 40, 40, UART_LSR_THRE))
-        p.branch(BZ, 40, f"uart_{index}")
-        p.emit(wyde(SETL, 40, byte), insn(STBUI, 40, 39, 0))
-    p.emit(*set_octa(41, SUCCESS_VALUE), *set_octa(42, SUCCESS_ADDRESS),
-           insn(STOUI, 41, 42, 0), insn(SYNC, 0, 0, 1))
+        p.emit(insn(LDBUI, 239, 238, UART_LSR),
+               insn(ANDI, 239, 239, UART_LSR_THRE))
+        p.branch(BZ, 239, f"uart_{index}")
+        p.emit(wyde(SETL, 239, byte), insn(STBUI, 239, 238, 0))
+    p.emit(*set_octa(240, SUCCESS_VALUE), *set_octa(241, SUCCESS_ADDRESS),
+           insn(STOUI, 240, 241, 0), insn(SYNC, 0, 0, 1))
     p.mark("idle")
     p.branch(BZ, zero, "idle")
     p.mark("failure")
-    p.emit(*set_octa(41, FAILURE_VALUE), *set_octa(42, SUCCESS_ADDRESS),
-           insn(STOUI, 41, 42, 0))
+    p.emit(*set_octa(240, FAILURE_VALUE), *set_octa(241, SUCCESS_ADDRESS),
+           insn(STOUI, 240, 241, 0))
     p.branch(BZ, zero, "failure")
     return p.build()
 

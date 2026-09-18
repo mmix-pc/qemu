@@ -38,11 +38,13 @@ typedef struct FDTNames {
     uint32_t device_type;
     uint32_t compatible;
     uint32_t reg;
+    uint32_t bootargs;
     bool have_address_cells;
     bool have_size_cells;
     bool have_device_type;
     bool have_compatible;
     bool have_reg;
+    bool have_bootargs;
 } FDTNames;
 
 typedef struct FDTNode {
@@ -53,6 +55,7 @@ typedef struct FDTNode {
     bool is_cpu;
     bool is_memory;
     bool is_fw_cfg;
+    bool is_chosen;
     uint8_t reg[FDT_MAX_PROPERTY_DATA];
     uint32_t reg_size;
 } FDTNode;
@@ -70,6 +73,7 @@ typedef struct FDTState {
     bool have_ram;
     bool have_fw_cfg;
     bool have_end;
+    uint32_t reservation_count;
 } FDTState;
 
 typedef struct FDTReader {
@@ -227,6 +231,7 @@ static bool read_reservations(FDTState *state)
         if (!add_reserved_range(state, base, size)) {
             return false;
         }
+        state->reservation_count++;
     }
     return false;
 }
@@ -262,6 +267,9 @@ static void record_name(FDTNames *names, const char *name, uint32_t length,
     } else if (known_name(name, length, "reg")) {
         names->reg = offset;
         names->have_reg = true;
+    } else if (known_name(name, length, "bootargs")) {
+        names->bootargs = offset;
+        names->have_bootargs = true;
     }
 }
 
@@ -407,7 +415,7 @@ static bool handle_property(FDTState *state, uint32_t name_offset,
     return true;
 }
 
-static bool finish_node(FDTState *state)
+static bool finish_node(FDTState *state, uint32_t token_position)
 {
     FDTNode *node = &state->nodes[state->depth - 1];
 
@@ -458,6 +466,12 @@ static bool finish_node(FDTState *state)
             }
         }
     }
+    if (node->is_chosen) {
+        if (state->inputs->fdt_chosen_end != 0) {
+            return false;
+        }
+        state->inputs->fdt_chosen_end = token_position;
+    }
     return true;
 }
 
@@ -484,11 +498,14 @@ static bool begin_node(FDTState *state, FDTReader *reader)
                     string_equal((uint8_t *)name, 5, "cpus");
     node->is_reserved_memory = state->depth == 1 &&
         string_equal((uint8_t *)name, 16, "reserved-memory");
+    node->is_chosen = state->depth == 1 &&
+                      string_equal((uint8_t *)name, 7, "chosen");
     state->depth++;
     return true;
 }
 
-static bool read_property(FDTState *state, FDTReader *reader)
+static bool read_property(FDTState *state, FDTReader *reader,
+                          uint32_t token_position)
 {
     uint8_t data[FDT_MAX_PROPERTY_DATA];
     uint32_t size;
@@ -518,6 +535,17 @@ static bool read_property(FDTState *state, FDTReader *reader)
          name_offset == state->names.reg)) {
         return false;
     }
+    if (state->nodes[state->depth - 1].is_chosen &&
+        state->names.have_bootargs &&
+        name_offset == state->names.bootargs) {
+        if (state->inputs->fdt_bootargs_property != 0) {
+            return false;
+        }
+        state->inputs->fdt_bootargs_property = token_position;
+        state->inputs->fdt_bootargs_property_size =
+            12 + ((size + 3) & ~3U);
+        state->inputs->fdt_bootargs_name = name_offset;
+    }
     return handle_property(state, name_offset, data, copied);
 }
 
@@ -530,6 +558,7 @@ static bool read_structure(FDTState *state)
         return false;
     }
     while (reader_has(&reader, 4)) {
+        uint32_t token_position = reader.position;
         uint32_t token = read_be32(&reader);
 
         switch (token) {
@@ -539,13 +568,14 @@ static bool read_structure(FDTState *state)
             }
             break;
         case FDT_END_NODE:
-            if (state->depth == 0 || !finish_node(state)) {
+            if (state->depth == 0 ||
+                !finish_node(state, token_position)) {
                 return false;
             }
             state->depth--;
             break;
         case FDT_PROP:
-            if (!read_property(state, &reader)) {
+            if (!read_property(state, &reader, token_position)) {
                 return false;
             }
             break;
@@ -601,10 +631,18 @@ bool firmware_validate_fdt(FirmwareBootInputs *inputs, const char **error)
     if (!read_header(&state) || !read_reservations(&state) ||
         !read_string_names(&state) || !read_structure(&state) ||
         !state.have_end || !state.have_ram || !state.have_fw_cfg ||
+        inputs->fdt_bootargs_property == 0 ||
+        inputs->fdt_chosen_end == 0 ||
         state.cpu_count != inputs->cpu_count ||
         !cpu_ids_are_contiguous(&state) || !reserved_ranges_fit_ram(&state)) {
         *error = "invalid MMIX platform FDT";
         return false;
     }
+    inputs->fdt_struct = state.header.off_struct;
+    inputs->fdt_struct_size = state.header.size_struct;
+    inputs->fdt_strings = state.header.off_strings;
+    inputs->fdt_strings_size = state.header.size_strings;
+    inputs->fdt_reservations = state.header.off_reservations;
+    inputs->fdt_reservation_count = state.reservation_count;
     return true;
 }

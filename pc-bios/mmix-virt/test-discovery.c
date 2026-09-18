@@ -138,6 +138,7 @@ static uint32_t build_fdt(void)
     uint32_t device_type = append_string(&strings, "device_type");
     uint32_t compatible = append_string(&strings, "compatible");
     uint32_t reg = append_string(&strings, "reg");
+    uint32_t bootargs = append_string(&strings, "bootargs");
     uint8_t one[4] = { 0, 0, 0, 1 };
     uint8_t two[4] = { 0, 0, 0, 2 };
     uint8_t zero[4] = { 0, 0, 0, 0 };
@@ -155,6 +156,9 @@ static uint32_t build_fdt(void)
     put_node(&structure, "");
     put_property(&structure, address_cells, two, sizeof(two));
     put_property(&structure, size_cells, two, sizeof(two));
+    put_node(&structure, "chosen");
+    put_property(&structure, bootargs, command_line, sizeof(command_line));
+    put_be32(&structure, FDT_END_NODE);
     put_node(&structure, "memory@0");
     put_property(&structure, device_type, memory, sizeof(memory));
     put_property(&structure, reg, ram_reg, sizeof(ram_reg));
