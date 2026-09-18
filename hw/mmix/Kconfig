@@ -8,6 +8,7 @@ config MMIX_VIRT
     select SERIAL_MM
     select FRAMEBUFFER
     select GOLDFISH_RTC
+    select IOH3420
     select MSI_NONBROKEN
     select PCI_BRIDGE
     select PCIE_PCI_BRIDGE

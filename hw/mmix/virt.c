@@ -24,6 +24,7 @@
 #include "hw/misc/virt_ctrl.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/pci-host/gpex.h"
+#include "hw/pci/msi.h"
 #include "hw/pci/pcie_host.h"
 #include "hw/rtc/goldfish_rtc.h"
 #include "hw/virtio/virtio-mmio.h"
@@ -295,6 +296,9 @@ static void mmix_virt_create_pcie_host(MMIXVirtMachineState *vms,
     vms->pcie_dma_initialized = true;
     pci_setup_iommu(vms->pcie_host->gpex_cfg.bus,
                     &mmix_virt_pcie_dma_ops, vms);
+
+    /* Endpoint MSI is safe only after its complete DMA route exists. */
+    msi_nonbroken = true;
 }
 
 static bool mmix_virt_resolve_pflash_backend(MMIXVirtMachineState *vms,
