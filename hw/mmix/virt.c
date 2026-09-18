@@ -48,6 +48,7 @@
 #include "mmo-hosted-plan.h"
 #include "mmo-hosted-vmstate.h"
 #include "mmo-loader.h"
+#include "msi-receiver.h"
 #include "physical-layout.h"
 #include "ram-layout.h"
 #include "ram-reservation.h"
@@ -1576,6 +1577,7 @@ static void mmix_virt_init(MachineState *machine)
 {
     MMIXVirtMachineState *vms = MMIX_VIRT_MACHINE(machine);
     DeviceState *intc;
+    DeviceState *msi_receiver;
     DeviceState *ipi;
     DeviceState *timer;
     DeviceState *framebuffer;
@@ -1694,6 +1696,15 @@ static void mmix_virt_init(MachineState *machine)
                                               vms->cpus[i], 0);
         sysbus_connect_irq(SYS_BUS_DEVICE(intc), i, vms->cpu_irqs[i]);
     }
+
+    msi_receiver = qdev_new(TYPE_MMIX_MSI_RECEIVER);
+    object_property_add_child(OBJECT(machine), "pcie-msi",
+                              OBJECT(msi_receiver));
+    object_property_set_link(OBJECT(msi_receiver), "interrupt-controller",
+                             OBJECT(intc), &error_fatal);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(msi_receiver), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(msi_receiver), 0,
+                    MMIX_VIRT_PCIE_MSI_BASE);
 
     serial_mm_init(get_system_memory(), MMIX_VIRT_UART0_BASE,
                    MMIX_VIRT_UART0_REGISTER_SHIFT,

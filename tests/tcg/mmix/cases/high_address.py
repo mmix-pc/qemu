@@ -97,6 +97,33 @@ def privileged_device_alias_program():
     )
 
 
+def privileged_msi_alias_program():
+    negative = 1 << 63
+    intc = negative | MMIX_VIRT_MEMMAP[MMIX_VIRT_INTC][0]
+    receiver = negative | MMIX_VIRT_MEMMAP[MMIX_VIRT_PCIE_MSI][0]
+    source = MMIX_VIRT_PCIE_MSI_IRQ_BASE
+    enable = (intc + MMIX_VIRT_INTC_CONTEXT_BASE +
+              (source // 64) * 8)
+    claim = intc + MMIX_VIRT_INTC_CONTEXT_BASE + MMIX_VIRT_INTC_CONTEXT_CLAIM
+
+    program = [
+        *set_octa(R1, enable),
+        *set_octa(R2, 1 << (source % 64)),
+        insn(STOU, R2, R1, R0),
+        *set_octa(R3, receiver),
+        insn(STT, R0, R3, R0),
+        *set_octa(R4, claim),
+        insn(LDOU, R20, R4, R0),
+        halt(),
+    ]
+    return MMIXTest(
+        "negative-address-msi-receiver",
+        b"".join(program),
+        pc=(len(program) - 1) * 4,
+        regs={R20: source},
+    )
+
+
 def unprivileged_device_alias_program(name, operation, address):
     prefix = [
         wyde(SETL, R1, 0x80),
@@ -143,6 +170,7 @@ HIGH_ADDRESS_TESTS = tuple(
 ) + (
     privileged_negative_alias_program(),
     privileged_device_alias_program(),
+    privileged_msi_alias_program(),
     unprivileged_device_alias_program(
         "negative-address-uart-user-load-trap",
         insn(LDBU, R4, R3, R0),

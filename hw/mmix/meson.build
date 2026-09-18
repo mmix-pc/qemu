@@ -13,6 +13,7 @@ mmix_ss.add(when: 'CONFIG_MMIX_VIRT', if_true: files(
   'mmo-hosted-state.c',
   'mmo-hosted-vmstate.c',
   'mmo-loader.c',
+  'msi-receiver.c',
   'physical-layout.c',
   'ram-reservation.c',
   'sparse-memory.c',
