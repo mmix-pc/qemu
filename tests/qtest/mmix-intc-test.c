@@ -42,6 +42,8 @@
 #define MMIX_IRQ_TIMER_BASE          16
 #define MMIX_IRQ_VIRTIO_BASE         2048
 #define MMIX_IRQ_PCIE_INTX_BASE      6144
+#define MMIX_IRQ_PCIE_MSI_BASE       6148
+#define MMIX_IRQ_PCIE_MSI_COUNT      1020
 
 #define MMIX_INTC_QOM_PATH           "/machine/intc"
 #define MMIX_INTC_OUTPUT_IRQ         "sysbus-irq"
@@ -101,6 +103,17 @@ static void mmix_intc_set_irq(QTestState *qts, unsigned int source, int level)
 {
     qtest_set_irq_in(qts, MMIX_INTC_QOM_PATH, "unnamed-gpio-in",
                      source, level);
+}
+
+static void mmix_intc_inject_edge(QTestState *qts, unsigned int source)
+{
+    g_assert_cmpuint(source, >=, MMIX_IRQ_PCIE_MSI_BASE);
+    g_assert_cmpuint(source, <,
+                     MMIX_IRQ_PCIE_MSI_BASE + MMIX_IRQ_PCIE_MSI_COUNT);
+    qtest_set_irq_in(qts, MMIX_INTC_QOM_PATH, "edge",
+                     source - MMIX_IRQ_PCIE_MSI_BASE, 1);
+    qtest_set_irq_in(qts, MMIX_INTC_QOM_PATH, "edge",
+                     source - MMIX_IRQ_PCIE_MSI_BASE, 0);
 }
 
 static QTestState *mmix_intc_start(unsigned int cpus)
@@ -254,7 +267,8 @@ static void test_mmix_intc_source_namespace(void)
     };
     static const unsigned int reserved[] = {
         0, 15, 80, 1024, MMIX_IRQ_VIRTIO_BASE - 1,
-        MMIX_IRQ_VIRTIO_BASE + 32, MMIX_IRQ_PCIE_INTX_BASE + 4, 8191,
+        MMIX_IRQ_VIRTIO_BASE + 32,
+        MMIX_IRQ_PCIE_MSI_BASE + MMIX_IRQ_PCIE_MSI_COUNT, 8191,
     };
     QTestState *qts = mmix_intc_start(64);
     unsigned int i;
@@ -277,6 +291,45 @@ static void test_mmix_intc_source_namespace(void)
         g_assert_cmphex(mmix_intc_enable(qts, 0, source) & bit, ==, 0);
         g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
     }
+
+    mmix_intc_write_enable(qts, 0, MMIX_IRQ_PCIE_MSI_BASE,
+                           mmix_intc_source_bit(MMIX_IRQ_PCIE_MSI_BASE));
+    g_assert_cmphex(mmix_intc_enable(qts, 0, MMIX_IRQ_PCIE_MSI_BASE), ==,
+                    mmix_intc_source_bit(MMIX_IRQ_PCIE_MSI_BASE));
+    mmix_intc_set_irq(qts, MMIX_IRQ_PCIE_MSI_BASE, 1);
+    g_assert_cmphex(mmix_intc_pending(qts, MMIX_IRQ_PCIE_MSI_BASE), ==, 0);
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_edge_mask_claim_and_retrigger(void)
+{
+    const unsigned int source = MMIX_IRQ_PCIE_MSI_BASE;
+    uint64_t bit = mmix_intc_source_bit(source);
+    QTestState *qts = mmix_intc_start(1);
+
+    mmix_intc_inject_edge(qts, source);
+    mmix_intc_inject_edge(qts, source);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, bit);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_write_enable(qts, 0, source, bit);
+    g_assert_true(qtest_get_irq(qts, 0));
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, source);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    mmix_intc_inject_edge(qts, source);
+    mmix_intc_inject_edge(qts, source);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
+    mmix_intc_complete(qts, 0, source);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, bit);
+    g_assert_true(qtest_get_irq(qts, 0));
+
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, source);
+    mmix_intc_complete(qts, 0, source);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
 
     qtest_quit(qts);
 }
@@ -466,6 +519,80 @@ static void test_mmix_intc_reset(void)
     qtest_quit(qts);
 }
 
+static void test_mmix_intc_edge_reset(void)
+{
+    const unsigned int source = MMIX_IRQ_PCIE_MSI_BASE;
+    uint64_t bit = mmix_intc_source_bit(source);
+    QTestState *qts = mmix_intc_start(1);
+
+    mmix_intc_write_enable(qts, 0, source, bit);
+    mmix_intc_inject_edge(qts, source);
+    g_assert_cmpuint(mmix_intc_claim(qts, 0), ==, source);
+    mmix_intc_inject_edge(qts, source);
+    qtest_system_reset(qts);
+
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
+    g_assert_cmphex(mmix_intc_enable(qts, 0, source) & bit, ==, 0);
+    mmix_intc_write_enable(qts, 0, source, bit);
+    mmix_intc_complete(qts, 0, source);
+    g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
+    g_assert_false(qtest_get_irq(qts, 0));
+
+    qtest_quit(qts);
+}
+
+static void test_mmix_intc_edge_migration(void)
+{
+    const unsigned int claimed = MMIX_IRQ_PCIE_MSI_BASE;
+    const unsigned int pending = MMIX_IRQ_PCIE_MSI_BASE + 1;
+    uint64_t claimed_bit = mmix_intc_source_bit(claimed);
+    uint64_t pending_bit = mmix_intc_source_bit(pending);
+    g_autoptr(GError) error = NULL;
+    g_autofree char *tmpdir = g_dir_make_tmp("mmix-intc-XXXXXX", &error);
+    g_autofree char *socket = NULL;
+    g_autofree char *uri = NULL;
+    QTestState *from;
+    QTestState *to;
+
+    g_assert_no_error(error);
+    g_assert_nonnull(tmpdir);
+    socket = g_build_filename(tmpdir, "migration.sock", NULL);
+    uri = g_strdup_printf("unix:%s", socket);
+
+    from = mmix_intc_start(1);
+    to = qtest_initf("-machine virt -smp 1 -incoming %s", uri);
+    qtest_irq_intercept_out_named(to, MMIX_INTC_QOM_PATH,
+                                  MMIX_INTC_OUTPUT_IRQ);
+
+    mmix_intc_write_enable(from, 0, claimed, claimed_bit | pending_bit);
+    mmix_intc_inject_edge(from, claimed);
+    g_assert_cmpuint(mmix_intc_claim(from, 0), ==, claimed);
+    mmix_intc_inject_edge(from, claimed);
+    mmix_intc_inject_edge(from, pending);
+
+    qtest_qmp_assert_success(from,
+        "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
+    qtest_qmp_eventwait(from, "STOP");
+    qtest_qmp_eventwait(to, "RESUME");
+
+    g_assert_cmphex(mmix_intc_pending(to, pending) & pending_bit, ==,
+                    pending_bit);
+    g_assert_true(qtest_get_irq(to, 0));
+    g_assert_cmpuint(mmix_intc_claim(to, 0), ==, pending);
+    mmix_intc_complete(to, 0, claimed);
+    g_assert_cmphex(mmix_intc_pending(to, claimed) & claimed_bit, ==,
+                    claimed_bit);
+    mmix_intc_complete(to, 0, pending);
+    g_assert_cmpuint(mmix_intc_claim(to, 0), ==, claimed);
+    mmix_intc_complete(to, 0, claimed);
+    g_assert_false(qtest_get_irq(to, 0));
+
+    qtest_quit(from);
+    qtest_quit(to);
+    g_unlink(socket);
+    g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -476,6 +603,8 @@ int main(int argc, char **argv)
                    test_mmix_intc_source_namespace);
     qtest_add_func("/mmix/intc/claim-complete-retrigger",
                    test_mmix_intc_claim_complete_retrigger);
+    qtest_add_func("/mmix/intc/edge-mask-claim-and-retrigger",
+                   test_mmix_intc_edge_mask_claim_and_retrigger);
     qtest_add_func("/mmix/intc/lowest-source",
                    test_mmix_intc_lowest_source);
     qtest_add_func("/mmix/intc/shared-source-ownership",
@@ -488,6 +617,9 @@ int main(int argc, char **argv)
                    test_mmix_intc_invalid_access_width);
     qtest_add_func("/mmix/intc/cpu-limit", test_mmix_intc_cpu_limit);
     qtest_add_func("/mmix/intc/reset", test_mmix_intc_reset);
+    qtest_add_func("/mmix/intc/edge-reset", test_mmix_intc_edge_reset);
+    qtest_add_func("/mmix/intc/edge-migration",
+                   test_mmix_intc_edge_migration);
     qtest_add_func("/mmix/uart/mapping-and-tx",
                    test_mmix_uart_mapping_and_tx);
     qtest_add_func("/mmix/uart/rx-mask-and-deassert",

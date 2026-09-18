@@ -25,6 +25,13 @@ static uint64_t mmix_intc_bit(unsigned int source)
     return UINT64_C(1) << (source % 64);
 }
 
+static bool mmix_intc_source_edge(unsigned int source)
+{
+    return source >= MMIX_VIRT_PCIE_MSI_IRQ_BASE &&
+           source < MMIX_VIRT_PCIE_MSI_IRQ_BASE +
+                    MMIX_VIRT_PCIE_MSI_IRQ_COUNT;
+}
+
 static bool mmix_intc_source_active(unsigned int source)
 {
     if (source == MMIX_VIRT_UART0_IRQ || source == MMIX_VIRT_RTC_IRQ ||
@@ -38,6 +45,9 @@ static bool mmix_intc_source_active(unsigned int source)
     if (source >= MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE &&
         source < MMIX_VIRT_VIRTIO_MMIO_IRQ_BASE +
                  MMIX_VIRT_VIRTIO_MMIO_COUNT) {
+        return true;
+    }
+    if (mmix_intc_source_edge(source)) {
         return true;
     }
     return source >= MMIX_VIRT_PCIE_INTX_IRQ_BASE &&
@@ -69,6 +79,20 @@ static uint64_t mmix_intc_active_mask(unsigned int word)
 
     for (source = first; source < first + 64; source++) {
         if (mmix_intc_source_active(source)) {
+            mask |= mmix_intc_bit(source);
+        }
+    }
+    return mask;
+}
+
+static uint64_t mmix_intc_edge_mask(unsigned int word)
+{
+    uint64_t mask = 0;
+    unsigned int first = word * 64;
+    unsigned int source;
+
+    for (source = first; source < first + 64; source++) {
+        if (mmix_intc_source_edge(source)) {
             mask |= mmix_intc_bit(source);
         }
     }
@@ -156,9 +180,10 @@ static void mmix_intc_complete(MMIXIntcState *s, uint32_t cpu,
     word = mmix_intc_word(source);
     bit = mmix_intc_bit(source);
     s->owner[source] = MMIX_INTC_NO_OWNER;
-    if (s->input_level[word] & bit) {
+    if ((s->input_level[word] | s->edge_retrigger[word]) & bit) {
         s->pending[word] |= bit;
     }
+    s->edge_retrigger[word] &= ~bit;
     mmix_intc_update(s);
 }
 
@@ -267,7 +292,8 @@ static void mmix_intc_set_irq(void *opaque, int source, int level)
     unsigned int word;
     uint64_t bit;
 
-    if (!mmix_intc_source_active(source)) {
+    if (!mmix_intc_source_active(source) ||
+        mmix_intc_source_edge(source)) {
         return;
     }
 
@@ -285,12 +311,39 @@ static void mmix_intc_set_irq(void *opaque, int source, int level)
     mmix_intc_update(s);
 }
 
+void mmix_intc_inject_edge(MMIXIntcState *s, unsigned int source)
+{
+    unsigned int word;
+    uint64_t bit;
+
+    g_assert(mmix_intc_source_edge(source));
+
+    word = mmix_intc_word(source);
+    bit = mmix_intc_bit(source);
+    if (s->owner[source] == MMIX_INTC_NO_OWNER) {
+        s->pending[word] |= bit;
+    } else {
+        s->edge_retrigger[word] |= bit;
+    }
+    mmix_intc_update(s);
+}
+
+static void mmix_intc_set_edge_irq(void *opaque, int vector, int level)
+{
+    MMIXIntcState *s = opaque;
+
+    if (level) {
+        mmix_intc_inject_edge(s, MMIX_VIRT_PCIE_MSI_IRQ_BASE + vector);
+    }
+}
+
 static void mmix_intc_reset(DeviceState *dev)
 {
     MMIXIntcState *s = MMIX_INTC(dev);
 
     memset(s->pending, 0, sizeof(s->pending));
     memset(s->input_level, 0, sizeof(s->input_level));
+    memset(s->edge_retrigger, 0, sizeof(s->edge_retrigger));
     memset(s->owner, 0xff, sizeof(s->owner));
     memset(s->enable, 0, sizeof(s->enable));
     mmix_intc_update(s);
@@ -342,9 +395,14 @@ static int mmix_intc_post_load(void *opaque, int version_id)
 
     for (word = 0; word < MMIX_VIRT_INTC_BITMAP_WORDS; word++) {
         uint64_t active = mmix_intc_active_mask(word);
+        uint64_t edge = mmix_intc_edge_mask(word);
+        uint64_t level = active & ~edge;
 
-        if ((s->pending[word] | s->input_level[word]) & ~active ||
-            s->pending[word] & ~s->input_level[word]) {
+        if ((s->pending[word] | s->input_level[word] |
+             s->edge_retrigger[word]) & ~active ||
+            s->input_level[word] & edge ||
+            s->pending[word] & level & ~s->input_level[word] ||
+            s->edge_retrigger[word] & ~edge) {
             return -EINVAL;
         }
         for (cpu = 0; cpu < MMIX_VIRT_INTC_CONTEXT_COUNT; cpu++) {
@@ -369,6 +427,10 @@ static int mmix_intc_post_load(void *opaque, int version_id)
               mmix_intc_bit(source)))) {
             return -EINVAL;
         }
+        if ((s->edge_retrigger[mmix_intc_word(source)] &
+             mmix_intc_bit(source)) && owner == MMIX_INTC_NO_OWNER) {
+            return -EINVAL;
+        }
     }
     mmix_intc_update(s);
     return 0;
@@ -376,7 +438,7 @@ static int mmix_intc_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_mmix_intc = {
     .name = TYPE_MMIX_INTC,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .post_load = mmix_intc_post_load,
     .fields = (const VMStateField[]) {
@@ -384,6 +446,8 @@ static const VMStateDescription vmstate_mmix_intc = {
                              MMIX_VIRT_INTC_BITMAP_WORDS),
         VMSTATE_UINT64_ARRAY(input_level, MMIXIntcState,
                              MMIX_VIRT_INTC_BITMAP_WORDS),
+        VMSTATE_UINT64_ARRAY_V(edge_retrigger, MMIXIntcState,
+                               MMIX_VIRT_INTC_BITMAP_WORDS, 2),
         VMSTATE_INT16_ARRAY(owner, MMIXIntcState, MMIX_VIRT_INTC_IRQ_COUNT),
         VMSTATE_UINT64_2DARRAY(enable, MMIXIntcState,
                               MMIX_VIRT_INTC_CONTEXT_COUNT,
@@ -409,6 +473,8 @@ static void mmix_intc_instance_init(Object *obj)
     }
     qdev_init_gpio_in(DEVICE(obj), mmix_intc_set_irq,
                       MMIX_VIRT_INTC_IRQ_COUNT);
+    qdev_init_gpio_in_named(DEVICE(obj), mmix_intc_set_edge_irq, "edge",
+                            MMIX_VIRT_PCIE_MSI_IRQ_COUNT);
 }
 
 static void mmix_intc_class_init(ObjectClass *oc, const void *data)

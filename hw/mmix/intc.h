@@ -30,9 +30,12 @@ struct MMIXIntcState {
     uint32_t num_cpus;
     uint64_t pending[MMIX_VIRT_INTC_BITMAP_WORDS];
     uint64_t input_level[MMIX_VIRT_INTC_BITMAP_WORDS];
+    uint64_t edge_retrigger[MMIX_VIRT_INTC_BITMAP_WORDS];
     int16_t owner[MMIX_VIRT_INTC_IRQ_COUNT];
     uint64_t enable[MMIX_VIRT_INTC_CONTEXT_COUNT]
                    [MMIX_VIRT_INTC_BITMAP_WORDS];
 };
+
+void mmix_intc_inject_edge(MMIXIntcState *s, unsigned int source);
 
 #endif

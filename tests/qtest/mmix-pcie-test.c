@@ -38,8 +38,8 @@
 
 #define MMIX_PCIE_INTX_IRQ_BASE 6144
 #define MMIX_PCIE_INTX_IRQ_COUNT 4
-#define MMIX_PCIE_RESERVED_IRQ_BASE 6148
-#define MMIX_PCIE_RESERVED_IRQ_END 7168
+#define MMIX_PCIE_MSI_IRQ_BASE 6148
+#define MMIX_PCIE_MSI_IRQ_END 7168
 
 #define MMIX_EDU_BAR_SIZE UINT64_C(0x100000)
 #define MMIX_EDU_ID UINT32_C(0x010000ed)
@@ -908,23 +908,23 @@ static void test_mmix_pcie_shared_intx(void)
     qtest_quit(qts);
 }
 
-static void test_mmix_pcie_reserved_irq_sources(void)
+static void test_mmix_pcie_edge_irq_sources(void)
 {
-    static const unsigned int reserved[] = {
-        MMIX_PCIE_RESERVED_IRQ_BASE,
-        MMIX_PCIE_RESERVED_IRQ_END - 1,
+    static const unsigned int sources[] = {
+        MMIX_PCIE_MSI_IRQ_BASE,
+        MMIX_PCIE_MSI_IRQ_END - 1,
     };
     QTestState *qts = mmix_pcie_irq_start(1, "");
     unsigned int i;
 
-    for (i = 0; i < ARRAY_SIZE(reserved); i++) {
-        unsigned int source = reserved[i];
+    for (i = 0; i < ARRAY_SIZE(sources); i++) {
+        unsigned int source = sources[i];
         uint64_t bit = mmix_intc_source_bit(source);
 
         mmix_intc_write_enable(qts, 0, source, bit);
         qtest_set_irq_in(qts, MMIX_INTC_QOM_PATH, "unnamed-gpio-in",
                          source, 1);
-        g_assert_cmphex(mmix_intc_enable(qts, 0, source) & bit, ==, 0);
+        g_assert_cmphex(mmix_intc_enable(qts, 0, source) & bit, ==, bit);
         g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
     }
 
@@ -971,8 +971,8 @@ int main(int argc, char **argv)
                    test_mmix_pcie_intx_swizzle);
     qtest_add_func("/mmix/pcie/shared-intx",
                    test_mmix_pcie_shared_intx);
-    qtest_add_func("/mmix/pcie/reserved-irq-sources",
-                   test_mmix_pcie_reserved_irq_sources);
+    qtest_add_func("/mmix/pcie/edge-irq-sources",
+                   test_mmix_pcie_edge_irq_sources);
 
     return g_test_run();
 }
