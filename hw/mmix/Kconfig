@@ -2,20 +2,14 @@ config MMIX_VIRT
     bool
     default y
     depends on MMIX
+    imply PCI_DEVICES
+    imply TEST_DEVICES
     select DEVICE_TREE
-    select E1000_PCI
-    select E1000E_PCI_EXPRESS
-    select EDU
     select SERIAL_MM
     select FRAMEBUFFER
     select GOLDFISH_RTC
-    select IOH3420
     select MSI_NONBROKEN
-    select PCI_BRIDGE
-    select PCIE_PCI_BRIDGE
-    select PCIE_PORT
     select PCI_EXPRESS_GENERIC_BRIDGE
-    select PCI_TESTDEV
     select PFLASH_CFI01
     select VIRT_CTRL
     select VIRTIO_MMIO

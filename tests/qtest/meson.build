@@ -319,15 +319,24 @@ qtests_mmix = [
   'mmix-intc-test',
   'mmix-ipi-test',
   'mmix-msi-test',
-  'mmix-pcie-test',
-  'mmix-platform-test',
   'mmix-physical-layout-test',
   'mmix-power-test',
   'mmix-rtc-test',
   'mmix-timer-test',
   'mmix-virtio-mmio-test',
   'mmix-watchdog-test',
-]
+] + \
+  (config_all_devices.has_key('CONFIG_EDU') and
+   config_all_devices.has_key('CONFIG_E1000_PCI') and
+   config_all_devices.has_key('CONFIG_VIRTIO_RNG') ?
+   ['mmix-platform-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_EDU') and
+   config_all_devices.has_key('CONFIG_E1000_PCI') and
+   config_all_devices.has_key('CONFIG_E1000E_PCI_EXPRESS') and
+   config_all_devices.has_key('CONFIG_IOH3420') and
+   config_all_devices.has_key('CONFIG_PCIE_PCI_BRIDGE') and
+   config_all_devices.has_key('CONFIG_PCI_TESTDEV') ?
+   ['mmix-pcie-test'] : [])
 
 qos_test_ss = ss.source_set()
 qos_test_ss.add(
