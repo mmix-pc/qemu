@@ -6,6 +6,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/mmix/physical-layout.h"
+#include "hw/mmix/virt.h"
 #include "qemu/units.h"
 #include "target/mmix/addressing.h"
 
@@ -45,7 +46,10 @@ static void test_layout_constants(void)
     };
     const MMIXPhysRange *ram =
         &mmix_virt_phys_regions[MMIX_VIRT_PHYS_RAM];
+    const MMIXPhysRange *intc =
+        &mmix_virt_phys_regions[MMIX_VIRT_PHYS_INTERRUPT_CONTROLLER];
     MMIXPhysRange maximum_ram;
+    MMIXPhysRange msi;
     unsigned int i;
     unsigned int j;
 
@@ -62,6 +66,15 @@ static void test_layout_constants(void)
         &maximum_ram, MMIX_VIRT_RAM_MAX_SIZE - 1));
     g_assert_false(mmix_phys_range_contains_addr(
         &maximum_ram, MMIX_VIRT_RAM_MAX_SIZE));
+    g_assert_cmphex(MMIX_VIRT_PCIE_MMIO32_ALLOC_SIZE +
+                    MMIX_VIRT_PCIE_MSI_SIZE, ==,
+                    MMIX_VIRT_PCIE_MMIO32_SIZE);
+    g_assert_cmphex(MMIX_VIRT_PCIE_MMIO32_BUS_BASE +
+                    MMIX_VIRT_PCIE_MMIO32_ALLOC_SIZE, ==,
+                    MMIX_VIRT_PCIE_MSI_BUS_BASE);
+    g_assert_true(mmix_phys_range_init(&msi, MMIX_VIRT_PCIE_MSI_BASE,
+                                       MMIX_VIRT_PCIE_MSI_SIZE));
+    g_assert_true(mmix_phys_range_contains(intc, &msi));
 
     for (i = 0; i < MMIX_VIRT_PHYS_REGION_COUNT; i++) {
         const MMIXPhysRange *range = &mmix_virt_phys_regions[i];

@@ -17,6 +17,9 @@
 #define MMIX_PCIE_MMIO32_BASE UINT64_C(0x0001000200000000)
 #define MMIX_PCIE_MMIO32_SIZE UINT64_C(0x0000000100000000)
 #define MMIX_PCIE_MMIO32_BUS_BASE UINT64_C(0)
+#define MMIX_PCIE_MMIO32_ALLOC_SIZE UINT64_C(0x00000000ffff0000)
+#define MMIX_PCIE_MSI_BUS_BASE UINT64_C(0x00000000ffff0000)
+#define MMIX_PCIE_MSI_SIZE UINT64_C(0x0000000000010000)
 #define MMIX_PCIE_MMIO64_BASE UINT64_C(0x0001010000000000)
 #define MMIX_PCIE_MMIO64_SIZE UINT64_C(0x0000100000000000)
 #define MMIX_PCIE_MMIO64_BUS_BASE UINT64_C(0x0000010000000000)
@@ -181,11 +184,12 @@ static uint64_t mmix_edu_configure(QTestState *qts, unsigned int slot,
 
 static void mmix_testdev_configure_bar2(QTestState *qts,
                                         unsigned int slot,
-                                        uint64_t pci_address)
+                                        uint64_t pci_address,
+                                        uint64_t bar_size)
 {
     uint64_t config = mmix_pcie_ecam_address(0, slot, 0, 0);
 
-    g_assert_cmphex(pci_address % MMIX_TESTDEV_BAR_SIZE, ==, 0);
+    g_assert_cmphex(pci_address % bar_size, ==, 0);
     mmix_pcie_writel(qts, config + PCI_BASE_ADDRESS_2,
                      pci_address | PCI_BASE_ADDRESS_MEM_TYPE_64 |
                      PCI_BASE_ADDRESS_MEM_PREFETCH);
@@ -373,17 +377,47 @@ static void test_mmix_pcie_memory_mappings(void)
     g_autofree char *mtree = qtest_hmp(qts, "info mtree -f");
 
     mmix_assert_mapping(mtree, MMIX_PCIE_MMIO32_BASE,
-                        MMIX_PCIE_MMIO32_SIZE,
+                        MMIX_PCIE_MMIO32_ALLOC_SIZE,
                         MMIX_PCIE_MMIO32_BUS_BASE);
     mmix_assert_mapping(mtree, MMIX_PCIE_MMIO64_BASE,
                         MMIX_PCIE_MMIO64_SIZE,
                         MMIX_PCIE_MMIO64_BUS_BASE);
     mmix_assert_unassigned(qts, MMIX_PCIE_MMIO32_BASE - 8);
     mmix_assert_unassigned(qts,
+                           MMIX_PCIE_MMIO32_BASE +
+                           MMIX_PCIE_MMIO32_ALLOC_SIZE);
+    mmix_assert_unassigned(qts,
                            MMIX_PCIE_MMIO32_BASE + MMIX_PCIE_MMIO32_SIZE);
     mmix_assert_unassigned(qts, MMIX_PCIE_MMIO64_BASE - 8);
     mmix_assert_unassigned(qts,
                            MMIX_PCIE_MMIO64_BASE + MMIX_PCIE_MMIO64_SIZE);
+    qtest_quit(qts);
+}
+
+static void test_mmix_pcie_msi_aperture_reserved(void)
+{
+    const uint64_t config = mmix_pcie_ecam_address(0, 1, 0, 0);
+    const uint64_t valid_pci = MMIX_PCIE_MSI_BUS_BASE -
+                               MMIX_PCIE_MSI_SIZE;
+    const uint64_t valid_cpu = MMIX_PCIE_MMIO32_BASE + valid_pci;
+    const uint64_t reserved_cpu = MMIX_PCIE_MMIO32_BASE +
+                                  MMIX_PCIE_MSI_BUS_BASE;
+    const uint64_t marker = UINT64_C(0x1122334455667788);
+    QTestState *qts = qtest_init(
+        "-machine virt "
+        "-device pci-testdev,bus=pcie.0,addr=1.0,membar=64K,"
+        "membar-backed=on");
+
+    mmix_testdev_configure_bar2(qts, 1, valid_pci, MMIX_PCIE_MSI_SIZE);
+    qtest_writeq(qts, valid_cpu, marker);
+    g_assert_cmphex(qtest_readq(qts, valid_cpu), ==, marker);
+
+    mmix_pcie_writew(qts, config + PCI_COMMAND, 0);
+    mmix_testdev_configure_bar2(qts, 1, MMIX_PCIE_MSI_BUS_BASE,
+                                MMIX_PCIE_MSI_SIZE);
+    mmix_assert_unassigned(qts, reserved_cpu);
+    mmix_assert_unassigned(qts,
+                           reserved_cpu + MMIX_PCIE_MSI_SIZE - 8);
     qtest_quit(qts);
 }
 
@@ -529,8 +563,10 @@ static void test_mmix_pcie_bar_access(void)
                         qts, testdev6 + PCI_BASE_ADDRESS_3), ==,
                     UINT32_MAX);
 
-    mmix_testdev_configure_bar2(qts, 6, test_pci32);
-    mmix_testdev_configure_bar2(qts, 7, test_pci64);
+    mmix_testdev_configure_bar2(qts, 6, test_pci32,
+                                MMIX_TESTDEV_BAR_SIZE);
+    mmix_testdev_configure_bar2(qts, 7, test_pci64,
+                                MMIX_TESTDEV_BAR_SIZE);
     qtest_writeq(qts, test_cpu32, marker32);
     qtest_writeq(qts, test_cpu64, marker64);
     g_assert_cmphex(qtest_readq(qts, test_cpu32), ==, marker32);
@@ -540,7 +576,8 @@ static void test_mmix_pcie_bar_access(void)
     mmix_pcie_writew(qts, testdev7 + PCI_COMMAND, 0);
     mmix_assert_unassigned(qts, test_cpu64);
     mmix_testdev_configure_bar2(
-        qts, 7, MMIX_PCIE_MMIO64_BUS_BASE + MMIX_PCIE_MMIO64_SIZE);
+        qts, 7, MMIX_PCIE_MMIO64_BUS_BASE + MMIX_PCIE_MMIO64_SIZE,
+        MMIX_TESTDEV_BAR_SIZE);
     mmix_assert_unassigned(qts,
                            MMIX_PCIE_MMIO64_BASE + MMIX_PCIE_MMIO64_SIZE);
     qtest_quit(qts);
@@ -908,6 +945,8 @@ int main(int argc, char **argv)
                    test_mmix_pcie_msi_unsupported);
     qtest_add_func("/mmix/pcie/memory-mappings",
                    test_mmix_pcie_memory_mappings);
+    qtest_add_func("/mmix/pcie/msi-aperture-reserved",
+                   test_mmix_pcie_msi_aperture_reserved);
     qtest_add_func("/mmix/pcie/ecam-boundaries",
                    test_mmix_pcie_ecam_boundaries);
     qtest_add_func("/mmix/pcie/device-enumeration",
