@@ -40,6 +40,7 @@ typedef struct FirmwareBootInputs {
     FirmwareFile command_line;
     FirmwareRange ram;
     FirmwareRange reserved[MMIX_MAX_RESERVED_RANGES];
+    uint64_t kernel_entry;
     uint32_t reserved_count;
     uint16_t cpu_count;
 } FirmwareBootInputs;
@@ -52,8 +53,10 @@ _Static_assert(sizeof(uint64_t) == 8, "unexpected MMIX octa size");
 bool firmware_discover_boot_inputs(FirmwareBootInputs *inputs,
                                    const char **error);
 bool firmware_validate_fdt(FirmwareBootInputs *inputs, const char **error);
+bool firmware_load_elf(FirmwareBootInputs *inputs, const char **error);
 void firmware_fw_cfg_select(uint16_t selector);
 uint8_t firmware_fw_cfg_read8(void);
+void firmware_physical_write8(uint64_t address, uint8_t value);
 void *memset(void *destination, int value, unsigned long size);
 
 #endif

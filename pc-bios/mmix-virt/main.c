@@ -72,8 +72,12 @@ __attribute__((noreturn)) void mmix_firmware_main(void)
         uart_putc('\n');
     } else if (!inputs.kernel.present) {
         uart_puts("MMIX firmware: no kernel payload\n");
+    } else if (!firmware_load_elf(&inputs, &error)) {
+        uart_puts("MMIX firmware: ");
+        uart_puts(error);
+        uart_putc('\n');
     } else {
-        uart_puts("MMIX firmware: platform inputs ready\n");
+        uart_puts("MMIX firmware: kernel loaded\n");
     }
     firmware_panic();
 }

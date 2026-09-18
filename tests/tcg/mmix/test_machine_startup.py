@@ -196,8 +196,18 @@ def test_in_tree_firmware_discovers_platform_without_kernel(qemu):
     assert result.stdout == b"MMIX firmware: no kernel payload\n"
 
 
-def test_in_tree_firmware_discovers_boot_inputs(qemu):
-    payload = FIRMWARE_DATA / "mmix-virt-kernel.bin"
+def test_in_tree_firmware_loads_linux_elf(qemu, workdir):
+    physical_address = 0x100000
+    virtual_address = physical_address | (1 << 63)
+    payload = workdir / "firmware-linux.elf"
+
+    payload.write_bytes(elf64_image(
+        physical_address,
+        insn(JMP, 0, 0, 0),
+        mem_size=8,
+        entry=virtual_address,
+        virtual_address=virtual_address,
+    ))
     result = _run_in_tree_firmware(
         qemu,
         "-kernel", payload,
@@ -206,7 +216,7 @@ def test_in_tree_firmware_discovers_boot_inputs(qemu):
     )
 
     assert result.returncode == 0
-    assert result.stdout == b"MMIX firmware: platform inputs ready\n"
+    assert result.stdout == b"MMIX firmware: kernel loaded\n"
 
 
 @pytest.mark.parametrize(
@@ -214,6 +224,8 @@ def test_in_tree_firmware_discovers_boot_inputs(qemu):
     (
         ("empty-kernel", "opt/mmix/kernel", b"",
          b"MMIX firmware: invalid kernel size\n"),
+        ("truncated-elf", "opt/mmix/kernel", b"\x7fELF",
+         b"MMIX firmware: truncated MMIX ELF header\n"),
         ("unterminated-command-line", "opt/mmix/cmdline", b"bad",
          b"MMIX firmware: unterminated command line\n"),
     ),

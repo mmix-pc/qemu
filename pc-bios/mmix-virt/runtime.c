@@ -6,6 +6,14 @@
 
 #include "firmware.h"
 
+#ifndef MMIX_FIRMWARE_TEST
+void firmware_physical_write8(uint64_t address, uint8_t value)
+{
+    /* Volatile preserves each guest RAM transaction. */
+    *(volatile uint8_t *)address = value;
+}
+#endif
+
 void *memset(void *destination, int value, unsigned long size)
 {
     /*

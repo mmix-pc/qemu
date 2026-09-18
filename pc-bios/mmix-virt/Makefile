@@ -11,9 +11,11 @@ HOST_CC ?= cc
 TARGET = $(BUILD_DIR)/mmix-virt.bin
 ELF = $(BUILD_DIR)/mmix-virt.elf
 OBJECTS = $(BUILD_DIR)/start.o $(BUILD_DIR)/main.o \
-	$(BUILD_DIR)/fw-cfg.o $(BUILD_DIR)/fdt.o $(BUILD_DIR)/runtime.o
+	$(BUILD_DIR)/fw-cfg.o $(BUILD_DIR)/fdt.o $(BUILD_DIR)/elf.o \
+	$(BUILD_DIR)/runtime.o
 CHECKED_IN_IMAGE = ../mmix-virt.bin
 DISCOVERY_TEST = $(BUILD_DIR)/test-discovery
+ELF_TEST = $(BUILD_DIR)/test-elf
 
 COMMON_FLAGS = --target=mmix-unknown-elf -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-pic
@@ -43,9 +45,13 @@ $(TARGET): $(ELF)
 $(DISCOVERY_TEST): test-discovery.c fw-cfg.c fdt.c firmware.h | $(BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ test-discovery.c fw-cfg.c fdt.c
 
-check: $(TARGET) $(DISCOVERY_TEST)
+$(ELF_TEST): test-elf.c elf.c firmware.h | $(BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ test-elf.c elf.c
+
+check: $(TARGET) $(DISCOVERY_TEST) $(ELF_TEST)
 	cmp $(TARGET) $(CHECKED_IN_IMAGE)
 	$(DISCOVERY_TEST)
+	$(ELF_TEST)
 
 update: $(TARGET)
 	install -m 0644 $(TARGET) $(CHECKED_IN_IMAGE)
