@@ -189,10 +189,10 @@ typedef struct MMIXSaveRestartState {
 
 typedef struct MMIXPopRestartState {
     uint64_t output;
+    uint64_t base;
     uint32_t x;
     uint32_t yz;
     uint32_t old_rl;
-    uint32_t base;
     uint32_t saved;
     bool frame_ready;
     bool active;

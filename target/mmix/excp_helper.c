@@ -172,6 +172,10 @@ static void mmix_trap_restart_restore_helper_state(
     const MMIXSaveUnsaveTrapState *save_unsave = restart->save_unsave;
 
     env->pop_restart = restart->pop_restart;
+    if (restart->register_stack_rebased && env->pop_restart.active) {
+        /* Preserve partial POP progress in the UNSAVE-restored window. */
+        env->pop_restart.base = env->sregs[MMIX_SREG_RO] >> 3;
+    }
 
     if (save_unsave == NULL) {
         return;
@@ -418,6 +422,7 @@ static bool mmix_trap_restart_select(CPUMMIXState *env, uint64_t sequence,
 {
     CPUState *cs;
     uint64_t rv = env->sregs[MMIX_SREG_RV];
+    uint64_t pop_base = env->sregs[MMIX_SREG_RO] >> 3;
     MMIXCPU *selected_cpu = NULL;
     unsigned int selected_index = 0;
     uint64_t selected_sequence = 0;
@@ -442,12 +447,15 @@ static bool mmix_trap_restart_select(CPUMMIXState *env, uint64_t sequence,
             MMIXTrapRestartState *restart = &g_array_index(
                 stack, MMIXTrapRestartState, i - 1);
 
+            /* Untagged contexts still identify a suspended POP by rO. */
             if (!mmix_trap_restart_matches(restart, where, exec, y) ||
                 restart->forced_translation != forced_translation ||
                 (forced_translation && restart->trap_rv != rv) ||
                 (forced_translation &&
                  (access_type == MMU_INST_FETCH) !=
                  (restart->forced_translation_access == MMU_INST_FETCH)) ||
+                (sequence == 0 && restart->pop_restart.active &&
+                 restart->pop_restart.base != pop_base) ||
                 (sequence != 0 ? restart->sequence != sequence :
                  restart->sequence <= selected_sequence)) {
                 continue;
