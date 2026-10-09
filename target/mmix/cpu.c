@@ -191,11 +191,8 @@ void mmix_cpu_set_interrupt_controller(CPUState *cs, int level)
 {
     run_on_cpu_data data = RUN_ON_CPU_HOST_INT(level);
 
-    if (qemu_cpu_is_self(cs)) {
-        mmix_cpu_set_interrupt_controller_work(cs, data);
-    } else {
-        async_run_on_cpu(cs, mmix_cpu_set_interrupt_controller_work, data);
-    }
+    /* Preserve provider order across local and remote level changes. */
+    async_run_on_cpu(cs, mmix_cpu_set_interrupt_controller_work, data);
 }
 
 static void mmix_cpu_set_ipi_work(CPUState *cs, run_on_cpu_data data)
@@ -214,11 +211,8 @@ void mmix_cpu_set_ipi(CPUState *cs, int level)
 {
     run_on_cpu_data data = RUN_ON_CPU_HOST_INT(level);
 
-    if (qemu_cpu_is_self(cs)) {
-        mmix_cpu_set_ipi_work(cs, data);
-    } else {
-        async_run_on_cpu(cs, mmix_cpu_set_ipi_work, data);
-    }
+    /* Preserve provider order across local and remote level changes. */
+    async_run_on_cpu(cs, mmix_cpu_set_ipi_work, data);
 }
 
 static void mmix_cpu_set_ipi_gpio(void *opaque, int irq, int level)
