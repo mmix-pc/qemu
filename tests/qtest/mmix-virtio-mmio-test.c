@@ -54,6 +54,21 @@ static uint64_t mmix_virtio_slot(unsigned int slot)
     return MMIX_VIRTIO_BASE + slot * MMIX_VIRTIO_STRIDE;
 }
 
+static uint32_t mmix_virtio_readl(QTestState *qts, uint64_t address)
+{
+    uint32_t value;
+
+    qtest_memread(qts, address, &value, sizeof(value));
+    return le32_to_cpu(value);
+}
+
+static void mmix_virtio_writel(QTestState *qts, uint64_t address,
+                               uint32_t value)
+{
+    value = cpu_to_le32(value);
+    qtest_memwrite(qts, address, &value, sizeof(value));
+}
+
 static char *mmix_qom_child_by_type(QTestState *qts, const char *path,
                                     const char *type)
 {
@@ -166,10 +181,12 @@ static void mmix_virtio_blk_init(QTestState *qts, unsigned int slot,
 
     qvirtio_mmio_init_device(dev, qts, mmix_virtio_slot(slot),
                              MMIX_VIRTIO_PAGE_SIZE);
+    g_assert_cmpuint(dev->version, ==, 2);
     g_assert_cmpuint(dev->vdev.device_type, ==, VIRTIO_ID_BLOCK);
     qvirtio_start_device(&dev->vdev);
 
     features = qvirtio_get_features(&dev->vdev);
+    g_assert_true(features & (UINT64_C(1) << VIRTIO_F_VERSION_1));
     features &= ~(QVIRTIO_F_BAD_FEATURE |
                   (1ULL << VIRTIO_RING_F_INDIRECT_DESC) |
                   (1ULL << VIRTIO_RING_F_EVENT_IDX) |
@@ -210,8 +227,8 @@ static void mmix_virtio_wait_interrupt(QTestState *qts, unsigned int slot)
 {
     gint64 deadline = g_get_monotonic_time() + MMIX_VIRTIO_TIMEOUT_US;
 
-    while (!(qtest_readl(qts, mmix_virtio_slot(slot) +
-                         QVIRTIO_MMIO_INTERRUPT_STATUS) & 1)) {
+    while (!(mmix_virtio_readl(qts, mmix_virtio_slot(slot) +
+                               QVIRTIO_MMIO_INTERRUPT_STATUS) & 1)) {
         g_assert_cmpint(g_get_monotonic_time(), <, deadline);
     }
 }
@@ -238,39 +255,45 @@ static void test_mmix_virtio_slots_and_boundaries(void)
     unsigned int i;
 
     for (slot = 0; slot < MMIX_VIRTIO_ACTIVE_SLOTS; slot++) {
-        g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(slot) +
-                                    QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+        g_assert_cmphex(mmix_virtio_readl(qts, mmix_virtio_slot(slot) +
+                                         QVIRTIO_MMIO_DEVICE_ID), ==, 0);
     }
 
     for (i = 0; i < ARRAY_SIZE(active); i++) {
         uint64_t base = mmix_virtio_slot(active[i]);
 
-        g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_MAGIC_VALUE), ==,
+        g_assert_cmphex(mmix_virtio_readl(
+                            qts, base + QVIRTIO_MMIO_MAGIC_VALUE), ==,
                         0x74726976);
-        g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_VERSION), ==, 1);
-        g_assert_cmphex(qtest_readl(qts, base + QVIRTIO_MMIO_VENDOR_ID), ==,
+        g_assert_cmphex(mmix_virtio_readl(
+                            qts, base + QVIRTIO_MMIO_VERSION), ==, 2);
+        g_assert_cmphex(mmix_virtio_readl(
+                            qts, base + QVIRTIO_MMIO_VENDOR_ID), ==,
                         0x554d4551);
     }
 
-    qtest_writel(qts, mmix_virtio_slot(0) + MMIX_VIRTIO_REGISTER_SIZE,
-                 0x5a5aa5a5);
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(0) +
-                                MMIX_VIRTIO_REGISTER_SIZE), !=, 0x5a5aa5a5);
+    mmix_virtio_writel(qts,
+                       mmix_virtio_slot(0) + MMIX_VIRTIO_REGISTER_SIZE,
+                       0x5a5aa5a5);
+    g_assert_cmphex(mmix_virtio_readl(
+                        qts, mmix_virtio_slot(0) +
+                             MMIX_VIRTIO_REGISTER_SIZE), !=, 0x5a5aa5a5);
     qtest_writeb(qts, mmix_virtio_slot(31) + MMIX_VIRTIO_STRIDE - 1, 0x5a);
     g_assert_cmphex(qtest_readb(qts, mmix_virtio_slot(31) +
                                 MMIX_VIRTIO_STRIDE - 1), !=, 0x5a);
 
     for (slot = MMIX_VIRTIO_ACTIVE_SLOTS;
          slot < MMIX_VIRTIO_SLOT_CAPACITY; slot++) {
-        g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(slot) +
-                                    QVIRTIO_MMIO_MAGIC_VALUE), !=,
+        g_assert_cmphex(mmix_virtio_readl(
+                            qts, mmix_virtio_slot(slot) +
+                                 QVIRTIO_MMIO_MAGIC_VALUE), !=,
                         0x74726976);
     }
     for (slot = 0; slot < MMIX_DISCOVERABLE_SLOT_CAPACITY; slot++) {
         uint64_t base = MMIX_DISCOVERABLE_BASE + slot * MMIX_VIRTIO_STRIDE;
 
-        g_assert_cmphex(qtest_readl(qts, base +
-                                    QVIRTIO_MMIO_MAGIC_VALUE), !=,
+        g_assert_cmphex(mmix_virtio_readl(
+                            qts, base + QVIRTIO_MMIO_MAGIC_VALUE), !=,
                         0x74726976);
     }
 
@@ -290,14 +313,14 @@ static void mmix_test_virtio_attachment_order(bool rng_first)
         "-object rng-builtin,id=rng0 %s", devices);
     QTestState *qts = qtest_init(args);
 
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(0) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==,
+    g_assert_cmphex(mmix_virtio_readl(qts, mmix_virtio_slot(0) +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
                     rng_first ? VIRTIO_ID_RNG : VIRTIO_ID_BLOCK);
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(1) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==,
+    g_assert_cmphex(mmix_virtio_readl(qts, mmix_virtio_slot(1) +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
                     rng_first ? VIRTIO_ID_BLOCK : VIRTIO_ID_RNG);
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(2) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(qts, mmix_virtio_slot(2) +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==, 0);
     mmix_assert_transport_owner(qts, 0, rng_first ?
                                 "virtio-rng-device" :
                                 "virtio-blk-device");
@@ -332,11 +355,11 @@ static void test_mmix_virtio_gpu_realization(void)
     qts = qtest_init("-machine virt -device virtio-gpu-device,id=gpu0 "
                      "-display none");
 
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(0) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==,
+    g_assert_cmphex(mmix_virtio_readl(qts, mmix_virtio_slot(0) +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
                     VIRTIO_ID_GPU);
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_slot(1) +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(qts, mmix_virtio_slot(1) +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==, 0);
     mmix_assert_transport_owner(qts, 0, "virtio-gpu-device");
     mmix_assert_transport_owner(qts, 1, NULL);
 
@@ -389,21 +412,24 @@ static void test_mmix_virtio_reset_state(void)
         "-machine virt -object rng-builtin,id=rng0 "
         "-device virtio-rng-device,rng=rng0");
 
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
-    qtest_writel(qts, MMIX_VIRTIO_BASE + QVIRTIO_MMIO_DEVICE_STATUS,
-                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_STATUS), ==,
+    g_assert_cmphex(mmix_virtio_readl(qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
+                    VIRTIO_ID_RNG);
+    mmix_virtio_writel(qts, MMIX_VIRTIO_BASE +
+                       QVIRTIO_MMIO_DEVICE_STATUS,
+                       VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    g_assert_cmphex(mmix_virtio_readl(qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_STATUS), ==,
                     VIRTIO_CONFIG_S_ACKNOWLEDGE);
 
     qtest_system_reset(qts);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_STATUS), ==, 0);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
+                    VIRTIO_ID_RNG);
+    g_assert_cmphex(mmix_virtio_readl(qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_STATUS), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
     mmix_assert_transport_owner(qts, 0, "virtio-rng-device");
 
     qtest_quit(qts);
@@ -431,17 +457,19 @@ static void test_mmix_virtio_migration_state(void)
     from = qtest_init(args);
     to = qtest_init(incoming);
 
-    qtest_writel(from, MMIX_VIRTIO_BASE + QVIRTIO_MMIO_DEVICE_STATUS,
-                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    mmix_virtio_writel(from, MMIX_VIRTIO_BASE +
+                       QVIRTIO_MMIO_DEVICE_STATUS,
+                       VIRTIO_CONFIG_S_ACKNOWLEDGE);
     qtest_qmp_assert_success(from,
         "{ 'execute': 'migrate', 'arguments': { 'uri': %s } }", uri);
     qtest_qmp_eventwait(from, "STOP");
     qtest_qmp_eventwait(to, "RESUME");
 
-    g_assert_cmphex(qtest_readl(to, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_RNG);
-    g_assert_cmphex(qtest_readl(to, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_STATUS), ==,
+    g_assert_cmphex(mmix_virtio_readl(to, MMIX_VIRTIO_BASE +
+                                     QVIRTIO_MMIO_DEVICE_ID), ==,
+                    VIRTIO_ID_RNG);
+    g_assert_cmphex(mmix_virtio_readl(to, MMIX_VIRTIO_BASE +
+                                     QVIRTIO_MMIO_DEVICE_STATUS), ==,
                     VIRTIO_CONFIG_S_ACKNOWLEDGE);
     mmix_assert_transport_owner(to, 0, "virtio-rng-device");
 
@@ -478,8 +506,8 @@ static void test_mmix_virtio_first_slot_irq_and_dma(void)
     g_assert_cmpuint(used_head, ==, free_head);
     mmix_virtio_check_dma(qts, req_addr);
 
-    qtest_writel(qts, mmix_virtio_slot(0) +
-                 QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_virtio_writel(qts, mmix_virtio_slot(0) +
+                       QVIRTIO_MMIO_INTERRUPT_ACK, 1);
     mmix_intc_complete(qts, 0, source);
     g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
     g_assert_false(qtest_get_irq(qts, 0));
@@ -524,8 +552,8 @@ static void test_mmix_virtio_shared_irq_retrigger(void)
     g_assert_cmpuint(used_head, ==, free_head);
     mmix_virtio_check_dma(qts, req_addr);
 
-    qtest_writel(qts, mmix_virtio_slot(0) +
-                 QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_virtio_writel(qts, mmix_virtio_slot(0) +
+                       QVIRTIO_MMIO_INTERRUPT_ACK, 1);
     mmix_intc_complete(qts, 0, source);
     g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
     g_assert_false(qtest_get_irq(qts, 0));
@@ -563,8 +591,8 @@ static void test_mmix_virtio_last_slot_irq_and_dma(void)
     g_assert_cmpuint(used_head, ==, free_head);
     mmix_virtio_check_dma(qts, req_addr);
 
-    qtest_writel(qts, mmix_virtio_slot(slot) +
-                 QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_virtio_writel(qts, mmix_virtio_slot(slot) +
+                       QVIRTIO_MMIO_INTERRUPT_ACK, 1);
     mmix_intc_complete(qts, 0, source);
     g_assert_cmphex(mmix_intc_pending(qts, source) & bit, ==, 0);
     g_assert_false(qtest_get_irq(qts, 0));

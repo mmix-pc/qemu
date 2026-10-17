@@ -39,6 +39,14 @@ enum {
     MMIX_PCIE_PIN_COUNT = 4,
 };
 
+static uint32_t mmix_readl_le(QTestState *qts, uint64_t address)
+{
+    uint8_t bytes[sizeof(uint32_t)];
+
+    qtest_memread(qts, address, bytes, sizeof(bytes));
+    return ldl_le_p(bytes);
+}
+
 #define MMIX_UART_BASE UINT64_C(0x0001000010000000)
 #define MMIX_RTC_BASE UINT64_C(0x0001000010010000)
 #define MMIX_WATCHDOG_REFRESH_BASE UINT64_C(0x0001000010020000)
@@ -689,8 +697,8 @@ static void assert_active_devices(QTestState *qts, const void *fdt,
         assert_range(fdt, path, base, 0x200);
         assert_u32(fdt, path, "interrupts", MMIX_VIRTIO_IRQ_BASE + slot);
         assert_u32(fdt, path, "interrupt-parent", intc_phandle);
-        g_assert_cmphex(qtest_readl(qts, base), ==, 0x74726976);
-        g_assert_cmphex(qtest_readl(qts, base + VIRTIO_MMIO_DEVICE_ID), ==,
+        g_assert_cmphex(mmix_readl_le(qts, base), ==, 0x74726976);
+        g_assert_cmphex(mmix_readl_le(qts, base + VIRTIO_MMIO_DEVICE_ID), ==,
                         slot == 0 ? first_virtio_device_id : 0);
     }
     assert_compatible_count(fdt, "virtio,mmio", MMIX_VIRTIO_COUNT);

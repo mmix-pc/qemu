@@ -134,8 +134,8 @@ static void test_mmix_power_reset(void)
         mmix_writel_le(qts, MMIX_RTC_BASE + MMIX_RTC_IRQ_ENABLED, 1);
         mmix_writel_le(qts, MMIX_WATCHDOG_CONTROL_BASE + MMIX_WATCHDOG_WCS,
                        MMIX_WATCHDOG_WCS_EN);
-        qtest_writel(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
-                     VIRTIO_CONFIG_S_ACKNOWLEDGE);
+        mmix_writel_le(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
+                       VIRTIO_CONFIG_S_ACKNOWLEDGE);
 
         mmix_power_writel(qts, MMIX_POWER_COMMAND, MMIX_POWER_COMMAND_RESET);
         event = qtest_qmp_eventwait_ref(qts, "RESET");
@@ -149,11 +149,11 @@ static void test_mmix_power_reset(void)
         g_assert_cmphex(mmix_readl_le(
                             qts, MMIX_WATCHDOG_CONTROL_BASE +
                                  MMIX_WATCHDOG_WCS), ==, 0);
-        g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                    VIRTIO_MMIO_DEVICE_ID), ==,
+        g_assert_cmphex(mmix_readl_le(qts, MMIX_VIRTIO_BASE +
+                                      VIRTIO_MMIO_DEVICE_ID), ==,
                         VIRTIO_ID_RNG);
-        g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                    VIRTIO_MMIO_STATUS), ==, 0);
+        g_assert_cmphex(mmix_readl_le(qts, MMIX_VIRTIO_BASE +
+                                      VIRTIO_MMIO_STATUS), ==, 0);
     }
 
     qtest_quit(qts);

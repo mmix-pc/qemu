@@ -1879,6 +1879,7 @@ static void mmix_virt_init(MachineState *machine)
         DeviceState *virtio_mmio = qdev_new(TYPE_VIRTIO_MMIO);
 
         object_property_add_child(OBJECT(machine), name, OBJECT(virtio_mmio));
+        qdev_prop_set_bit(virtio_mmio, "force-legacy", false);
         sysbus_realize_and_unref(SYS_BUS_DEVICE(virtio_mmio), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(virtio_mmio), 0,
                         MMIX_VIRT_VIRTIO_MMIO_BASE +

@@ -278,8 +278,8 @@ static void mmix_assert_active_devices(QTestState *qts, unsigned int cpus)
                      MMIX_INTC_SOURCE_COUNT_VALUE);
     g_assert_cmpuint(qtest_readq(qts, MMIX_INTC_BASE +
                                  MMIX_INTC_CONTEXT_COUNT), ==, cpus);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_VIRTIO_BASE +
+                                  VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
     g_assert_cmphex(mmix_readl_le(qts, MMIX_RTC_BASE +
                                       MMIX_RTC_IRQ_ENABLED), ==, 0);
     g_assert_cmphex(mmix_readl_le(qts, MMIX_WATCHDOG_REFRESH_BASE +
@@ -440,9 +440,9 @@ static void test_mmix_platform_slot_boundaries(void)
         qts, mmix_context_address(MMIX_INTC_CONTEXT_BASE,
                                   MMIX_CONTEXT_CAPACITY));
 
-    g_assert_cmphex(qtest_readl(qts, mmix_virtio_address(0) +
-                                VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
-    g_assert_cmphex(qtest_readl(
+    g_assert_cmphex(mmix_readl_le(qts, mmix_virtio_address(0) +
+                                  VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
+    g_assert_cmphex(mmix_readl_le(
                         qts, mmix_virtio_address(
                                  MMIX_VIRTIO_ACTIVE_SLOTS - 1) +
                              VIRTIO_MMIO_MAGIC_VALUE), ==, 0x74726976);
@@ -771,8 +771,8 @@ static void mmix_populated_program_state(QTestState *qts,
     qtest_writeq(qts, MMIX_IPI_BASE + MMIX_IPI_SEND,
                  UINT64_C(1) << target_cpu);
     qtest_writeq(qts, irq_enable, irq_bit);
-    qtest_writel(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
-                 VIRTIO_CONFIG_S_ACKNOWLEDGE);
+    mmix_writel_le(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS,
+                   VIRTIO_CONFIG_S_ACKNOWLEDGE);
     mmix_writel_le(qts, bar + MMIX_EDU_IRQ_RAISE, 1);
 
     g_assert_cmphex(qtest_readb(qts, MMIX_UART_BASE + MMIX_UART_SCRATCH), ==,
@@ -823,7 +823,8 @@ static void mmix_populated_assert_preserved(QTestState *qts,
                     MMIX_TIMER_CONTROL_ENABLE);
     g_assert_cmphex(qtest_readq(qts, ipi + MMIX_IPI_CONTEXT_STATUS), ==, 1);
     g_assert_cmphex(qtest_readq(qts, irq_enable), ==, irq_bit);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS),
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_VIRTIO_BASE +
+                                  VIRTIO_MMIO_STATUS),
                     ==, VIRTIO_CONFIG_S_ACKNOWLEDGE);
     g_assert_cmphex(qtest_readq(qts, MMIX_POPULATED_DEST_RAM), ==,
                     MMIX_POPULATED_RAM_MARKER);
@@ -858,7 +859,8 @@ static void test_mmix_platform_populated_reset(void)
                         mmix_intc_source_address(
                             MMIX_INTC_BASE + MMIX_INTC_PENDING_BASE,
                             MMIX_PCIE_INTX_IRQ)) & irq_bit, ==, 0);
-    g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE + VIRTIO_MMIO_STATUS),
+    g_assert_cmphex(mmix_readl_le(qts, MMIX_VIRTIO_BASE +
+                                  VIRTIO_MMIO_STATUS),
                     ==, 0);
     g_assert_cmphex(mmix_readl_le(
                         qts, mmix_pcie_ecam_address(1, PCI_BASE_ADDRESS_0)) &

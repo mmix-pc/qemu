@@ -94,12 +94,27 @@ static void mmix_intc_complete(QTestState *qts, unsigned int source)
     qtest_writeq(qts, mmix_intc_context_reg(MMIX_INTC_COMPLETE), source);
 }
 
+static uint32_t mmix_virtio_readl(QTestState *qts, uint64_t address)
+{
+    uint32_t value;
+
+    qtest_memread(qts, address, &value, sizeof(value));
+    return le32_to_cpu(value);
+}
+
+static void mmix_virtio_writel(QTestState *qts, uint64_t address,
+                               uint32_t value)
+{
+    value = cpu_to_le32(value);
+    qtest_memwrite(qts, address, &value, sizeof(value));
+}
+
 static void mmix_virtio_gpu_wait_irq(MMIXVirtioGPU *gpu)
 {
     gint64 deadline = g_get_monotonic_time() + MMIX_VIRTIO_TIMEOUT_US;
 
-    while (!(qtest_readl(gpu->qts, MMIX_VIRTIO_BASE +
-                         QVIRTIO_MMIO_INTERRUPT_STATUS) & 1)) {
+    while (!(mmix_virtio_readl(gpu->qts, MMIX_VIRTIO_BASE +
+                               QVIRTIO_MMIO_INTERRUPT_STATUS) & 1)) {
         g_assert_cmpint(g_get_monotonic_time(), <, deadline);
     }
 }
@@ -123,8 +138,7 @@ static void mmix_virtio_gpu_wait_used(MMIXVirtioGPU *gpu, QVirtQueue *vq,
 static uint32_t mmix_virtio_gpu_config_readl(MMIXVirtioGPU *gpu,
                                              uint64_t offset)
 {
-    /* Legacy VirtIO-MMIO exposes device configuration in guest byte order. */
-    return be32_to_cpu(qvirtio_config_readl(&gpu->device.vdev, offset));
+    return qvirtio_config_readl(&gpu->device.vdev, offset);
 }
 
 static void mmix_virtio_gpu_initialize(MMIXVirtioGPU *gpu)
@@ -133,10 +147,12 @@ static void mmix_virtio_gpu_initialize(MMIXVirtioGPU *gpu)
 
     qvirtio_mmio_init_device(&gpu->device, gpu->qts, MMIX_VIRTIO_BASE,
                              MMIX_VIRTIO_PAGE_SIZE);
+    g_assert_cmpuint(gpu->device.version, ==, 2);
     g_assert_cmpuint(gpu->device.vdev.device_type, ==, VIRTIO_ID_GPU);
 
     qvirtio_start_device(&gpu->device.vdev);
     features = qvirtio_get_features(&gpu->device.vdev);
+    g_assert_true(features & (UINT64_C(1) << VIRTIO_F_VERSION_1));
     g_assert_true(features & (UINT64_C(1) << VIRTIO_GPU_F_EDID));
     features &= ~(QVIRTIO_F_BAD_FEATURE |
                   (UINT64_C(1) << VIRTIO_RING_F_INDIRECT_DESC) |
@@ -188,8 +204,8 @@ static void mmix_virtio_gpu_finish_irq(MMIXVirtioGPU *gpu)
     g_assert_cmphex(mmix_intc_pending(gpu->qts, source) & source_bit, ==,
                     source_bit);
     g_assert_cmpuint(mmix_intc_claim(gpu->qts), ==, source);
-    qtest_writel(gpu->qts, MMIX_VIRTIO_BASE +
-                 QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_virtio_writel(gpu->qts, MMIX_VIRTIO_BASE +
+                       QVIRTIO_MMIO_INTERRUPT_ACK, 1);
     mmix_intc_complete(gpu->qts, source);
     g_assert_cmphex(mmix_intc_pending(gpu->qts, source) & source_bit, ==, 0);
     g_assert_false(qtest_get_irq(gpu->qts, 0));
@@ -538,8 +554,8 @@ static void test_mmix_virtio_gpu_base_protocol(void)
     mmix_intc_complete(gpu.qts, source);
     g_assert_true(qtest_get_irq(gpu.qts, 0));
     g_assert_cmpuint(mmix_intc_claim(gpu.qts), ==, source);
-    qtest_writel(gpu.qts, MMIX_VIRTIO_BASE +
-                  QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+    mmix_virtio_writel(gpu.qts, MMIX_VIRTIO_BASE +
+                       QVIRTIO_MMIO_INTERRUPT_ACK, 1);
     mmix_intc_complete(gpu.qts, source);
     g_assert_cmphex(mmix_intc_pending(gpu.qts, source) & source_bit, ==, 0);
     g_assert_false(qtest_get_irq(gpu.qts, 0));
@@ -683,8 +699,8 @@ static void test_mmix_virtio_gpu_2d_resource(void)
     mmix_virtio_gpu_control(&gpu, &unref, sizeof(unref),
                             VIRTIO_GPU_RESP_OK_NODATA);
 
-    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
-                               QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
     guest_free(&gpu.allocator, backing_addr);
     mmix_virtio_gpu_stop(&gpu);
 }
@@ -721,12 +737,13 @@ static void test_mmix_virtio_gpu_reset(void)
     mmix_virtio_gpu_wait_irq(&gpu);
 
     qtest_system_reset(gpu.qts);
-    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
-                               QVIRTIO_MMIO_DEVICE_ID), ==, VIRTIO_ID_GPU);
-    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
-                               QVIRTIO_MMIO_DEVICE_STATUS), ==, 0);
-    g_assert_cmphex(qtest_readl(gpu.qts, MMIX_VIRTIO_BASE +
-                               QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
+                    VIRTIO_ID_GPU);
+    g_assert_cmphex(mmix_virtio_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_STATUS), ==, 0);
+    g_assert_cmphex(mmix_virtio_readl(gpu.qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_INTERRUPT_STATUS), ==, 0);
     g_assert_cmphex(mmix_intc_pending(gpu.qts, MMIX_VIRTIO_IRQ_BASE) &
                     mmix_intc_source_bit(MMIX_VIRTIO_IRQ_BASE), ==, 0);
 
@@ -818,8 +835,8 @@ static void test_mmix_virtio_gpu_migration(void)
     qtest_qmp_eventwait(to, "RESUME");
     mmix_virtio_gpu_adopt_migration(&destination, &source, to);
 
-    g_assert_cmphex(qtest_readl(to, MMIX_VIRTIO_BASE +
-                               QVIRTIO_MMIO_DEVICE_STATUS), !=, 0);
+    g_assert_cmphex(mmix_virtio_readl(to, MMIX_VIRTIO_BASE +
+                                     QVIRTIO_MMIO_DEVICE_STATUS), !=, 0);
     mmix_virtio_gpu_wait_used(&destination, destination.cursor, head);
     mmix_virtio_gpu_finish_irq(&destination);
     guest_free(&destination.allocator, command_addr);
@@ -920,14 +937,15 @@ static void mmix_assert_display_configuration(const char *args,
                     has_framebuffer);
     g_assert_cmpint(strstr(mtree, "mmix-framebuffer") != NULL, ==,
                     has_framebuffer);
-    g_assert_cmpuint(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                QVIRTIO_MMIO_DEVICE_ID), ==,
+    g_assert_cmpuint(mmix_virtio_readl(qts, MMIX_VIRTIO_BASE +
+                                      QVIRTIO_MMIO_DEVICE_ID), ==,
                      has_gpu ? VIRTIO_ID_GPU : 0);
     if (!has_gpu) {
         for (i = 0; i < MMIX_VIRTIO_COUNT; i++) {
-            g_assert_cmphex(qtest_readl(qts, MMIX_VIRTIO_BASE +
-                                       i * MMIX_VIRTIO_SIZE +
-                                       QVIRTIO_MMIO_DEVICE_ID), ==, 0);
+            g_assert_cmphex(mmix_virtio_readl(
+                                qts, MMIX_VIRTIO_BASE +
+                                     i * MMIX_VIRTIO_SIZE +
+                                     QVIRTIO_MMIO_DEVICE_ID), ==, 0);
         }
     }
 
