@@ -9,6 +9,7 @@
 
 #include "qemu/osdep.h"
 #include "../libqtest.h"
+#include "qemu/bswap.h"
 #include "qemu/module.h"
 #include "virtio.h"
 #include "virtio-mmio.h"
@@ -16,28 +17,71 @@
 #include "qgraph.h"
 #include "standard-headers/linux/virtio_ring.h"
 
+static uint32_t qvirtio_mmio_readl(QVirtioMMIODevice *dev, uint64_t offset)
+{
+    uint32_t value;
+
+    if (dev->version < 2) {
+        return qtest_readl(dev->qts, dev->addr + offset);
+    }
+
+    qtest_memread(dev->qts, dev->addr + offset, &value, sizeof(value));
+    return le32_to_cpu(value);
+}
+
+static void qvirtio_mmio_writel(QVirtioMMIODevice *dev, uint64_t offset,
+                                uint32_t value)
+{
+    if (dev->version < 2) {
+        qtest_writel(dev->qts, dev->addr + offset, value);
+        return;
+    }
+
+    value = cpu_to_le32(value);
+    qtest_memwrite(dev->qts, dev->addr + offset, &value, sizeof(value));
+}
+
 static uint8_t qvirtio_mmio_config_readb(QVirtioDevice *d, uint64_t off)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    return qtest_readb(dev->qts, dev->addr + QVIRTIO_MMIO_DEVICE_SPECIFIC + off);
+
+    return qtest_readb(dev->qts,
+                       dev->addr + QVIRTIO_MMIO_DEVICE_SPECIFIC + off);
 }
 
 static uint16_t qvirtio_mmio_config_readw(QVirtioDevice *d, uint64_t off)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    return qtest_readw(dev->qts, dev->addr + QVIRTIO_MMIO_DEVICE_SPECIFIC + off);
+    uint64_t offset = QVIRTIO_MMIO_DEVICE_SPECIFIC + off;
+
+    if (dev->version >= 2) {
+        uint16_t value;
+
+        qtest_memread(dev->qts, dev->addr + offset, &value, sizeof(value));
+        return le16_to_cpu(value);
+    }
+    return qtest_readw(dev->qts, dev->addr + offset);
 }
 
 static uint32_t qvirtio_mmio_config_readl(QVirtioDevice *d, uint64_t off)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    return qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_DEVICE_SPECIFIC + off);
+
+    return qvirtio_mmio_readl(dev, QVIRTIO_MMIO_DEVICE_SPECIFIC + off);
 }
 
 static uint64_t qvirtio_mmio_config_readq(QVirtioDevice *d, uint64_t off)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    return qtest_readq(dev->qts, dev->addr + QVIRTIO_MMIO_DEVICE_SPECIFIC + off);
+    uint64_t offset = QVIRTIO_MMIO_DEVICE_SPECIFIC + off;
+
+    if (dev->version >= 2) {
+        uint64_t value;
+
+        qtest_memread(dev->qts, dev->addr + offset, &value, sizeof(value));
+        return le64_to_cpu(value);
+    }
+    return qtest_readq(dev->qts, dev->addr + offset);
 }
 
 static uint64_t qvirtio_mmio_get_features(QVirtioDevice *d)
@@ -46,12 +90,12 @@ static uint64_t qvirtio_mmio_get_features(QVirtioDevice *d)
     uint64_t lo;
     uint64_t hi = 0;
 
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_HOST_FEATURES_SEL, 0);
-    lo = qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_HOST_FEATURES);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_HOST_FEATURES_SEL, 0);
+    lo = qvirtio_mmio_readl(dev, QVIRTIO_MMIO_HOST_FEATURES);
 
     if (dev->version >= 2) {
-        qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_HOST_FEATURES_SEL, 1);
-        hi = qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_HOST_FEATURES);
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_HOST_FEATURES_SEL, 1);
+        hi = qvirtio_mmio_readl(dev, QVIRTIO_MMIO_HOST_FEATURES);
     }
 
     return (hi << 32) | lo;
@@ -61,13 +105,12 @@ static void qvirtio_mmio_set_features(QVirtioDevice *d, uint64_t features)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
     dev->features = features;
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_GUEST_FEATURES_SEL, 0);
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_GUEST_FEATURES, features);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_GUEST_FEATURES_SEL, 0);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_GUEST_FEATURES, features);
 
     if (dev->version >= 2) {
-        qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_GUEST_FEATURES_SEL, 1);
-        qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_GUEST_FEATURES,
-                     features >> 32);
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_GUEST_FEATURES_SEL, 1);
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_GUEST_FEATURES, features >> 32);
     }
 }
 
@@ -80,13 +123,13 @@ static uint64_t qvirtio_mmio_get_guest_features(QVirtioDevice *d)
 static uint8_t qvirtio_mmio_get_status(QVirtioDevice *d)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    return (uint8_t)qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_DEVICE_STATUS);
+    return (uint8_t)qvirtio_mmio_readl(dev, QVIRTIO_MMIO_DEVICE_STATUS);
 }
 
 static void qvirtio_mmio_set_status(QVirtioDevice *d, uint8_t status)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_DEVICE_STATUS, (uint32_t)status);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_DEVICE_STATUS, status);
 }
 
 static bool qvirtio_mmio_get_queue_isr_status(QVirtioDevice *d, QVirtQueue *vq)
@@ -94,9 +137,9 @@ static bool qvirtio_mmio_get_queue_isr_status(QVirtioDevice *d, QVirtQueue *vq)
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
     uint32_t isr;
 
-    isr = qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_INTERRUPT_STATUS) & 1;
+    isr = qvirtio_mmio_readl(dev, QVIRTIO_MMIO_INTERRUPT_STATUS) & 1;
     if (isr != 0) {
-        qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_INTERRUPT_ACK, 1);
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_INTERRUPT_ACK, 1);
         return true;
     }
 
@@ -108,9 +151,9 @@ static bool qvirtio_mmio_get_config_isr_status(QVirtioDevice *d)
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
     uint32_t isr;
 
-    isr = qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_INTERRUPT_STATUS) & 2;
+    isr = qvirtio_mmio_readl(dev, QVIRTIO_MMIO_INTERRUPT_STATUS) & 2;
     if (isr != 0) {
-        qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_INTERRUPT_ACK, 2);
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_INTERRUPT_ACK, 2);
         return true;
     }
 
@@ -132,23 +175,36 @@ static void qvirtio_mmio_wait_config_isr_status(QVirtioDevice *d,
 static void qvirtio_mmio_queue_select(QVirtioDevice *d, uint16_t index)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_SEL, (uint32_t)index);
-
-    g_assert_cmphex(qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_PFN), ==, 0);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_SEL, index);
+    g_assert_cmphex(qvirtio_mmio_readl(
+                        dev, dev->version >= 2 ? QVIRTIO_MMIO_QUEUE_READY :
+                                                QVIRTIO_MMIO_QUEUE_PFN),
+                    ==, 0);
 }
 
 static uint16_t qvirtio_mmio_get_queue_size(QVirtioDevice *d)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    return (uint16_t)qtest_readl(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_NUM_MAX);
+    return (uint16_t)qvirtio_mmio_readl(dev,
+                                        QVIRTIO_MMIO_QUEUE_NUM_MAX);
 }
 
 static void qvirtio_mmio_set_queue_address(QVirtioDevice *d, QVirtQueue *vq)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    uint64_t pfn = vq->desc / dev->page_size;
+    if (dev->version < 2) {
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_PFN,
+                            vq->desc / dev->page_size);
+        return;
+    }
 
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_PFN, pfn);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_DESC_LOW, vq->desc);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_DESC_HIGH, vq->desc >> 32);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_AVAIL_LOW, vq->avail);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_AVAIL_HIGH, vq->avail >> 32);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_USED_LOW, vq->used);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_USED_HIGH, vq->used >> 32);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_READY, 1);
 }
 
 static QVirtQueue *qvirtio_mmio_virtqueue_setup(QVirtioDevice *d,
@@ -161,7 +217,9 @@ static QVirtQueue *qvirtio_mmio_virtqueue_setup(QVirtioDevice *d,
     vq = g_malloc0(sizeof(*vq));
     vq->vdev = d;
     qvirtio_mmio_queue_select(d, index);
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_ALIGN, dev->page_size);
+    if (dev->version < 2) {
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_ALIGN, dev->page_size);
+    }
 
     vq->index = index;
     vq->size = qvirtio_mmio_get_queue_size(d);
@@ -171,7 +229,7 @@ static QVirtQueue *qvirtio_mmio_virtqueue_setup(QVirtioDevice *d,
     vq->indirect = dev->features & (1ull << VIRTIO_RING_F_INDIRECT_DESC);
     vq->event = dev->features & (1ull << VIRTIO_RING_F_EVENT_IDX);
 
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_NUM, vq->size);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_NUM, vq->size);
 
     /* Check different than 0 */
     g_assert_cmpint(vq->size, !=, 0);
@@ -196,7 +254,7 @@ static void qvirtio_mmio_virtqueue_cleanup(QVirtQueue *vq,
 static void qvirtio_mmio_virtqueue_kick(QVirtioDevice *d, QVirtQueue *vq)
 {
     QVirtioMMIODevice *dev = container_of(d, QVirtioMMIODevice, vdev);
-    qtest_writel(dev->qts, dev->addr + QVIRTIO_MMIO_QUEUE_NOTIFY, vq->index);
+    qvirtio_mmio_writel(dev, QVIRTIO_MMIO_QUEUE_NOTIFY, vq->index);
 }
 
 const QVirtioBus qvirtio_mmio = {
@@ -239,19 +297,31 @@ void qvirtio_mmio_init_device(QVirtioMMIODevice *dev, QTestState *qts,
                               uint64_t addr, uint32_t page_size)
 {
     uint32_t magic;
-    magic = qtest_readl(qts, addr + QVIRTIO_MMIO_MAGIC_VALUE);
-    g_assert(magic == ('v' | 'i' << 8 | 'r' << 16 | 't' << 24));
-
-    dev->version = qtest_readl(qts, addr + QVIRTIO_MMIO_VERSION);
-    g_assert(dev->version == 1 || dev->version == 2);
 
     dev->qts = qts;
     dev->addr = addr;
+    qtest_memread(qts, addr + QVIRTIO_MMIO_MAGIC_VALUE,
+                  &magic, sizeof(magic));
+    magic = le32_to_cpu(magic);
+    if (magic == ('v' | 'i' << 8 | 'r' << 16 | 't' << 24)) {
+        qtest_memread(qts, addr + QVIRTIO_MMIO_VERSION,
+                      &dev->version, sizeof(dev->version));
+        dev->version = le32_to_cpu(dev->version);
+    } else {
+        magic = qtest_readl(qts, addr + QVIRTIO_MMIO_MAGIC_VALUE);
+        dev->version = qtest_readl(qts, addr + QVIRTIO_MMIO_VERSION);
+    }
+    g_assert(magic == ('v' | 'i' << 8 | 'r' << 16 | 't' << 24));
+    g_assert(dev->version == 1 || dev->version == 2);
+
     dev->page_size = page_size;
-    dev->vdev.device_type = qtest_readl(qts, addr + QVIRTIO_MMIO_DEVICE_ID);
+    dev->vdev.device_type = qvirtio_mmio_readl(dev,
+                                               QVIRTIO_MMIO_DEVICE_ID);
     dev->vdev.bus = &qvirtio_mmio;
 
-    qtest_writel(qts, addr + QVIRTIO_MMIO_GUEST_PAGE_SIZE, page_size);
+    if (dev->version < 2) {
+        qvirtio_mmio_writel(dev, QVIRTIO_MMIO_GUEST_PAGE_SIZE, page_size);
+    }
 
     dev->obj.get_driver = qvirtio_mmio_get_driver;
     dev->obj.start_hw = qvirtio_mmio_start_hw;
