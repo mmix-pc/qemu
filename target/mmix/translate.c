@@ -1054,6 +1054,8 @@ static bool trans_GET(DisasContext *ctx, arg_xyz *a)
 
     TCGv_i64 val = tcg_temp_new_i64();
 
+    /* GET observes special registers after growth (MMIX-SIM sections 60/97). */
+    gen_helper_mmix_prepare_reg_write(tcg_env, tcg_constant_i32(a->x));
     gen_helper_mmix_read_sreg(val, tcg_env, tcg_constant_i32(a->z));
     gen_store_reg(a->x, val);
     return true;

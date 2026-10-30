@@ -256,7 +256,10 @@ MMO_HOSTED_TESTS = [
         "mmo-hosted-startup",
         _hosted_image(
             [
-                insn(GET, R2, R0, SR_L),
+                # Observe startup rL without growing the local window first.
+                insn(GET, R255, R0, SR_L),
+                insn(ADDI, R2, R255, 0),
+                wyde(SETL, R255, 0),
                 insn(GET, R3, R0, SR_O),
                 insn(GET, R4, R0, SR_S),
                 insn(GET, R5, R0, SR_K),
@@ -273,7 +276,7 @@ MMO_HOSTED_TESTS = [
             global_base=R254,
             globals_={R254: 0x123456789ABCDEF0, R255: 0},
         ),
-        pc=0x30,
+        pc=0x38,
         regs={
             R0: 1,
             R1: MMIX_POOL_SEGMENT_BASE + 8,
