@@ -562,6 +562,29 @@ static void mmix_trap_restart_finish(CPUMMIXState *env,
     restart->save_unsave = NULL;
 }
 
+static void mmix_resume_interrupted_instruction(CPUMMIXState *env,
+                                                MMIXTrapRestartState *restart,
+                                                bool detached, uint64_t where,
+                                                uint32_t insn)
+{
+    mmix_trap_restart_finish(env, restart, detached);
+    /*
+     * Keep an existing insertion's operands and ownership. An ordinary
+     * instruction also needs insertion when its helper resumes: mmix-doc
+     * section 38 supplies the instruction in rXX, not in code memory.
+     */
+    if (!env->insn_replay.active) {
+        env->insn_replay = (MMIXInsnReplayState) {
+            .insn_pc = where - 4,
+            .continuation = where,
+            .insn = insn,
+            .active = true,
+        };
+    }
+    env->pc = where - 4;
+    env->npc = where;
+}
+
 static void mmix_raise_arithmetic_trip(CPUMMIXState *env, uint32_t event,
                                        uint32_t insn, uint64_t y, uint64_t z)
 {
@@ -953,13 +976,10 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 /* Retry the instruction against the UNSAVE-rebuilt stack. */
                 memset(&restart->stack_access, 0,
                        sizeof(restart->stack_access));
-                env->pc = where - 4;
-                env->npc = where;
-                if (tracked_restart) {
-                    mmix_trap_restart_finish(env, restart,
-                                             restart_detached);
-                }
                 mmix_cpu_retire_instruction(env, resume_insn, env->pc);
+                mmix_resume_interrupted_instruction(env, restart,
+                                                     restart_detached,
+                                                     where, exec);
                 cpu_loop_exit_noexc(cs);
             }
 
@@ -977,13 +997,10 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                  * Re-execution continues at the first access that did not
                  * commit.
                  */
-                env->pc = where - 4;
-                env->npc = where;
-                if (tracked_restart) {
-                    mmix_trap_restart_finish(env, restart,
-                                             restart_detached);
-                }
                 mmix_cpu_retire_instruction(env, resume_insn, env->pc);
+                mmix_resume_interrupted_instruction(env, restart,
+                                                     restart_detached,
+                                                     where, exec);
                 cpu_loop_exit_noexc(cs);
             }
         }
@@ -1077,9 +1094,9 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         }
 
         if (tracked_restart) {
-            env->pc = where - 4;
-            env->npc = where;
-            mmix_trap_restart_finish(env, restart, restart_detached);
+            mmix_resume_interrupted_instruction(env, restart,
+                                                 restart_detached,
+                                                 where, insn);
             cpu_loop_exit_noexc(cs);
         }
 
