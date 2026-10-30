@@ -613,10 +613,25 @@ static void mmix_update_ra_events_internal(CPUMMIXState *env,
     }
 }
 
-void mmix_update_ra_events(CPUMMIXState *env, uint32_t events,
-                           uint32_t insn, uint64_t y, uint64_t z)
+void mmix_record_arithmetic_events(CPUMMIXState *env, uint32_t events,
+                                   uint64_t y, uint64_t z)
 {
-    mmix_update_ra_events_internal(env, events, insn, y, z, false);
+    /* Keep the original operands even if later stages quiet a NaN. */
+    if (env->arithmetic_events == 0) {
+        env->arithmetic_y = y;
+        env->arithmetic_z = z;
+    }
+    env->arithmetic_events |= events;
+}
+
+void helper_mmix_commit_arithmetic(CPUMMIXState *env, uint32_t insn)
+{
+    uint32_t events = env->arithmetic_events;
+
+    env->arithmetic_events = 0;
+    mmix_update_ra_events_internal(env, events, insn,
+                                   env->arithmetic_y, env->arithmetic_z,
+                                   false);
 }
 
 G_NORETURN void mmix_cpu_raise_emulator_failure(CPUMMIXState *env)

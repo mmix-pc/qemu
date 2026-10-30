@@ -106,17 +106,17 @@ static void mmix_update_ra_from_status(CPUMMIXState *env, uint32_t insn,
                                        uint64_t y, uint64_t z,
                                        float_status *status)
 {
-    mmix_update_ra_events(env,
-                          mmix_events_from_float_flags(
-                              get_float_exception_flags(status)),
-                          insn, y, z);
+    uint32_t events = mmix_events_from_float_flags(
+        get_float_exception_flags(status));
+
+    mmix_record_arithmetic_events(env, events, y, z);
 }
 
 static uint64_t mmix_binary_nan_result(CPUMMIXState *env, uint32_t insn,
                                        uint64_t y, uint64_t z)
 {
     if (mmix_fp_is_snan(y) || mmix_fp_is_snan(z)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, y, z);
         y = mmix_fp_quiet_nan(y);
         z = mmix_fp_quiet_nan(z);
     }
@@ -133,7 +133,7 @@ static uint64_t mmix_unary_nan_result(CPUMMIXState *env, uint32_t insn,
                                       uint64_t y, uint64_t z)
 {
     if (mmix_fp_is_snan(z)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, y, z);
         return mmix_fp_quiet_nan(z);
     }
     return z;
@@ -157,7 +157,7 @@ static uint64_t mmix_fp_compare(CPUMMIXState *env, MMIXFPKind fp,
         return float64_compare_quiet(y, z, &status) == float_relation_equal;
     case MMIX_FP_FCMP:
         if (mmix_fp_is_nan(y) || mmix_fp_is_nan(z)) {
-            mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
+            mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, y, z);
             return 0;
         }
         mmix_softfloat_status(&status, float_round_nearest_even);
@@ -216,7 +216,7 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPKind fp,
         if (fp == MMIX_FP_FUNE) {
             return 1;
         }
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, y, z);
         return 0;
     }
 
@@ -249,7 +249,7 @@ static uint64_t mmix_fp_epsilon_compare(CPUMMIXState *env, MMIXFPKind fp,
 
     if (!mmix_fp_epsilon_radius(ed, y, &yradius) ||
         !mmix_fp_epsilon_radius(ed, z, &zradius)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, y, z);
         return 0;
     }
 
@@ -359,7 +359,7 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t selector,
         mmix_cpu_break_rules_and_continue(env, insn, y, z);
     }
     if (mmix_fp_is_nan(z) || float64_is_infinity(z)) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, y, z);
         return z;
     }
 
@@ -370,11 +370,11 @@ uint64_t helper_mmix_fp_fix(CPUMMIXState *env, uint32_t selector,
         long double d = mmix_fp_to_ld(z);
 
         if (d < -0x1p63L || d >= 0x1p63L) {
-            mmix_update_ra_events(env, MMIX_RA_EVENT_W, insn, y, z);
+            mmix_record_arithmetic_events(env, MMIX_RA_EVENT_W, y, z);
         }
     }
-    mmix_update_ra_events(env, mmix_events_from_float_flags(flags) &
-                          ~MMIX_RA_EVENT_I, insn, y, z);
+    mmix_record_arithmetic_events(env, mmix_events_from_float_flags(flags) &
+                                   ~MMIX_RA_EVENT_I, y, z);
     return result;
 }
 
@@ -428,7 +428,7 @@ uint64_t helper_mmix_stsf(CPUMMIXState *env, uint32_t insn, uint64_t addr,
 
     if (mmix_fp_is_nan(val)) {
         if (mmix_fp_is_snan(val)) {
-            mmix_update_ra_events(env, MMIX_RA_EVENT_I, insn, addr, val);
+            mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, addr, val);
             val = mmix_fp_quiet_nan(val);
         }
     }

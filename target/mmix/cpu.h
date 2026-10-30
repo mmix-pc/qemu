@@ -257,6 +257,10 @@ typedef struct CPUArchState {
     bool unsave_restart_active;
     bool stack_overflow_pending;
     uint32_t arithmetic_trip_event;
+    /* Recomputed on retry; committed only after result writeback succeeds. */
+    uint32_t arithmetic_events;
+    uint64_t arithmetic_y;
+    uint64_t arithmetic_z;
     uint64_t program_exception_causes;
     uint32_t program_exception_insn;
     uint32_t rule_break_insn;

@@ -31,6 +31,7 @@ typedef struct DisasContext {
     bool substitute_operands;
     bool masked_memory_access;
     bool hosted_memory;
+    bool arithmetic;
 } DisasContext;
 
 typedef enum MMIXALUKind {
@@ -104,6 +105,13 @@ static void gen_consume_insn_replay(DisasContext *ctx)
     if (ctx->replay) {
         gen_helper_mmix_consume_insn_replay(tcg_env);
     }
+}
+
+static void gen_begin_arithmetic(DisasContext *ctx)
+{
+    ctx->arithmetic = true;
+    tcg_gen_st_i32(tcg_constant_i32(0), tcg_env,
+                   offsetof(CPUMMIXState, arithmetic_events));
 }
 
 static void gen_complete_instruction(DisasContext *ctx,
@@ -281,6 +289,7 @@ static bool gen_fp_binary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_fp_binary(val, tcg_env, tcg_constant_i32(fp),
                               tcg_constant_i32(ctx->insn),
                               gen_load_replay_y(ctx, a),
@@ -293,6 +302,7 @@ static bool gen_fp_unary(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_fp_unary(val, tcg_env, tcg_constant_i32(fp),
                              tcg_constant_i32(ctx->insn),
                              gen_load_replay_y_immediate(ctx, a),
@@ -305,6 +315,7 @@ static bool gen_fp_fix(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_fp_fix(val, tcg_env, tcg_constant_i32(fp),
                            tcg_constant_i32(ctx->insn),
                            gen_load_replay_y_immediate(ctx, a),
@@ -318,6 +329,7 @@ static bool gen_fp_float(DisasContext *ctx, arg_xyz *a, MMIXFPKind fp,
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_fp_float(val, tcg_env, tcg_constant_i32(fp),
                              tcg_constant_i32(ctx->insn),
                              gen_load_replay_y_immediate(ctx, a),
@@ -414,6 +426,7 @@ static bool gen_addsub_checked(DisasContext *ctx, arg_xyz *a, bool sub,
     TCGv_i64 y = gen_load_replay_y(ctx, a);
     TCGv_i64 z = gen_load_replay_z(ctx, a, immediate);
 
+    gen_begin_arithmetic(ctx);
     if (sub) {
         gen_helper_mmix_sub(val, tcg_env, tcg_constant_i32(ctx->insn), y, z);
     } else {
@@ -427,6 +440,7 @@ static bool gen_neg_checked(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_sub(val, tcg_env, tcg_constant_i32(ctx->insn),
                         gen_load_replay_y_immediate(ctx, a),
                         gen_load_replay_z(ctx, a, immediate));
@@ -447,6 +461,7 @@ static bool gen_mul(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_mul(val, tcg_env, tcg_constant_i32(ctx->insn),
                         gen_load_replay_y(ctx, a),
                         gen_load_replay_z(ctx, a, immediate));
@@ -468,6 +483,7 @@ static bool gen_div(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 val = tcg_temp_new_i64();
 
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_div(val, tcg_env, tcg_constant_i32(ctx->insn),
                         gen_load_replay_y(ctx, a),
                         gen_load_replay_z(ctx, a, immediate));
@@ -545,6 +561,7 @@ static bool gen_shift(DisasContext *ctx, arg_xyz *a, MMIXShiftKind kind,
 
     switch (kind) {
     case MMIX_SHIFT_SL:
+        gen_begin_arithmetic(ctx);
         gen_helper_mmix_sl(val, tcg_env, tcg_constant_i32(ctx->insn),
                            lhs, count);
         break;
@@ -1306,6 +1323,7 @@ static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 val = tcg_temp_new_i64();
 
     gen_effective_address(addr, a, immediate, 3);
+    gen_begin_arithmetic(ctx);
     gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
                          gen_load_reg(a->x));
     gen_data_access_value(val);
@@ -1406,6 +1424,7 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     vaddr pc = ctx->base.pc_next;
     uint32_t insn = ctx->insn;
 
+    ctx->arithmetic = false;
     if (ctx->replay) {
         g_assert(ctx->env->insn_replay.active);
         g_assert(pc == ctx->env->insn_replay.insn_pc);
@@ -1437,6 +1456,10 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     }
     /* Faultable helpers must complete before replay ownership is released. */
     if (ctx->base.is_jmp != DISAS_NORETURN) {
+        if (ctx->arithmetic) {
+            gen_helper_mmix_commit_arithmetic(tcg_env,
+                                              tcg_constant_i32(insn));
+        }
         gen_consume_insn_replay(ctx);
         gen_complete_instruction(
             ctx, tcg_constant_i64(ctx->base.pc_next));

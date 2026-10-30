@@ -15,7 +15,7 @@ uint64_t helper_mmix_add(CPUMMIXState *env, uint32_t insn, uint64_t y,
     uint64_t result = y + z;
 
     if (((~(y ^ z) & (y ^ result)) >> 63) != 0) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_V, y, z);
     }
     return result;
 }
@@ -26,7 +26,7 @@ uint64_t helper_mmix_sub(CPUMMIXState *env, uint32_t insn, uint64_t y,
     uint64_t result = y - z;
 
     if ((((y ^ z) & (y ^ result)) >> 63) != 0) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_V, y, z);
     }
     return result;
 }
@@ -37,7 +37,7 @@ uint64_t helper_mmix_mul(CPUMMIXState *env, uint32_t insn, uint64_t y,
     __int128 product = (__int128)(int64_t)y * (int64_t)z;
 
     if (product < (__int128)INT64_MIN || product > (__int128)INT64_MAX) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_V, y, z);
     }
     return product;
 }
@@ -69,7 +69,7 @@ uint64_t helper_mmix_div(CPUMMIXState *env, uint32_t insn, uint64_t y,
 
     if (z == 0) {
         env->sregs[MMIX_SREG_RR] = y;
-        mmix_update_ra_events(env, MMIX_RA_EVENT_D, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_D, y, z);
         return 0;
     }
 
@@ -92,7 +92,7 @@ uint64_t helper_mmix_div(CPUMMIXState *env, uint32_t insn, uint64_t y,
 
     env->sregs[MMIX_SREG_RR] = remainder;
     if (y == 0x8000000000000000ULL && z == UINT64_MAX) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_V, y, z);
     }
     return quotient;
 }
@@ -134,7 +134,7 @@ uint64_t helper_mmix_sl(CPUMMIXState *env, uint32_t insn, uint64_t y,
     }
 
     if (overflow) {
-        mmix_update_ra_events(env, MMIX_RA_EVENT_V, insn, y, z);
+        mmix_record_arithmetic_events(env, MMIX_RA_EVENT_V, y, z);
     }
     return result;
 }

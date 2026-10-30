@@ -1329,7 +1329,7 @@ def resume0_substitution_test(
     )
 
 
-def resume0_substitution_trip_test(name, instruction, y, z, event):
+def resume0_substitution_trip_test(name, instruction, y, z, event, result):
     handler = {
         RA_EVENT_V: 32,
         RA_EVENT_I: 64,
@@ -1373,7 +1373,7 @@ def resume0_substitution_trip_test(name, instruction, y, z, event):
         ),
         pc=handler + (len(trap_handler) - 1) * 4,
         regs={
-            instruction[1]: 0,
+            instruction[1]: result,
             R40: continuation,
             R41: (1 << 63) | saved_insn,
             R42: y,
@@ -1670,12 +1670,12 @@ ROPCODE1_SUBSTITUTION_TESTS = [
     resume0_substitution_trip_test(
         "resume-ropcode1-enabled-overflow-trip",
         insn(ADD, R200, R20, R21),
-        0x7fffffffffffffff, 1, RA_EVENT_V,
+        0x7fffffffffffffff, 1, RA_EVENT_V, 0x8000000000000000,
     ),
     resume0_substitution_trip_test(
         "resume-ropcode1-enabled-floating-divide-trip",
         insn(FDIV, R200, R20, R21),
-        f64(1.0), 0, RA_EVENT_Z,
+        f64(1.0), 0, RA_EVENT_Z, f64(float("inf")),
     ),
 ]
 
@@ -6055,7 +6055,8 @@ ISA_TESTS = [
             ],
         ),
         pc=0x24,
-        regs={R3: 0, R10: 0x55, R11: RA_EVENT_Z << RA_ENABLE_SHIFT},
+        regs={R3: f64(float("inf")), R10: 0x55,
+              R11: RA_EVENT_Z << RA_ENABLE_SHIFT},
     ),
     MMIXTest(
         "usage-counter-arithmetic-trip",
@@ -6443,7 +6444,7 @@ ISA_TESTS = [
         RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[0],
         pc=RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[1],
         regs={
-            R40: 0,
+            R40: 0x8000000000000000,
             R41: RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[2],
             R42: (1 << 63) | RESUME1_PRIVILEGED_SUBSTITUTION_TRIP[3],
             R43: 0x7fffffffffffffff,
