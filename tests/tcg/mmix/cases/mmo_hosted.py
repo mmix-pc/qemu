@@ -319,7 +319,7 @@ MMO_HOSTED_TESTS = [
                 halt(),
             ]
         ),
-        pc=0x104,
+        pc=0x105,  # GO retains the low bit contributed by argc in $0.
         regs={R5: 0x77},
     ),
     MMIXMMOTest(

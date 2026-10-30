@@ -1009,7 +1009,7 @@ uint64_t helper_mmix_pop(CPUMMIXState *env, uint32_t x, uint32_t yz)
 
     dest = env->sregs[MMIX_SREG_RJ] + ((uint64_t)yz << 2);
     memset(restart, 0, sizeof(*restart));
-    return dest & ~3ULL;
+    return dest;
 }
 
 static const uint32_t mmix_save_sregs[] = {

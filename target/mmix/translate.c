@@ -34,6 +34,12 @@ typedef struct DisasContext {
     bool arithmetic;
 } DisasContext;
 
+static vaddr mmix_next_pc(const DisasContext *ctx)
+{
+    /* DisasContextBase tracks aligned code bytes; MMIX exposes a logical PC. */
+    return ctx->base.pc_next | (ctx->base.tb->flags & MMIX_TB_PC_LOW_MASK);
+}
+
 typedef enum MMIXALUKind {
     MMIX_ALU_ADD,
     MMIX_ALU_SUB,
@@ -271,7 +277,7 @@ static bool gen_mmix_privileged_sync(DisasContext *ctx, uint32_t mode)
 
 static bool gen_mmix_power_save(DisasContext *ctx)
 {
-    uint64_t continuation = ctx->base.pc_next;
+    uint64_t continuation = mmix_next_pc(ctx);
 
     gen_helper_mmix_sync(tcg_env, tcg_constant_i32(ctx->insn),
                          tcg_constant_i32(4));
@@ -918,7 +924,7 @@ static bool gen_branch(DisasContext *ctx, arg_xyz *a,
     TCGLabel *not_taken = gen_new_label();
     TCGv_i64 pred = tcg_temp_new_i64();
     vaddr dest = mmix_branch_dest(ctx, a, backward);
-    vaddr next = ctx->base.pc_next;
+    vaddr next = mmix_next_pc(ctx);
 
     gen_predicate(pred, gen_load_reg(a->x), predicate);
     tcg_gen_brcondi_i64(TCG_COND_EQ, pred, 0, not_taken);
@@ -947,8 +953,7 @@ static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 dest = tcg_temp_new_i64();
 
     tcg_gen_add_i64(dest, gen_load_reg(a->y), gen_load_z(a, immediate));
-    tcg_gen_andi_i64(dest, dest, ~3ULL);
-    gen_store_reg(a->x, tcg_constant_i64(ctx->base.pc_next));
+    gen_store_reg(a->x, tcg_constant_i64(mmix_next_pc(ctx)));
     gen_consume_insn_replay(ctx);
     gen_helper_mmix_check_control_transfer(tcg_env,
                                            tcg_constant_i32(ctx->insn), dest);
@@ -963,7 +968,7 @@ static bool gen_go(DisasContext *ctx, arg_xyz *a, bool immediate)
 static bool gen_pushj(DisasContext *ctx, arg_xyz *a, bool backward)
 {
     gen_helper_mmix_push(tcg_env, tcg_constant_i32(a->x),
-                         tcg_constant_i64(ctx->base.pc_next));
+                         tcg_constant_i64(mmix_next_pc(ctx)));
     gen_goto_tb(ctx, 0, mmix_branch_dest(ctx, a, backward));
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
@@ -974,9 +979,8 @@ static bool gen_pushgo(DisasContext *ctx, arg_xyz *a, bool immediate)
     TCGv_i64 dest = tcg_temp_new_i64();
 
     tcg_gen_add_i64(dest, gen_load_reg(a->y), gen_load_z(a, immediate));
-    tcg_gen_andi_i64(dest, dest, ~3ULL);
     gen_helper_mmix_push(tcg_env, tcg_constant_i32(a->x),
-                         tcg_constant_i64(ctx->base.pc_next));
+                         tcg_constant_i64(mmix_next_pc(ctx)));
     gen_consume_insn_replay(ctx);
     gen_helper_mmix_check_control_transfer(tcg_env,
                                            tcg_constant_i32(ctx->insn), dest);
@@ -1409,26 +1413,26 @@ static void mmix_tr_tb_start(DisasContextBase *dcbase, CPUState *cs)
 static void mmix_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
-    vaddr pc = dcbase->pc_next;
+    vaddr pc = mmix_next_pc(ctx);
 
     ctx->insn_pc = pc;
     ctx->insn = ctx->replay ? dcbase->tb->cs_base :
                 ctx->hosted_memory ? mmix_cpu_hosted_fetch(ctx->env, pc) :
-                translator_ldl_end(ctx->env, dcbase, pc, MO_BE);
+                translator_ldl_end(ctx->env, dcbase, dcbase->pc_next, MO_BE);
     tcg_gen_insn_start(pc, ctx->insn, 0);
 }
 
 static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
 {
     DisasContext *ctx = container_of(dcbase, DisasContext, base);
-    vaddr pc = ctx->base.pc_next;
+    vaddr pc = ctx->insn_pc;
     uint32_t insn = ctx->insn;
 
     ctx->arithmetic = false;
     if (ctx->replay) {
         g_assert(ctx->env->insn_replay.active);
         g_assert(pc == ctx->env->insn_replay.insn_pc);
-        ctx->base.pc_next = ctx->env->insn_replay.continuation;
+        ctx->base.pc_next = ctx->env->insn_replay.continuation & ~3ULL;
         if (ctx->substitute_operands) {
             ctx->replay_y = tcg_temp_new_i64();
             ctx->replay_z = tcg_temp_new_i64();
@@ -1442,7 +1446,7 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
     }
 
     tcg_gen_movi_i64(cpu_pc, pc);
-    tcg_gen_movi_i64(cpu_npc, ctx->base.pc_next);
+    tcg_gen_movi_i64(cpu_npc, mmix_next_pc(ctx));
     ctx->security_cause = tcg_temp_new_i64();
     gen_helper_mmix_check_instruction_security(ctx->security_cause, tcg_env,
                                                tcg_constant_i32(insn));
@@ -1462,17 +1466,19 @@ static void mmix_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
         }
         gen_consume_insn_replay(ctx);
         gen_complete_instruction(
-            ctx, tcg_constant_i64(ctx->base.pc_next));
+            ctx, tcg_constant_i64(mmix_next_pc(ctx)));
     }
 }
 
 static void mmix_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
 {
+    DisasContext *ctx = container_of(dcbase, DisasContext, base);
+
     switch (dcbase->is_jmp) {
     case DISAS_NEXT:
     case DISAS_TOO_MANY:
-        tcg_gen_movi_i64(cpu_pc, dcbase->pc_next);
-        tcg_gen_movi_i64(cpu_npc, dcbase->pc_next + 4);
+        tcg_gen_movi_i64(cpu_pc, mmix_next_pc(ctx));
+        tcg_gen_movi_i64(cpu_npc, mmix_next_pc(ctx) + 4);
         tcg_gen_exit_tb(NULL, 0);
         break;
     case DISAS_NORETURN:

@@ -116,8 +116,9 @@ static TCGTBCPUState mmix_get_tb_cpu_state(CPUState *cs)
     }
 
     return (TCGTBCPUState){
-        .pc = env->pc,
-        .flags = 0,
+        /* Cache and invalidate the fetched tetra, not its logical PC. */
+        .pc = env->pc & ~3ULL,
+        .flags = env->pc & MMIX_TB_PC_LOW_MASK,
         .cs_base = cs_base,
     };
 }
@@ -128,8 +129,8 @@ static void mmix_cpu_synchronize_from_tb(CPUState *cs,
     MMIXCPU *cpu = MMIX_CPU(cs);
 
     tcg_debug_assert(!tcg_cflags_has(cs, CF_PCREL));
-    cpu->env.pc = tb->pc;
-    cpu->env.npc = tb->pc + 4;
+    cpu->env.pc = tb->pc | (tb->flags & MMIX_TB_PC_LOW_MASK);
+    cpu->env.npc = cpu->env.pc + 4;
 }
 
 static void mmix_restore_state_to_opc(CPUState *cs,
@@ -915,9 +916,15 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
     MMIXAddressTranslation translation;
     hwaddr vpage = addr & TARGET_PAGE_MASK;
     hwaddr ppage;
+    vaddr fault_addr = addr;
+
+    if (access_type == MMU_INST_FETCH) {
+        /* TCG probes the aligned TB address; traps retain the logical PC. */
+        fault_addr |= env->pc & MMIX_TB_PC_LOW_MASK;
+    }
 
     if (env->insn_replay.active && access_type == MMU_INST_FETCH &&
-        addr == env->insn_replay.insn_pc) {
+        addr == (env->insn_replay.insn_pc & ~3ULL)) {
         /*
          * RESUME supplies the replay instruction in rX/rXX.  TCG still
          * probes its code TLB for the modeled instruction location before
@@ -957,14 +964,14 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
             env->forced_translation_insn = access_type == MMU_INST_FETCH ?
                                            MMIX_SWYM_INSN :
                                            env->data_access_insn;
-            env->forced_translation_address = addr;
+            env->forced_translation_address = fault_addr;
             env->forced_translation_access = access_type;
             cs->exception_index = EXCP_MMIX_FORCED_TRANSLATION;
             cpu_loop_exit(cs);
         }
         if ((translation.causes & env->sregs[MMIX_SREG_RK]) == 0) {
             mmix_cpu_complete_masked_translation_fault(
-                cs, addr, access_type, translation.causes);
+                cs, fault_addr, access_type, translation.causes);
         }
         env->program_exception_data_access =
             access_type != MMU_INST_FETCH &&

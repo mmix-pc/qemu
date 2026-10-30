@@ -3084,8 +3084,8 @@ ISA_TESTS = [
                 halt(),
             ]
         ),
-        pc=0x1c,
-        regs={R2: 0x08, R3: 5, R4: 0x18, R5: 0},
+        pc=0x1e,
+        regs={R2: 0x08, R3: 5, R4: 0x19, R5: 0},
     ),
     MMIXTest(
         "pushj-pop-single-result",

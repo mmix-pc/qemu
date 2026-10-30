@@ -114,6 +114,7 @@ uint32_t mmix_cpu_hosted_fetch(CPUMMIXState *env, vaddr address)
     uint8_t data[sizeof(uint32_t)];
     Error *err = NULL;
 
+    address &= ~3ULL;
     if (address >= MMIX_HOSTED_DATA_BASE ||
         !mmix_cpu_hosted_memory_read(env, address, data, sizeof(data),
                                     sizeof(data), &err)) {
