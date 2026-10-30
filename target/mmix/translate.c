@@ -1222,6 +1222,8 @@ static bool gen_cswap(DisasContext *ctx, arg_xyz *a, bool immediate)
 
     gen_effective_address(addr, a, immediate, 7);
     gen_helper_mmix_read_sreg(rp, tcg_env, tcg_constant_i32(MMIX_SREG_RP));
+    /* Preserve the inputs, then finish faultable growth before the exchange. */
+    gen_helper_mmix_prepare_reg_write(tcg_env, tcg_constant_i32(a->x));
     if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_cmpxchg(old, tcg_env, addr, rp, new);
         ctx->base.is_jmp = DISAS_TOO_MANY;

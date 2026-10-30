@@ -528,6 +528,13 @@ uint64_t helper_mmix_read_reg(CPUMMIXState *env, uint32_t reg)
     return mmix_cpu_read_reg(env, reg);
 }
 
+void helper_mmix_prepare_reg_write(CPUMMIXState *env, uint32_t reg)
+{
+    if (reg < mmix_cpu_get_rg(env)) {
+        mmix_cpu_grow_rl(env, reg + 1, GETPC());
+    }
+}
+
 void helper_mmix_write_reg(CPUMMIXState *env, uint32_t reg, uint64_t val)
 {
     mmix_cpu_write_reg_ra(env, reg, val, GETPC());
