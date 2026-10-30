@@ -790,6 +790,22 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         z = env->sregs[MMIX_SREG_RZ];
     }
 
+    if (!trap_state && (int64_t)env->pc >= 0 && (int64_t)where < 0) {
+        /*
+         * MMIX-PIPE section 322 cancels RESUME before examining rX.
+         * Unlike a normal jump, its continuation remains the next
+         * instruction, even when the p request is masked.
+         */
+        mmix_cpu_set_rq_bits(env, MMIX_RQ_PROGRAM_P);
+        if (env->sregs[MMIX_SREG_RK] & MMIX_RQ_PROGRAM_P) {
+            mmix_cpu_raise_dynamic_trap(env, MMIX_RQ_PROGRAM_P, resume_insn);
+        }
+        mmix_cpu_retire_instruction(env, resume_insn, env->pc);
+        env->pc = env->npc;
+        env->npc += 4;
+        cpu_loop_exit_noexc(cs);
+    }
+
     if (trap_state && (int64_t)exec < 0) {
         if (env->trap_context_sequence != 0) {
             restart_found = mmix_trap_restart_take_sequence(
@@ -898,10 +914,6 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 tracked_restart = false;
             }
         }
-    }
-
-    if (!trap_state) {
-        mmix_cpu_check_control_transfer(env, resume_insn, where);
     }
 
     if (trap_state) {

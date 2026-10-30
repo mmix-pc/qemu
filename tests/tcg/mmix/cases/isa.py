@@ -106,6 +106,11 @@ def negative_arithmetic_trip_test(name, event):
         (0, [jump(JMP, bootstrap // 4)]),
         (handler, [wyde(SETL, R250, 0xdead), halt()]),
         (bootstrap, [
+            # RESUME must already be in kernel space to select negative rW.
+            *set_octa(R1, (1 << 63) | (bootstrap + 0x40)),
+            insn(GO, R2, R1, R0),
+        ]),
+        (bootstrap + 0x40, [
             *set_octa(R1, event << RA_ENABLE_SHIFT),
             insn(PUT, SR_A, 0, R1),
             *set_octa(R2, NEGATIVE_TRIP_MAIN + 4),
@@ -1423,6 +1428,110 @@ def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140,
         program_with_handler(prefix, handler, trap_handler),
         pc=handler + (len(trap_handler) - 1) * 4,
         regs=regs,
+    )
+
+
+def resume_negative_target_test(name, exec_word, *, masked):
+    handler = (1 << 63) | 0x200
+    target = (1 << 63) | 0x1000
+    setup = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, target),
+        insn(PUT, SR_W, 0, R2),
+        *set_octa(R3, exec_word),
+        insn(PUT, SR_X, 0, R3),
+        wyde(SETL, R4, 0x111),
+        insn(PUT, SR_Y, 0, R4),
+        wyde(SETL, R5, 0x777),
+        insn(PUT, SR_Z, 0, R5),
+        wyde(SETL, R6, 0x88),
+        insn(PUT, SR_B, 0, R6),
+        wyde(SETL, R7, 0x99),
+        insn(PUT, SR_BB, 0, R7),
+        wyde(SETL, R200, 0xdead),
+        wyde(SETL, R255, 0x55),
+        *set_octa(R8, 0 if masked else RQ_PROGRAM_P),
+        insn(PUT, SR_K, 0, R8),
+    ]
+    continuation = (len(setup) + 1) * 4
+    checks = [
+        insn(GET, R40, 0, SR_Q),
+        insn(GET, R41, 0, SR_WW),
+        insn(GET, R42, 0, SR_XX),
+        insn(GET, R43, 0, SR_W),
+        insn(GET, R44, 0, SR_X),
+        insn(GET, R45, 0, SR_Y),
+        insn(GET, R46, 0, SR_Z),
+        insn(GET, R47, 0, SR_B),
+        insn(GET, R48, 0, SR_BB),
+        insn(GET, R49, 0, SR_K),
+        insn(ADDU, R50, R255, R0),
+        wyde(SETL, R255, 0),
+        halt(),
+    ]
+    return MMIXTest(
+        f"resume-negative-target-{name}-{'masked' if masked else 'enabled'}",
+        program_with_regions(
+            (0, [*setup, insn(RESUME, 0, 0, 0), *checks]),
+            (0x200, checks),
+            (0x1000, [wyde(SETL, R201, 0xdead), halt()]),
+        ),
+        pc=(continuation if masked else handler) + (len(checks) - 1) * 4,
+        regs={
+            R40: RQ_PROGRAM_P,
+            R41: 0 if masked else continuation,
+            R42: 0 if masked else DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_P |
+                 int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
+            R43: target,
+            R44: exec_word,
+            R45: 0x111,
+            R46: 0x777,
+            R47: 0x88,
+            R48: 0x99 if masked else 0x55,
+            R49: 0,
+            R50: 0x55 if masked else 0,
+            R200: 0xdead,
+            R201: 0,
+        },
+    )
+
+
+def resume_kernel_negative_target_test(*, private):
+    direct = 1 << 63
+    bank = (SR_WW, SR_XX) if private else (SR_W, SR_X)
+    return MMIXTest(
+        f"resume{int(private)}-kernel-negative-target",
+        program_with_regions(
+            (0, [
+                *set_octa(R1, direct | 0x200),
+                insn(GO, R2, R1, R0),
+            ]),
+            (0x200, [
+                insn(GET, R9, 0, SR_Q),
+                insn(PUTI, SR_Q, 0, 0),
+                *set_octa(R1, direct | 0x600),
+                insn(PUT, bank[0], 0, R1),
+                *set_octa(R2, 1 << 63),
+                insn(PUT, bank[1], 0, R2),
+                wyde(SETL, R3, 0x66),
+                insn(PUT, SR_BB, 0, R3),
+                wyde(SETL, R255, 0x55),
+                insn(RESUME, 0, 0, int(private)),
+                wyde(SETL, R201, 0xdead),
+                halt(),
+            ]),
+            (0x600, [
+                insn(GET, R40, 0, SR_Q),
+                insn(GET, R41, 0, SR_K),
+                insn(ADDU, R42, R255, R0),
+                wyde(SETL, R255, 0),
+                halt(),
+            ]),
+        ),
+        pc=direct | 0x610,
+        regs={R40: 0, R41: 0x55 if private else 0,
+              R42: 0x66 if private else 0x55, R201: 0},
     )
 
 
@@ -3578,10 +3687,28 @@ ISA_TESTS = [
             R40: RQ_PROGRAM_P,
             R41: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_P |
                  int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
-            R42: 0x8000000000000300,
+            R42: 0x54,
             R43: 0,
         },
     ),
+    *[
+        resume_negative_target_test(name, exec_word, masked=masked)
+        for name, exec_word in (
+            ("skip", 1 << 63),
+            ("ropcode0", int.from_bytes(insn(ORI, R200, R0, 7), "big")),
+            ("ropcode1", (1 << 56) |
+             int.from_bytes(insn(ADDU, R200, R0, R0), "big")),
+            ("ropcode2", (2 << 56) |
+             int.from_bytes(insn(ORI, R200, R0, 7), "big")),
+            ("ropcode3", (3 << 56) |
+             int.from_bytes(insn(SWYM, 0, 0, 0), "big")),
+            ("invalid-ropcode", 4 << 56),
+            ("inserted-resume", int.from_bytes(insn(RESUME, 0, 0, 1), "big")),
+        )
+        for masked in (False, True)
+    ],
+    resume_kernel_negative_target_test(private=False),
+    resume_kernel_negative_target_test(private=True),
     MMIXTest(
         "positive-address-incomplete-rk-security-trap",
         b"".join([
