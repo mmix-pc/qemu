@@ -5,9 +5,6 @@
 from .common import *
 
 
-EXPECTED_FAILURE_TESTS = []
-
-
 def semihosting_disabled_trap_test(name, program):
     entry = MMIX_NEGATIVE_ALIAS_BIT | MMIX_RAW_ENTRY
     handler = entry + 0x100
