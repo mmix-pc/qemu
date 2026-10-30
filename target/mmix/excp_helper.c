@@ -817,6 +817,12 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                 env, resume_insn, mmix_cpu_read_reg(env, 0),
                 mmix_cpu_read_reg(env, resume_z));
         }
+        /* Reject at the originating RESUME, before restoring any state. */
+        if (ropcode == 0 && ((uint32_t)exec >> 24) == MMIX_RESUME_OPCODE) {
+            mmix_cpu_break_rules_and_continue(
+                env, resume_insn, mmix_cpu_read_reg(env, 0),
+                mmix_cpu_read_reg(env, resume_z));
+        }
         if (trap_state && ropcode != 3) {
             if (env->trap_context_sequence != 0) {
                 restart_found = mmix_trap_restart_find_sequence(

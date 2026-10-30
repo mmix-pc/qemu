@@ -1426,6 +1426,121 @@ def resume_rule_break_test(name, instruction, ropcode=1, continuation=0x140,
     )
 
 
+def inserted_resume_rejection_test(*, private, masked, ropcode=0):
+    main = 0x200
+    handler = 0x400
+    continuation = 0x600
+    direct = 1 << 63
+    bank = (SR_WW, SR_XX, SR_YY, SR_ZZ) if private else (
+        SR_W, SR_X, SR_Y, SR_Z
+    )
+    instruction = insn(RESUME, 0, 0, int(private))
+    proposed = (ropcode << 56) | int.from_bytes(
+        insn(RESUME, 0, 0, int(not private)), "big"
+    )
+    mask = 0 if masked else RQ_PROGRAM_B
+    setup = [
+        insn(GET, R9, 0, SR_Q),
+        insn(PUTI, SR_Q, 0, 0),
+        *set_octa(R1, direct | handler),
+        insn(PUT, SR_TT, 0, R1),
+        *set_octa(R2, mask),
+        insn(PUT, SR_K, 0, R2),
+        *set_octa(R3, direct | continuation),
+        insn(PUT, bank[0], 0, R3),
+        *set_octa(R4, proposed),
+        insn(PUT, bank[1], 0, R4),
+        wyde(SETL, R5, FORCED_TRANSLATION_VIRTUAL),
+        insn(PUT, bank[2], 0, R5),
+        wyde(SETL, R6, FORCED_TRANSLATION_PHYSICAL | 7),
+        insn(PUT, bank[3], 0, R6),
+        *set_octa(R7, VM_RV_PAGE0),
+        insn(PUT, SR_V, 0, R7),
+        wyde(SETL, R8, 0x66),
+        insn(PUT, SR_BB, 0, R8),
+        wyde(SETL, R255, 0x55),
+    ]
+    resume_pc = (direct | main) + len(setup) * 4
+    checks = [
+        insn(GET, R40, 0, SR_Q),
+        insn(GET, R41, 0, SR_WW),
+        insn(GET, R42, 0, SR_XX),
+        insn(GET, R43, 0, SR_BB),
+        insn(GET, R44, 0, SR_K),
+        insn(ADDU, R45, R255, R0),
+        insn(GET, R46, 0, bank[0]),
+        insn(GET, R47, 0, bank[1]),
+        insn(GET, R48, 0, bank[2]),
+        insn(GET, R49, 0, bank[3]),
+        insn(LDVTSI, R50, R5, 7),
+        wyde(SETL, R255, 0),
+        halt(),
+    ]
+    bank_preserved = masked or not private
+    expected_exec = (DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
+                     int.from_bytes(instruction, "big"))
+    return MMIXTest(
+        f"resume{int(private)}-ropcode{ropcode}-inserted-resume-"
+        f"{'masked' if masked else 'enabled'}",
+        program_with_regions(
+            (0, [
+                *set_octa(R1, direct | main),
+                insn(GO, R2, R1, R0),
+            ]),
+            (main, [*setup, instruction, *checks]),
+            (handler, checks),
+            (continuation, [wyde(SETL, R30, 0xdead), halt()]),
+        ),
+        pc=(resume_pc + 4 if masked else direct | handler) +
+           (len(checks) - 1) * 4,
+        regs={
+            R30: 0,
+            R40: RQ_PROGRAM_B,
+            R41: (direct | continuation) if masked and private else (
+                0 if masked else resume_pc + 4
+            ),
+            R42: proposed if masked and private else (
+                0 if masked else expected_exec
+            ),
+            R43: 0x66 if masked else 0x55,
+            R44: 0,
+            R45: 0x55 if masked else 0,
+            R46: (direct | continuation) if bank_preserved else resume_pc + 4,
+            R47: proposed if bank_preserved else expected_exec,
+            R48: FORCED_TRANSLATION_VIRTUAL if bank_preserved else 0,
+            R49: (FORCED_TRANSLATION_PHYSICAL | 7) if bank_preserved else (
+                direct | handler
+            ),
+            R50: 0,
+        },
+    )
+
+
+def noninserted_resume_word_test(*, result):
+    exec_word = ((2 << 56) if result else (1 << 63)) | int.from_bytes(
+        insn(RESUME, R200, 0, 1), "big"
+    )
+    return MMIXTest(
+        f"resume-{'result' if result else 'skip'}-ignores-resume-opcode",
+        program_with_regions(
+            (0, [
+                wyde(SETL, R1, 0x100),
+                insn(PUT, SR_W, 0, R1),
+                *set_octa(R2, exec_word),
+                insn(PUT, SR_X, 0, R2),
+                wyde(SETL, R3, 0x77),
+                insn(PUT, SR_Z, 0, R3),
+                insn(RESUME, 0, 0, 0),
+                wyde(SETL, R30, 0xdead),
+                halt(),
+            ]),
+            (0x100, [insn(GET, R40, 0, SR_Q), halt()]),
+        ),
+        pc=0x104,
+        regs={R30: 0, R40: 0, R200: 0x77 if result else 0},
+    )
+
+
 ROPCODE1_ELIGIBLE_OPCODES = frozenset((
     *range(0x01, 0x40),
     *range(0x60, 0x80),
@@ -6260,10 +6375,12 @@ ISA_TESTS = [
                     insn(PUT, SR_W, 0, R3),
                     *set_octa(
                         R4,
-                        int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
+                        int.from_bytes(insn(RESUME, 0, 0, 1), "big"),
                     ),
                     insn(PUT, SR_X, 0, R4),
                     insn(RESUME, 0, 0, 0),
+                    wyde(SETL, R11, 0x55),
+                    halt(),
                 ],
             ),
             (0x7c, [wyde(SETL, R10, 0xdead)]),
@@ -6280,16 +6397,25 @@ ISA_TESTS = [
                 ],
             ),
         ),
-        pc=0x84,
+        pc=0x40,
         regs={
             R10: 0,
             R11: 0x55,
             R40: RQ_PROGRAM_B,
-            R41: 0x80,
+            R41: 0x3c,
             R42: DYNAMIC_TRAP_RESUME_NEXT | RQ_PROGRAM_B |
                  int.from_bytes(insn(RESUME, 0, 0, 0), "big"),
         },
     ),
+    *[
+        inserted_resume_rejection_test(
+            private=private, masked=masked, ropcode=ropcode
+        )
+        for private, ropcode in ((False, 0), (True, 0), (True, 3))
+        for masked in (False, True)
+    ],
+    noninserted_resume_word_test(result=False),
+    noninserted_resume_word_test(result=True),
     MMIXTest(
         "resume-ropcode0-branch-taken-replay",
         RESUME0_BRANCH_TAKEN_REPLAY,
