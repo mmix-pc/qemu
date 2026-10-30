@@ -34,6 +34,11 @@
 #define MMIX_PTP_C_MASK ((1ULL << 50) - 1)
 #define MMIX_PT_BLOCK_SIZE (1ULL << 13)
 
+enum {
+    MMIX_MMU_DATA_IDX,
+    MMIX_MMU_INSN_IDX,
+};
+
 typedef enum MMIXTranslationCacheKind {
     MMIX_TRANSLATION_CACHE_INSTRUCTION,
     MMIX_TRANSLATION_CACHE_DATA,
@@ -223,7 +228,7 @@ static void mmix_cpu_set_ipi_gpio(void *opaque, int irq, int level)
 
 static int mmix_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
-    return ifetch ? 1 : 0;
+    return ifetch ? MMIX_MMU_INSN_IDX : MMIX_MMU_DATA_IDX;
 }
 
 static uint64_t mmix_access_cause(MMUAccessType access_type)
@@ -369,6 +374,14 @@ void mmix_cpu_flush_translation_caches(CPUMMIXState *env)
     g_array_set_size(cpu->instruction_translation_cache, 0);
     g_array_set_size(cpu->data_translation_cache, 0);
     tlb_flush(env_cpu(env));
+}
+
+void mmix_cpu_flush_replay_code_tlb(CPUMMIXState *env)
+{
+    if (env->insn_replay.active) {
+        tlb_flush_page_by_mmuidx(env_cpu(env), env->insn_replay.insn_pc,
+                                 1U << MMIX_MMU_INSN_IDX);
+    }
 }
 
 uint64_t mmix_cpu_ldvts(CPUMMIXState *env, uint64_t key)
@@ -902,6 +915,20 @@ static bool mmix_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
     MMIXAddressTranslation translation;
     hwaddr vpage = addr & TARGET_PAGE_MASK;
     hwaddr ppage;
+
+    if (env->insn_replay.active && access_type == MMU_INST_FETCH &&
+        addr == env->insn_replay.insn_pc) {
+        /*
+         * RESUME supplies the replay instruction in rX/rXX.  TCG still
+         * probes its code TLB for the modeled instruction location before
+         * entering the target translator, so give that probe a temporary
+         * unassigned page without translating or fetching the location.
+         */
+        ppage = MMIX_PHYS_MASK & TARGET_PAGE_MASK;
+        tlb_set_page(cs, vpage, ppage, PAGE_EXEC, mmu_idx,
+                     TARGET_PAGE_SIZE);
+        return true;
+    }
 
     if (mmix_cpu_hosted_memory_enabled(env) &&
         access_type == MMU_INST_FETCH) {

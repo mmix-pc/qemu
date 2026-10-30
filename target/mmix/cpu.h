@@ -350,6 +350,7 @@ bool mmix_cpu_wakeup_pending(CPUMMIXState *env);
 void mmix_cpu_update_interrupt(CPUMMIXState *env);
 void mmix_cpu_set_interrupt_controller(CPUState *cs, int level);
 void mmix_cpu_set_ipi(CPUState *cs, int level);
+void mmix_cpu_flush_replay_code_tlb(CPUMMIXState *env);
 void mmix_cpu_set_hosted_memory(CPUState *cs,
                                 const MMIXHostedMemoryOps *ops,
                                 void *opaque);

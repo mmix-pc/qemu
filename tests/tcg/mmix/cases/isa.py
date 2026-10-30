@@ -2452,12 +2452,92 @@ def masked_missing_page_test():
     )
 
 
+def resume_unfetchable_insertion_test(name, ropcode, replay_pc, replay_pte):
+    handler_phys = 0x400
+    handler = (1 << 63) | handler_phys
+    replay_insn = int.from_bytes(insn(ADDU, R240, R10, R11), "big")
+    setup = [
+        *set_octa(R1, handler),
+        insn(PUT, SR_TT, R0, R1),
+        *set_octa(R2, RQ_PROGRAM_X),
+        insn(PUT, SR_K, R0, R2),
+        *set_octa(R3, VM_PAGE_TABLE),
+        wyde(SETL, R4, 7),
+        insn(STOU, R4, R3, R0),
+    ]
+
+    if replay_pte is not None:
+        setup.extend([
+            *set_octa(R4, replay_pte),
+            insn(STOUI, R4, R3, 8),
+        ])
+
+    setup.extend([
+        wyde(SETL, R240, 41),
+        *set_octa(R5, replay_pc + 4),
+        insn(PUT, SR_W, R0, R5),
+        *set_octa(R6, (ropcode << 56) | replay_insn),
+        insn(PUT, SR_X, R0, R6),
+    ])
+    if ropcode == 1:
+        setup.extend([
+            wyde(SETL, R7, 41),
+            insn(PUT, SR_Y, R0, R7),
+            wyde(SETL, R8, 1),
+            insn(PUT, SR_Z, R0, R8),
+        ])
+    else:
+        setup.extend([
+            wyde(SETL, R10, 41),
+            wyde(SETL, R11, 1),
+        ])
+    setup.extend([
+        *set_octa(R9, VM_RV_PAGE0),
+        insn(PUT, SR_V, R0, R9),
+        insn(RESUME, R0, R0, R0),
+    ])
+
+    return MMIXTest(
+        name,
+        program_with_regions(
+            (0, setup),
+            (handler_phys, [
+                insn(GET, R241, R0, SR_Q),
+                insn(GET, R242, R0, SR_WW),
+                insn(GET, R243, R0, SR_XX),
+                halt(),
+            ]),
+        ),
+        pc=handler + 12,
+        regs={
+            R240: 42,
+            R241: RQ_PROGRAM_X,
+            R242: replay_pc + 8,
+            R243: RQ_PROGRAM_X | int.from_bytes(
+                insn(SWYM, R0, R0, R0), "big"
+            ),
+        },
+    )
+
+
 ISA_TESTS = [
     *NEGATIVE_TRIP_TESTS,
     retained_asn_switch_test(),
     retained_page_size_test(),
     retained_asn_ldvts_test(),
     sync6_translation_cache_flush_test(),
+    resume_unfetchable_insertion_test(
+        "resume-ropcode0-unmapped-insertion",
+        0,
+        0x4000000,
+        None,
+    ),
+    resume_unfetchable_insertion_test(
+        "resume-ropcode1-nonexec-insertion",
+        1,
+        0x2000,
+        0x6006,
+    ),
     masked_translation_load_test(),
     masked_translation_store_test(),
     masked_translation_fetch_test(),

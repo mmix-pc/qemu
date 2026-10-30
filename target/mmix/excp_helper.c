@@ -132,6 +132,7 @@ static void mmix_trap_restart_push(CPUMMIXState *env,
         restart.forced_translation_access = env->forced_translation_access;
     }
     /* A trap accepted before replay executes suspends it at this depth. */
+    mmix_cpu_flush_replay_code_tlb(env);
     mmix_trap_restart_lock();
     g_assert(mmix_trap_restart_sequence != UINT64_MAX);
     restart.sequence = ++mmix_trap_restart_sequence;
@@ -360,6 +361,7 @@ void helper_mmix_consume_insn_replay(CPUMMIXState *env)
     uint64_t sequence = env->insn_replay.trap_restart_sequence;
 
     g_assert(env->insn_replay.active);
+    mmix_cpu_flush_replay_code_tlb(env);
     env->insn_replay.active = false;
     env->insn_replay.masked_memory_access = false;
     if (sequence != 0) {
