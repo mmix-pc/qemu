@@ -906,7 +906,6 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
                     ((uint32_t)exec >> 24) != MMIX_RESUME_OPCODE;
 
             if (!valid ||
-                (translation_access != MMU_INST_FETCH && where < 4) ||
                 !mmix_cpu_install_translation(env, y, z,
                                               translation_access)) {
                 mmix_cpu_break_rules_and_continue(
@@ -967,7 +966,7 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         }
 
         if (pending_stack_access) {
-            if ((ropcode != 3 && (exec & cause) == 0) || where < 4) {
+            if (ropcode != 3 && (exec & cause) == 0) {
                 mmix_resume_unsupported(env, "invalid pending stack access",
                                         exec);
             }
@@ -1024,30 +1023,39 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
     {
         uint32_t events = (exec >> 40) & MMIX_RA_EVENT_MASK;
         uint32_t reg = (insn >> 16) & 0xff;
+        uint32_t set_insn = (MMIX_SETH_OPCODE << 24) | (reg << 16);
+        uint64_t cause;
 
+        /* MMIX-PIPE section 323 inserts a supplied SETH at rW[W] - 4. */
+        env->pc = where - 4;
+        env->npc = where;
+        cause = helper_mmix_check_instruction_security(env, set_insn);
         mmix_cpu_write_reg(env, reg, z);
+        /* Retain the ORI accounting used by MMIX-SIM section 126. */
         mmix_cpu_retire_instruction(env, MMIX_ORI_OPCODE << 24, where - 4);
-        if (events != 0) {
-            env->pc = where - 4;
-            env->npc = where;
-            if (tracked_restart) {
-                mmix_trap_restart_finish(env, restart, restart_detached);
-            }
-            mmix_update_ra_events_internal(env, events, insn, y, z, true);
-        }
-        env->pc = where;
-        env->npc = where + 4;
         if (tracked_restart) {
             mmix_trap_restart_finish(env, restart, restart_detached);
         }
+        mmix_update_ra_events_internal(env, events, set_insn, y, z, true);
+        if (cause != 0) {
+            uint64_t handler = env->sregs[MMIX_SREG_RTT];
+
+            /* The result commits before s/p; retain the supplied operands. */
+            qemu_log_mask(CPU_LOG_INT,
+                          "MMIX dynamic trap causes=0x%016" PRIx64
+                          " from 0x%016" PRIx64 " to 0x%016" PRIx64 "\n",
+                          cause, env->pc, handler);
+            mmix_commit_replay_before_synchronous_trap(env);
+            mmix_cpu_enter_trap(cs, handler, where,
+                                MMIX_DYNAMIC_TRAP_RESUME_NEXT | cause |
+                                set_insn, y, z);
+            cpu_loop_exit_noexc(cs);
+        }
+        env->pc = where;
+        env->npc = where + 4;
         cpu_loop_exit_noexc(cs);
     }
     case 0:
-        if (where < 4) {
-            mmix_cpu_break_rules_and_continue(
-                env, resume_insn, mmix_cpu_read_reg(env, 0),
-                mmix_cpu_read_reg(env, resume_z));
-        }
         env->insn_replay = (MMIXInsnReplayState) {
             .insn_pc = where - 4,
             .continuation = where,
@@ -1060,11 +1068,6 @@ static void mmix_resume_state(CPUMMIXState *env, bool trap_state,
         env->npc = env->insn_replay.continuation;
         cpu_loop_exit_noexc(cs);
     case 1:
-        if (where < 4) {
-            mmix_cpu_break_rules_and_continue(
-                env, resume_insn, mmix_cpu_read_reg(env, 0),
-                mmix_cpu_read_reg(env, resume_z));
-        }
         env->insn_replay = (MMIXInsnReplayState) {
             .insn_pc = where - 4,
             .continuation = where,

@@ -1914,11 +1914,6 @@ ROPCODE1_RULE_BREAK_TESTS = [
         ropcode=2,
     ),
     resume_rule_break_test(
-        "resume-ropcode1-invalid-continuation",
-        insn(ADD, R200, R20, R21),
-        continuation=0,
-    ),
-    resume_rule_break_test(
         "resume-ropcode1-at-local-boundary",
         insn(ADD, R5, R20, R21),
     ),
