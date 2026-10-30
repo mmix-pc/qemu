@@ -720,7 +720,7 @@ bool mmix_cpu_debug_write_pc(CPUMMIXState *env, uint64_t val)
     if (env->pc == val) {
         return true;
     }
-    if ((val & 3) || !mmix_cpu_debug_write_idle(env)) {
+    if (!mmix_cpu_debug_write_idle(env)) {
         return false;
     }
     cpu_set_pc(env_cpu(env), val);
@@ -744,7 +744,7 @@ bool mmix_cpu_debug_write_registers(CPUMMIXState *env,
     bool interrupt_changed;
     unsigned int i;
 
-    if (!mmix_cpu_debug_write_idle(env) || (pc & 3) ||
+    if (!mmix_cpu_debug_write_idle(env) ||
         !mmix_cpu_debug_stack_valid(env, ro, rs, rg, rl) ||
         sregs[MMIX_SREG_RN] != env->sregs[MMIX_SREG_RN] ||
         (sregs[MMIX_SREG_RA] & ~MMIX_RA_VALID_MASK) ||

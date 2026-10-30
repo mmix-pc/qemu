@@ -7,6 +7,8 @@
 import struct
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from cases.common import INITIAL_STACK
 from cases.debugger import (
     DEBUGGER_ELF_IMAGE,
@@ -234,12 +236,6 @@ def test_rsp_bulk_register_restore_is_atomic(qemu, workdir):
 
         invalid_packets = []
 
-        invalid_pc = original_data.copy()
-        _set_packet_register(invalid_pc, 0, 0x1112131415161718)
-        _set_packet_register(invalid_pc, MMIX_GDB_PC_REG,
-                             DEBUGGER_ENTRY + 1)
-        invalid_packets.append(invalid_pc)
-
         invalid_arithmetic = original_data.copy()
         _set_packet_register(invalid_arithmetic, 0, 0x2122232425262728)
         _set_packet_register(invalid_arithmetic, ra, 1 << 20)
@@ -450,23 +446,27 @@ def test_rsp_special_register_write_updates_translation_state(qemu, workdir):
         assert _read_register(client, rv) == value
 
 
-def test_rsp_pc_write_preserves_instruction_alignment(qemu, workdir):
+@pytest.mark.parametrize("low", range(4))
+@pytest.mark.parametrize("bulk", (False, True))
+def test_rsp_pc_write_preserves_logical_location(qemu, workdir, low, bulk):
     image = _write_debugger_fixture(workdir)
 
     with QEMURSPServer(qemu, image, workdir) as server:
         client = server.client
 
-        _reject_register_write(client, MMIX_GDB_PC_REG,
-                               DEBUGGER_ENTRY + 1)
-        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY
-
         source = 0x3132333435363738
         _write_register(client, 2, source)
-        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_ENTRY + 4)
-        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 4
+        pc = DEBUGGER_ENTRY + 4 + low
+        if bulk:
+            packet = bytearray.fromhex(client.request("g").decode("ascii"))
+            _set_packet_register(packet, MMIX_GDB_PC_REG, pc)
+            assert client.request(b"G" + packet.hex().encode("ascii")) == b"OK"
+        else:
+            _write_register(client, MMIX_GDB_PC_REG, pc)
+        assert _read_register(client, MMIX_GDB_PC_REG) == pc
         _step(client)
         assert _read_register(client, 40) == source
-        assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_ENTRY + 8
+        assert _read_register(client, MMIX_GDB_PC_REG) == pc + 4
 
 
 def test_rsp_memory_access_uses_mmix_virtual_translation(qemu, workdir):
@@ -552,18 +552,37 @@ def test_rsp_single_step_handles_mmix_control_flow(qemu, workdir):
                               MMIX_GDB_PC_REG) == DEBUGGER_WINDOW_RETURN
 
 
-def test_rsp_continue_and_async_interrupt_have_stable_pc(qemu, workdir):
+@pytest.mark.parametrize("low", range(4))
+def test_rsp_continue_and_async_interrupt_have_stable_pc(qemu, workdir, low):
     image = _write_debugger_fixture(workdir)
 
     with QEMURSPServer(qemu, image, workdir) as server:
         client = server.client
 
-        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_LOOP)
+        _write_register(client, MMIX_GDB_PC_REG, DEBUGGER_LOOP + low)
         for _ in range(2):
             client.resume()
             stop = client.interrupt()
             assert stop.startswith(b"T02")
-            assert _read_register(client, MMIX_GDB_PC_REG) == DEBUGGER_LOOP
+            assert _read_register(client, MMIX_GDB_PC_REG) == (
+                DEBUGGER_LOOP + low
+            )
+
+
+@pytest.mark.parametrize("low", range(4))
+def test_rsp_breakpoint_preserves_logical_pc(qemu, workdir, low):
+    image = _write_debugger_fixture(workdir)
+
+    with QEMURSPServer(qemu, image, workdir) as server:
+        client = server.client
+        address = DEBUGGER_ENTRY + 4
+        _write_register(client, MMIX_GDB_PC_REG, address + low)
+        assert client.request(f"Z0,{address:x},4") == b"OK"
+        assert client.request("c").startswith(b"T05")
+        assert _read_register(client, MMIX_GDB_PC_REG) == address + low
+        assert client.request(f"z0,{address:x},4") == b"OK"
+        _step(client)
+        assert _read_register(client, MMIX_GDB_PC_REG) == address + low + 4
 
 
 def test_rsp_software_breakpoints_preserve_instructions(qemu, workdir):
