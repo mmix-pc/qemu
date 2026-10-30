@@ -249,13 +249,14 @@ static bool trans_TRAP(DisasContext *ctx, arg_xyz *a)
                                          tcg_constant_i32(ctx->insn),
                                          tcg_constant_i32(a->y),
                                          tcg_constant_i32(a->z),
-                                         gen_load_reg(a->y),
-                                         gen_load_reg(a->z));
+                                         gen_load_replay_y(ctx, a),
+                                         gen_load_replay_z(ctx, a, false));
         return true;
     }
 
     gen_helper_mmix_trap(tcg_env, tcg_constant_i32(ctx->insn),
-                         gen_load_reg(a->y), gen_load_reg(a->z));
+                         gen_load_replay_y(ctx, a),
+                         gen_load_replay_z(ctx, a, false));
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
 }

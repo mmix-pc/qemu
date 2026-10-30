@@ -751,10 +751,10 @@ static bool mmix_resume_ropcode1_eligible(uint32_t insn)
 
     /*
      * MMIXware mmix-doc section 38 permits normal opcodes in groups 0-3,
-     * 6-7, and C-E, except TRAP. Optional SYNCD[I] and SYNCID[I]
-     * substitution remains deferred.
+     * 6-7, and C-E. Optional SYNCD[I] and SYNCID[I] substitution remains
+     * deferred.
      */
-    return (op >= 0x01 && op <= 0x3f) ||
+    return op <= 0x3f ||
            (op >= 0x60 && op <= 0x7f) ||
            (op >= 0xc0 && op <= 0xef);
 }

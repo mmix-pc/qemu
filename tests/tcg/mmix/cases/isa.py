@@ -1651,7 +1651,7 @@ def noninserted_resume_word_test(*, result):
 
 
 ROPCODE1_ELIGIBLE_OPCODES = frozenset((
-    *range(0x01, 0x40),
+    *range(0x00, 0x40),
     *range(0x60, 0x80),
     *range(0xc0, 0xf0),
 ))
@@ -1671,10 +1671,21 @@ def ropcode1_opcode_audit_test(opcode):
 
     continuation = 0x100
     saved_insn = int.from_bytes(instruction, "big")
+    setup = []
+    observer = []
+    regs = {R250: opcode + 1}
+    if opcode == TRAP:
+        setup = [wyde(SETL, R3, continuation), insn(PUT, SR_T, 0, R3),
+                 wyde(SETL, R20, 0x55), wyde(SETL, R21, 0x66)]
+        observer = [insn(GET, R251, 0, SR_WW), insn(GET, R252, 0, SR_XX),
+                    insn(GET, R253, 0, SR_YY), insn(GET, R254, 0, SR_ZZ)]
+        regs.update({R251: continuation, R252: (1 << 63) | saved_insn,
+                     R253: 0, R254: 0})
     program = program_with_regions(
         (
             0,
             [
+                *setup,
                 *set_octa(R1, continuation),
                 insn(PUT, SR_W, 0, R1),
                 *set_octa(R2, (1 << 56) | saved_insn),
@@ -1684,13 +1695,13 @@ def ropcode1_opcode_audit_test(opcode):
                 insn(RESUME, 0, 0, 0),
             ],
         ),
-        (continuation, [wyde(SETL, R250, opcode + 1), halt()]),
+        (continuation, [*observer, wyde(SETL, R250, opcode + 1), halt()]),
     )
     return MMIXTest(
         f"{name}-eligible",
         program,
-        pc=continuation + 4,
-        regs={R250: opcode + 1},
+        pc=continuation + (len(observer) + 1) * 4,
+        regs=regs,
     )
 
 
@@ -1950,7 +1961,7 @@ ROPCODE1_OPCODE_AUDIT_TESTS = [
 def repeated_ropcode1_rule_break_program():
     handler = 0x180
     invalid_exec = (1 << 56) | int.from_bytes(
-        insn(TRAP, R200, R20, R21), "big"
+        insn(LDOU, R200, R20, R21), "big"
     )
     program = [
         wyde(SETL, R1, handler),
@@ -1990,7 +2001,7 @@ def nested_ropcode1_rule_break_program():
     handler_phys = 0x200
     handler = (1 << 63) | handler_phys
     invalid_exec = (1 << 56) | int.from_bytes(
-        insn(TRAP, R200, R20, R21), "big"
+        insn(LDOU, R200, R20, R21), "big"
     )
     prefix = [
         *set_octa(R1, handler),
