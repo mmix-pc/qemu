@@ -71,6 +71,7 @@ def privileged_device_alias_program():
         insn(LDOUI, R24, R5, 0),
         *set_octa(R6, virtio),
         insn(LDTUI, R25, R6, 0),
+        insn(LDTUI, R29, R6, 4),
         *set_octa(R7, pcie_ecam),
         insn(LDTUI, R26, R7, 0),
         *set_octa(R8, pcie_mmio32),
@@ -88,7 +89,9 @@ def privileged_device_alias_program():
             R21: MMIX_VIRT_FRAMEBUFFER_WIDTH,
             R23: 1,
             R24: MMIX_VIRT_INTC_IRQ_COUNT,
-            R25: 0x74726976,
+            # The modern transport is little-endian; MMIX LDTU is big-endian.
+            R25: 0x76697274,
+            R29: 0x02000000,
             # LDTU observes PCI configuration space's little-endian bytes.
             R26: 0x361B0800,
             R27: 0xFFFFFFFF,
