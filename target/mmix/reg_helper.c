@@ -433,7 +433,8 @@ uint64_t helper_mmix_check_instruction_security(CPUMMIXState *env,
         env->stack_overflow_pending = false;
         mmix_cpu_set_rq_bits(env, MMIX_RQ_STACK_OVERFLOW);
         mmix_cpu_update_interrupt(env);
-        if (mmix_cpu_interrupt_enabled(env)) {
+        /* A pending spill request must not interrupt a RESUME handoff. */
+        if (!env->insn_replay.active && mmix_cpu_interrupt_enabled(env)) {
             cs->exception_index = EXCP_MMIX_INTERRUPT;
             cpu_loop_exit(cs);
         }

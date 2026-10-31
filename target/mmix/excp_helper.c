@@ -1306,6 +1306,15 @@ bool mmix_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     CPUMMIXState *env = cpu_env(cs);
 
     if (interrupt_request & CPU_INTERRUPT_HARD) {
+        /*
+         * MMIX-PIPE sections 314 and 323 exclude the RESUME handoff from
+         * external interrupt boundaries. The supplied instruction must
+         * execute before we can publish a no-replay rXX and continuation.
+         * Leave requests pending; synchronous faults still suspend replay.
+         */
+        if (env->insn_replay.active) {
+            return false;
+        }
         if (!mmix_cpu_interrupt_enabled(env)) {
             return false;
         }

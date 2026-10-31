@@ -1628,6 +1628,7 @@ def nested_interrupt_replay_program(substitute_operands=False):
     nested_index = len(handler_code)
     handler_code[2] = branch(BNZ, R51, nested_index - 2)
     handler_code.extend([
+        insn(ORI, R55, R10, 0),
         insn(LDOU, R52, R63, R0),
         insn(STOU, R0, R61, R0),
         insn(STOU, R68, R62, R0),
@@ -1750,8 +1751,9 @@ INTERRUPT_TESTS = [
             R41: 0x55,
             R50: 2,
             R52: MMIX_VIRT_TIMER_IRQ_BASE,
-            R53: NESTED_INTERRUPT_REPLAY[2],
+            R53: NESTED_INTERRUPT_REPLAY[2] + 4,
             R54: DYNAMIC_TRAP_RESUME_NEXT,
+            R55: 0x21,
         },
     ),
     MMIXTest(
@@ -1764,8 +1766,9 @@ INTERRUPT_TESTS = [
             R41: 0x55,
             R50: 2,
             R52: MMIX_VIRT_TIMER_IRQ_BASE,
-            R53: NESTED_INTERRUPT_SUBSTITUTION[2],
+            R53: NESTED_INTERRUPT_SUBSTITUTION[2] + 4,
             R54: DYNAMIC_TRAP_RESUME_NEXT,
+            R55: 0x32,
         },
     ),
     MMIXTest(
