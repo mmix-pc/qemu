@@ -7,7 +7,40 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "mmix-helper.h"
+#include "accel/tcg/probe.h"
 #include "exec/helper-proto.h"
+#include "qemu/bswap.h"
+
+void helper_mmix_store_overflow(CPUMMIXState *env, uint64_t address,
+                                uint64_t value, uint32_t size)
+{
+    uint64_t octa = 0;
+    unsigned shift = (8 - size - (address & (8 - size))) * 8;
+
+    if ((int64_t)env->pc >= 0 &&
+        (env->sregs[MMIX_SREG_RA] &
+         (MMIX_RA_EVENT_V << MMIX_RA_ENABLE_SHIFT))) {
+        if (mmix_cpu_hosted_memory_enabled(env)) {
+            octa = mmix_cpu_hosted_load_octa(env, address & ~7ULL);
+        } else {
+            void *host;
+
+            /*
+             * The store has completed. Inspect RAM through its write mapping,
+             * without guest read permission, watchpoints or plugin callbacks.
+             * MMIO has no surrounding RAM octa: do not read device registers
+             * merely to fill rZ; leave the untransferred byte lanes zero.
+             */
+            probe_access_full_mmu(env, address & ~7ULL, 8, MMU_DATA_STORE,
+                                  0, &host, NULL);
+            if (host) {
+                octa = ldq_be_p(host);
+            }
+        }
+    }
+    octa = deposit64(octa, shift, size * 8, value);
+    mmix_record_arithmetic_events(env, MMIX_RA_EVENT_V, address, octa);
+}
 
 uint64_t helper_mmix_add(CPUMMIXState *env, uint32_t insn, uint64_t y,
                          uint64_t z)

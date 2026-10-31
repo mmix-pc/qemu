@@ -1284,6 +1284,37 @@ static bool gen_store_const_mem(DisasContext *ctx, arg_xyz *a, bool immediate,
                            tcg_constant_i64(a->x));
 }
 
+static bool gen_store_signed(DisasContext *ctx, arg_xyz *a, bool immediate,
+                             MemOp memop, uint64_t align_mask)
+{
+    TCGv_i64 address = tcg_temp_new_i64();
+    TCGv_i64 aligned = tcg_temp_new_i64();
+    TCGv_i64 value = gen_load_reg(a->x);
+    TCGv_i64 narrowed = tcg_temp_new_i64();
+    TCGLabel *done = gen_new_label();
+    unsigned size = memop_size(memop);
+
+    if (ctx->masked_memory_access) {
+        return true;
+    }
+    gen_begin_arithmetic(ctx);
+    gen_effective_address(address, a, immediate, 0);
+    tcg_gen_andi_i64(aligned, address, ~align_mask);
+    if (ctx->hosted_memory) {
+        gen_helper_mmix_hosted_store(tcg_env, aligned, value,
+                                     tcg_constant_i32(memop));
+        ctx->base.is_jmp = DISAS_TOO_MANY;
+    } else {
+        tcg_gen_qemu_st_i64(value, aligned, 0, memop);
+    }
+    tcg_gen_sextract_i64(narrowed, value, 0, size * 8);
+    tcg_gen_brcond_i64(TCG_COND_EQ, narrowed, value, done);
+    gen_helper_mmix_store_overflow(tcg_env, address, value,
+                                   tcg_constant_i32(size));
+    gen_set_label(done);
+    return true;
+}
+
 static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
     TCGv_i64 addr = tcg_temp_new_i64();
@@ -1303,16 +1334,16 @@ static bool gen_stht(DisasContext *ctx, arg_xyz *a, bool immediate)
     return true;
 }
 
-TRANS_GEN3(STB, gen_store_mem, false, MO_UB, 0)
-TRANS_GEN3(STBI, gen_store_mem, true, MO_UB, 0)
+TRANS_GEN3(STB, gen_store_signed, false, MO_UB, 0)
+TRANS_GEN3(STBI, gen_store_signed, true, MO_UB, 0)
 TRANS_GEN3(STBU, gen_store_mem, false, MO_UB, 0)
 TRANS_GEN3(STBUI, gen_store_mem, true, MO_UB, 0)
-TRANS_GEN3(STW, gen_store_mem, false, MO_BEUW, 1)
-TRANS_GEN3(STWI, gen_store_mem, true, MO_BEUW, 1)
+TRANS_GEN3(STW, gen_store_signed, false, MO_BEUW, 1)
+TRANS_GEN3(STWI, gen_store_signed, true, MO_BEUW, 1)
 TRANS_GEN3(STWU, gen_store_mem, false, MO_BEUW, 1)
 TRANS_GEN3(STWUI, gen_store_mem, true, MO_BEUW, 1)
-TRANS_GEN3(STT, gen_store_mem, false, MO_BEUL, 3)
-TRANS_GEN3(STTI, gen_store_mem, true, MO_BEUL, 3)
+TRANS_GEN3(STT, gen_store_signed, false, MO_BEUL, 3)
+TRANS_GEN3(STTI, gen_store_signed, true, MO_BEUL, 3)
 TRANS_GEN3(STTU, gen_store_mem, false, MO_BEUL, 3)
 TRANS_GEN3(STTUI, gen_store_mem, true, MO_BEUL, 3)
 TRANS_GEN3(STO, gen_store_mem, false, MO_BEUQ, 7)
