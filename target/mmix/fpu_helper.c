@@ -420,21 +420,22 @@ uint64_t helper_mmix_ldsf(uint64_t raw)
     return float32_to_float64(raw, &status);
 }
 
-uint64_t helper_mmix_stsf(CPUMMIXState *env, uint32_t insn, uint64_t addr,
-                          uint64_t val)
+uint64_t helper_mmix_stsf(CPUMMIXState *env, uint64_t val)
 {
     float_status status;
     float32 result;
 
     if (mmix_fp_is_nan(val)) {
         if (mmix_fp_is_snan(val)) {
-            mmix_record_arithmetic_events(env, MMIX_RA_EVENT_I, addr, val);
+            env->arithmetic_events |= MMIX_RA_EVENT_I;
             val = mmix_fp_quiet_nan(val);
         }
     }
 
     mmix_softfloat_status(&status, mmix_round_mode_from_ra(env));
     result = float64_to_float32(val, &status);
-    mmix_update_ra_from_status(env, insn, addr, val, &status);
+    /* Store operands are finalized only after the memory write succeeds. */
+    env->arithmetic_events |= mmix_events_from_float_flags(
+        get_float_exception_flags(&status));
     return result;
 }

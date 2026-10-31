@@ -1309,8 +1309,9 @@ static bool gen_store_signed(DisasContext *ctx, arg_xyz *a, bool immediate,
     }
     tcg_gen_sextract_i64(narrowed, value, 0, size * 8);
     tcg_gen_brcond_i64(TCG_COND_EQ, narrowed, value, done);
-    gen_helper_mmix_store_overflow(tcg_env, address, value,
-                                   tcg_constant_i32(size));
+    gen_helper_mmix_store_arithmetic(tcg_env, address, value,
+                                     tcg_constant_i32(size),
+                                     tcg_constant_i32(MMIX_RA_EVENT_V));
     gen_set_label(done);
     return true;
 }
@@ -1359,23 +1360,29 @@ TRANS_GEN1(STHTI, gen_stht, true)
 
 static bool gen_stsf(DisasContext *ctx, arg_xyz *a, bool immediate)
 {
+    TCGv_i64 address = tcg_temp_new_i64();
     TCGv_i64 addr = tcg_temp_new_i64();
     TCGv_i64 val = tcg_temp_new_i64();
+    TCGv_i32 events = tcg_temp_new_i32();
 
-    gen_effective_address(addr, a, immediate, 3);
-    gen_begin_arithmetic(ctx);
-    gen_helper_mmix_stsf(val, tcg_env, tcg_constant_i32(ctx->insn), addr,
-                         gen_load_reg(a->x));
-    gen_data_access_value(val);
     if (ctx->masked_memory_access) {
         return true;
-    } else if (ctx->hosted_memory) {
+    }
+    gen_effective_address(address, a, immediate, 0);
+    tcg_gen_andi_i64(addr, address, ~3ULL);
+    gen_begin_arithmetic(ctx);
+    gen_helper_mmix_stsf(val, tcg_env, gen_load_reg(a->x));
+    gen_data_access_value(val);
+    if (ctx->hosted_memory) {
         gen_helper_mmix_hosted_store(tcg_env, addr, val,
                                      tcg_constant_i32(MO_BEUL));
         ctx->base.is_jmp = DISAS_TOO_MANY;
     } else {
         tcg_gen_qemu_st_i64(val, addr, 0, MO_BEUL);
     }
+    tcg_gen_ld_i32(events, tcg_env, offsetof(CPUMMIXState, arithmetic_events));
+    gen_helper_mmix_store_arithmetic(tcg_env, address, val,
+                                     tcg_constant_i32(4), events);
     return true;
 }
 

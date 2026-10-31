@@ -9,8 +9,10 @@
 #include "mmix-helper.h"
 #include "semihosting.h"
 #include "accel/tcg/cpu-loop.h"
+#include "accel/tcg/probe.h"
 #include "exec/helper-proto.h"
 #include "exec/log.h"
+#include "qemu/bswap.h"
 #include "system/runstate.h"
 
 static QemuMutex mmix_trap_restart_mutex;
@@ -655,6 +657,42 @@ void helper_mmix_commit_arithmetic(CPUMMIXState *env, uint32_t insn)
     mmix_update_ra_events_internal(env, events, insn,
                                    env->arithmetic_y, env->arithmetic_z,
                                    false);
+}
+
+void helper_mmix_store_arithmetic(CPUMMIXState *env, uint64_t address,
+                                  uint64_t value, uint32_t size,
+                                  uint32_t events)
+{
+    uint64_t octa = 0;
+    unsigned shift = (8 - size - (address & (8 - size))) * 8;
+    uint32_t enables = env->sregs[MMIX_SREG_RA] >> MMIX_RA_ENABLE_SHIFT;
+
+    if (events == 0) {
+        return;
+    }
+    if (mmix_trip_handlers_available(env) && (events & enables)) {
+        if (mmix_cpu_hosted_memory_enabled(env)) {
+            octa = mmix_cpu_hosted_load_octa(env, address & ~7ULL);
+        } else {
+            void *host;
+
+            /*
+             * The store has completed. Inspect RAM through its write mapping,
+             * without guest read permission, watchpoints or plugin callbacks.
+             * MMIO has no surrounding RAM octa: do not read device registers
+             * merely to fill rZ; leave the untransferred byte lanes zero.
+             */
+            probe_access_full_mmu(env, address & ~7ULL, 8, MMU_DATA_STORE,
+                                  0, &host, NULL);
+            if (host) {
+                octa = ldq_be_p(host);
+            }
+        }
+    }
+    /* mmix-doc section 34: store-trip operands describe the memory result. */
+    env->arithmetic_events = events;
+    env->arithmetic_y = address;
+    env->arithmetic_z = deposit64(octa, shift, size * 8, value);
 }
 
 G_NORETURN void mmix_cpu_raise_emulator_failure(CPUMMIXState *env)

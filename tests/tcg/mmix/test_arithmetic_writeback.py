@@ -172,7 +172,7 @@ def test_stsf_writeback_before_trip(qemu, workdir, insert, retry):
         program_with_regions((0, [jump(JMP, main // 4)]),
                              (64, handler), (main, setup), (0x1000, fault)),
         pc=80, regs={R220: 0x7fc00000, R221: address,
-                     R222: 0x7ff0000000000001, R210: int(retry),
+                     R222: 0x7fc0000000000000, R210: int(retry),
                      R211: (RA_EVENT_I << RA_ENABLE_SHIFT) if retry else 0},
     ))
 
